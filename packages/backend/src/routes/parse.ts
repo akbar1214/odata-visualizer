@@ -11,7 +11,12 @@ const upload = multer({
   },
   fileFilter: (_req, file, cb) => {
     const allowedMimes = ['application/xml', 'text/xml', 'application/octet-stream'];
-    if (allowedMimes.includes(file.mimetype) || file.originalname.endsWith('.xml') || file.originalname.endsWith('.csdl') || file.originalname.endsWith('.edmx')) {
+    if (
+      allowedMimes.includes(file.mimetype) ||
+      file.originalname.endsWith('.xml') ||
+      file.originalname.endsWith('.csdl') ||
+      file.originalname.endsWith('.edmx')
+    ) {
       cb(null, true);
     } else {
       cb(new Error('Invalid file type. Only XML files are allowed.'));

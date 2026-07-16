@@ -5,11 +5,7 @@ import { PathFinder } from './query/PathFinder';
 import { FunctionImportSelector } from './query/FunctionImportSelector';
 import { QueryPreview } from './query/QueryPreview';
 import { QueryCanvas } from './query/QueryCanvas';
-import {
-  buildODataQuery,
-  getQueryableEntities,
-  type QueryState,
-} from '../utils/queryResolver';
+import { buildODataQuery, getQueryableEntities, type QueryState } from '../utils/queryResolver';
 import {
   createRootNode,
   expandPath,
@@ -25,14 +21,17 @@ interface QueryBuilderProps {
 }
 
 export function QueryBuilder({ metadata }: QueryBuilderProps) {
-  const queryableEntities = useMemo(() => getQueryableEntities(metadata.entities), [metadata.entities]);
+  const queryableEntities = useMemo(
+    () => getQueryableEntities(metadata.entities),
+    [metadata.entities],
+  );
 
   const [selectedEntity, setSelectedEntity] = useState<string>(
-    queryableEntities.length > 0 ? queryableEntities[0].name : ''
+    queryableEntities.length > 0 ? queryableEntities[0].name : '',
   );
 
   const [graphNodes, setGraphNodes] = useState<GraphNodeState[]>(() =>
-    selectedEntity ? [createRootNode(selectedEntity)] : []
+    selectedEntity ? [createRootNode(selectedEntity)] : [],
   );
   const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
   const [functionQuery, setFunctionQuery] = useState<string | null>(null);
@@ -49,17 +48,14 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
     setGraphEdges(edges);
   }, []);
 
-  const handleSelectPath = useCallback(
-    async (sourceEntity: string, path: EntityPath) => {
-      const state = expandPath(sourceEntity, path);
-      const laid = await layoutGraph(state);
-      setSelectedEntity(sourceEntity);
-      setGraphNodes(laid.nodes);
-      setGraphEdges(laid.edges);
-      setFunctionQuery(null);
-    },
-    []
-  );
+  const handleSelectPath = useCallback(async (sourceEntity: string, path: EntityPath) => {
+    const state = expandPath(sourceEntity, path);
+    const laid = await layoutGraph(state);
+    setSelectedEntity(sourceEntity);
+    setGraphNodes(laid.nodes);
+    setGraphEdges(laid.edges);
+    setFunctionQuery(null);
+  }, []);
 
   const handleFunctionSelect = useCallback((query: string) => {
     setFunctionQuery(query);
@@ -129,22 +125,35 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
               </div>
 
               <div className="border-t border-engineering-200 pt-4">
-                <FunctionImportSelector
-                  metadata={metadata}
-                  onSelect={handleFunctionSelect}
-                />
+                <FunctionImportSelector metadata={metadata} onSelect={handleFunctionSelect} />
               </div>
 
               <div className="border-t border-engineering-200 pt-4 text-xs text-engineering-400 space-y-1">
                 <div className="font-medium text-engineering-500">Quick Guide</div>
-                <div><b>Path Finder</b> - find routes between two entities</div>
-                <div><b>Function Imports</b> - call OData functions</div>
-                <div>Click <b>$select</b> properties on any node to choose fields</div>
-                <div>Click <b>$expand</b> nav properties to add related entities</div>
-                <div>Click <b>$filter</b> to add filter conditions</div>
-                <div>Click <b>$orderby</b> to set sorting</div>
-                <div>Use <b>$top</b>/<b>$skip</b> for pagination</div>
-                <div>Click <b>✕</b> on a node to remove it</div>
+                <div>
+                  <b>Path Finder</b> - find routes between two entities
+                </div>
+                <div>
+                  <b>Function Imports</b> - call OData functions
+                </div>
+                <div>
+                  Click <b>$select</b> properties on any node to choose fields
+                </div>
+                <div>
+                  Click <b>$expand</b> nav properties to add related entities
+                </div>
+                <div>
+                  Click <b>$filter</b> to add filter conditions
+                </div>
+                <div>
+                  Click <b>$orderby</b> to set sorting
+                </div>
+                <div>
+                  Use <b>$top</b>/<b>$skip</b> for pagination
+                </div>
+                <div>
+                  Click <b>✕</b> on a node to remove it
+                </div>
               </div>
             </>
           )}

@@ -55,7 +55,8 @@ export function ERDiagram({ metadata, selectedEntity, onEntitySelect }: ERDiagra
           metadataToLayout = filterMetadata(metadata, { maxEntities: maxInitialEntities });
         }
 
-        const { nodes: layoutedNodes, edges: layoutedEdges } = await layoutDiagram(metadataToLayout);
+        const { nodes: layoutedNodes, edges: layoutedEdges } =
+          await layoutDiagram(metadataToLayout);
 
         if (!cancelled) {
           setNodes(layoutedNodes);
@@ -92,7 +93,7 @@ export function ERDiagram({ metadata, selectedEntity, onEntitySelect }: ERDiagra
         }
       }
     },
-    [onNodesChange, nodes, onEntitySelect]
+    [onNodesChange, nodes, onEntitySelect],
   );
 
   // Fit view when nodes change
@@ -164,10 +165,7 @@ export function ERDiagram({ metadata, selectedEntity, onEntitySelect }: ERDiagra
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
-        <Controls
-          position="bottom-left"
-          showInteractive={false}
-        />
+        <Controls position="bottom-left" showInteractive={false} />
         <MiniMap
           nodeColor={(node) => {
             if (node.id === selectedEntity) return '#0A8276';

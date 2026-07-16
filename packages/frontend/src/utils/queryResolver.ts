@@ -1,4 +1,9 @@
-import type { ODataMetadata, ODataEntity, ODataProperty, ODataNavigationProperty } from '@odata-visualizer/shared';
+import type {
+  ODataMetadata,
+  ODataEntity,
+  ODataProperty,
+  ODataNavigationProperty,
+} from '@odata-visualizer/shared';
 
 export interface ResolvedEntity {
   entity: ODataEntity;
@@ -39,9 +44,7 @@ export interface QueryState {
 }
 
 export function findEntity(entityName: string, entities: ODataEntity[]): ODataEntity | undefined {
-  return entities.find(
-    (e) => e.name.toLowerCase() === entityName.toLowerCase()
-  );
+  return entities.find((e) => e.name.toLowerCase() === entityName.toLowerCase());
 }
 
 export function resolveInheritance(entity: ODataEntity, entities: ODataEntity[]): ODataEntity[] {
@@ -58,7 +61,10 @@ export function resolveInheritance(entity: ODataEntity, entities: ODataEntity[])
   return chain;
 }
 
-export function getResolvedProperties(entity: ODataEntity, entities: ODataEntity[]): ODataProperty[] {
+export function getResolvedProperties(
+  entity: ODataEntity,
+  entities: ODataEntity[],
+): ODataProperty[] {
   const chain = resolveInheritance(entity, entities);
   const seen = new Set<string>();
   const props: ODataProperty[] = [];
@@ -75,7 +81,10 @@ export function getResolvedProperties(entity: ODataEntity, entities: ODataEntity
   return props;
 }
 
-export function getResolvedNavProperties(entity: ODataEntity, entities: ODataEntity[]): ODataNavigationProperty[] {
+export function getResolvedNavProperties(
+  entity: ODataEntity,
+  entities: ODataEntity[],
+): ODataNavigationProperty[] {
   const chain = resolveInheritance(entity, entities);
   const seen = new Set<string>();
   const navProps: ODataNavigationProperty[] = [];
@@ -92,7 +101,10 @@ export function getResolvedNavProperties(entity: ODataEntity, entities: ODataEnt
   return navProps;
 }
 
-export function getResolvedEntity(entityName: string, entities: ODataEntity[]): ResolvedEntity | undefined {
+export function getResolvedEntity(
+  entityName: string,
+  entities: ODataEntity[],
+): ResolvedEntity | undefined {
   const entity = findEntity(entityName, entities);
   if (!entity) return undefined;
 
@@ -103,7 +115,11 @@ export function getResolvedEntity(entityName: string, entities: ODataEntity[]): 
   };
 }
 
-export function getTargetEntityName(navProperty: string, sourceEntity: ODataEntity, metadata: ODataMetadata): string | undefined {
+export function getTargetEntityName(
+  navProperty: string,
+  sourceEntity: ODataEntity,
+  metadata: ODataMetadata,
+): string | undefined {
   // Search through resolved (inherited) nav properties
   const allNavProps = getResolvedNavProperties(sourceEntity, metadata.entities);
   const relationship = allNavProps.find((n) => n.name === navProperty);
@@ -175,11 +191,7 @@ export function getInputTypeForEdm(edmType: string): 'number' | 'date' | 'text' 
   ) {
     return 'number';
   }
-  if (
-    edmType === 'Edm.DateTime' ||
-    edmType === 'Edm.DateTimeOffset' ||
-    edmType === 'Edm.Date'
-  ) {
+  if (edmType === 'Edm.DateTime' || edmType === 'Edm.DateTimeOffset' || edmType === 'Edm.Date') {
     return 'date';
   }
   return 'text';
@@ -192,7 +204,12 @@ export function formatODataValue(value: string, edmType: string): string {
     return value.toLowerCase() === 'true' ? 'true' : 'false';
   }
 
-  if (edmType.startsWith('Edm.Int') || edmType === 'Edm.Decimal' || edmType === 'Edm.Double' || edmType === 'Edm.Single') {
+  if (
+    edmType.startsWith('Edm.Int') ||
+    edmType === 'Edm.Decimal' ||
+    edmType === 'Edm.Double' ||
+    edmType === 'Edm.Single'
+  ) {
     return value;
   }
 
@@ -207,7 +224,11 @@ export function formatODataValue(value: string, edmType: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-function buildFilterString(filters: QueryFilter[], properties: ODataProperty[], logic: FilterLogic = 'and'): string {
+function buildFilterString(
+  filters: QueryFilter[],
+  properties: ODataProperty[],
+  logic: FilterLogic = 'and',
+): string {
   if (filters.length === 0) return '';
 
   const parts = filters.map((f) => {
@@ -225,7 +246,11 @@ function buildFilterString(filters: QueryFilter[], properties: ODataProperty[], 
   return parts.join(` ${logic} `);
 }
 
-function buildExpandString(expands: ExpandItem[], metadata: ODataMetadata, parentEntityName: string): string {
+function buildExpandString(
+  expands: ExpandItem[],
+  metadata: ODataMetadata,
+  parentEntityName: string,
+): string {
   if (expands.length === 0) return '';
 
   return expands
@@ -240,12 +265,16 @@ function buildExpandString(expands: ExpandItem[], metadata: ODataMetadata, paren
         const targetEntity = getTargetEntityName(
           item.navProperty,
           findEntity(parentEntityName, metadata.entities)!,
-          metadata
+          metadata,
         );
         if (targetEntity) {
           const resolved = getResolvedEntity(targetEntity, metadata.entities);
           if (resolved) {
-            const filterStr = buildFilterString(item.filters, resolved.allProperties, item.filterLogic);
+            const filterStr = buildFilterString(
+              item.filters,
+              resolved.allProperties,
+              item.filterLogic,
+            );
             if (filterStr) parts.push(`$filter=${filterStr}`);
           }
         }
@@ -255,7 +284,7 @@ function buildExpandString(expands: ExpandItem[], metadata: ODataMetadata, paren
         const targetEntity = getTargetEntityName(
           item.navProperty,
           findEntity(parentEntityName, metadata.entities)!,
-          metadata
+          metadata,
         );
         if (targetEntity) {
           const subExpand = buildExpandString(item.expand, metadata, targetEntity);
@@ -283,10 +312,7 @@ function buildExpandString(expands: ExpandItem[], metadata: ODataMetadata, paren
     .join(',');
 }
 
-export function buildODataQuery(
-  query: QueryState,
-  metadata: ODataMetadata
-): string {
+export function buildODataQuery(query: QueryState, metadata: ODataMetadata): string {
   const resolved = getResolvedEntity(query.entityName, metadata.entities);
   if (!resolved) return '';
 

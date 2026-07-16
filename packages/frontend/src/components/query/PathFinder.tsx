@@ -29,7 +29,7 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
 
   const targetEntities = useMemo(
     () => metadata.entities.filter((e) => e.name !== sourceEntity && reachableEntities.has(e.name)),
-    [metadata.entities, sourceEntity, reachableEntities]
+    [metadata.entities, sourceEntity, reachableEntities],
   );
 
   const handleFind = () => {
@@ -82,9 +82,7 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
       {searched && (
         <div className="space-y-2">
           <div className="text-[10px] text-engineering-400">
-            {foundPaths.length === 0
-              ? 'No paths found'
-              : `${foundPaths.length} path(s) found`}
+            {foundPaths.length === 0 ? 'No paths found' : `${foundPaths.length} path(s) found`}
           </div>
 
           {foundPaths.map((path, index) => (

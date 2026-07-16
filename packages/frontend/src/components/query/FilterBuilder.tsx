@@ -10,7 +10,13 @@ interface FilterBuilderProps {
   onFilterLogicChange: (logic: FilterLogic) => void;
 }
 
-export function FilterBuilder({ properties, filters, filterLogic, onChange, onFilterLogicChange }: FilterBuilderProps) {
+export function FilterBuilder({
+  properties,
+  filters,
+  filterLogic,
+  onChange,
+  onFilterLogicChange,
+}: FilterBuilderProps) {
   const addFilter = () => {
     if (properties.length === 0) return;
     const prop = properties[0];
@@ -57,9 +63,7 @@ export function FilterBuilder({ properties, filters, filterLogic, onChange, onFi
         </button>
       </div>
 
-      {filters.length === 0 && (
-        <p className="text-xs text-gray-400">No filters</p>
-      )}
+      {filters.length === 0 && <p className="text-xs text-gray-400">No filters</p>}
 
       <div className="space-y-2">
         {filters.map((filter, index) => {
@@ -90,7 +94,9 @@ export function FilterBuilder({ properties, filters, filterLogic, onChange, onFi
                   onChange={(e) => updateFilter(index, 'property', e.target.value)}
                 >
                   {properties.map((p) => (
-                    <option key={p.name} value={p.name}>{p.name}</option>
+                    <option key={p.name} value={p.name}>
+                      {p.name}
+                    </option>
                   ))}
                 </select>
 
@@ -100,7 +106,9 @@ export function FilterBuilder({ properties, filters, filterLogic, onChange, onFi
                   onChange={(e) => updateFilter(index, 'operator', e.target.value)}
                 >
                   {operators.map((op) => (
-                    <option key={op} value={op}>{op}</option>
+                    <option key={op} value={op}>
+                      {op}
+                    </option>
                   ))}
                 </select>
 

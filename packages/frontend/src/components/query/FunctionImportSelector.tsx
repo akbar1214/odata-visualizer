@@ -14,7 +14,7 @@ export function FunctionImportSelector({ metadata, onSelect }: FunctionImportSel
 
   const selectedFunc = useMemo(
     () => functionImports.find((f) => f.name === selectedFunction),
-    [functionImports, selectedFunction]
+    [functionImports, selectedFunction],
   );
 
   const handleFunctionChange = (funcName: string) => {
@@ -73,7 +73,8 @@ export function FunctionImportSelector({ metadata, onSelect }: FunctionImportSel
         <option value="">Select function...</option>
         {functionImports.map((func) => (
           <option key={func.name} value={func.name}>
-            {func.name}{func.parameter?.length ? '(...)' : '()'}
+            {func.name}
+            {func.parameter?.length ? '(...)' : '()'}
           </option>
         ))}
       </select>
@@ -93,7 +94,10 @@ export function FunctionImportSelector({ metadata, onSelect }: FunctionImportSel
               <div className="text-[10px] text-engineering-400">Parameters:</div>
               {selectedFunc.parameter.map((param) => (
                 <div key={param.name} className="flex items-center gap-2">
-                  <label className="text-[10px] text-engineering-500 w-20 truncate" title={param.name}>
+                  <label
+                    className="text-[10px] text-engineering-500 w-20 truncate"
+                    title={param.name}
+                  >
                     {param.name}
                   </label>
                   <input

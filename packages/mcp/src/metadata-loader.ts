@@ -80,7 +80,9 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
   try {
     parsed = parser.parse(xmlContent) as XmlElement;
   } catch (error) {
-    throw new Error(`Failed to parse XML: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw new Error(
+      `Failed to parse XML: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    );
   }
 
   if (!parsed) {
@@ -139,10 +141,12 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
     }
 
     // Parse function imports from EntityContainer
-    const containers = ensureArray(schema['EntityContainer'] || schema['edm:EntityContainer'] || []);
+    const containers = ensureArray(
+      schema['EntityContainer'] || schema['edm:EntityContainer'] || [],
+    );
     for (const container of containers) {
       const funcImports = ensureArray(
-        container['FunctionImport'] || container['edm:FunctionImport'] || []
+        container['FunctionImport'] || container['edm:FunctionImport'] || [],
       );
       for (const funcImport of funcImports) {
         const fi = parseFunctionImport(funcImport, namespace, functionDefs);
@@ -189,7 +193,7 @@ function parseEntityType(entityType: XmlElement, namespace: string): ODataEntity
   }
 
   const navPropElements = ensureArray(
-    entityType['NavigationProperty'] || entityType['edm:NavigationProperty'] || []
+    entityType['NavigationProperty'] || entityType['edm:NavigationProperty'] || [],
   );
   for (const navProp of navPropElements) {
     navigationProperties.push(parseNavigationProperty(navProp));
@@ -221,7 +225,7 @@ function parseComplexType(complexType: XmlElement, namespace: string): ODataEnti
   }
 
   const navPropElements = ensureArray(
-    complexType['NavigationProperty'] || complexType['edm:NavigationProperty'] || []
+    complexType['NavigationProperty'] || complexType['edm:NavigationProperty'] || [],
   );
   for (const navProp of navPropElements) {
     navigationProperties.push(parseNavigationProperty(navProp));
@@ -324,9 +328,9 @@ function parseAssociationEnd(end: XmlElement): ODataAssociationEnd | null {
 }
 
 function parseFunctionImport(
-  funcImport: XmlElement, 
+  funcImport: XmlElement,
   _namespace: string,
-  functionDefs: Map<string, string>
+  functionDefs: Map<string, string>,
 ): ODataFunctionImport | null {
   const name = funcImport['@_Name'];
   if (!name) return null;
@@ -337,7 +341,9 @@ function parseFunctionImport(
   // Look up return type from function definitions
   let returnType: string | undefined;
   if (functionName) {
-    const shortFuncName = functionName.includes('.') ? functionName.split('.').pop() || functionName : functionName;
+    const shortFuncName = functionName.includes('.')
+      ? functionName.split('.').pop() || functionName
+      : functionName;
     returnType = functionDefs.get(shortFuncName);
   }
 
@@ -348,7 +354,7 @@ function parseFunctionImport(
     const paramType = param['@_Type'] || 'Edm.String';
     const nullable = param['@_Nullable'] !== 'false';
     const maxLength = param['@_MaxLength'] ? parseInt(param['@_MaxLength'], 10) : undefined;
-    
+
     if (paramName) {
       parameters.push({
         name: paramName,

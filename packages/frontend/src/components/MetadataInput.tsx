@@ -42,7 +42,7 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
         }
       }
     },
-    [loading, onFileSelect]
+    [loading, onFileSelect],
   );
 
   const handleFileChange = useCallback(
@@ -56,7 +56,7 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
         }
       }
     },
-    [onFileSelect]
+    [onFileSelect],
   );
 
   const handleUrlSubmit = useCallback(
@@ -66,17 +66,15 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
         onUrlSubmit(url.trim());
       }
     },
-    [url, loading, onUrlSubmit]
+    [url, loading, onUrlSubmit],
   );
 
   const isValidXmlFile = (file: File): boolean => {
     const validTypes = ['application/xml', 'text/xml', 'application/octet-stream'];
     const validExtensions = ['.xml', '.csdl', '.edmx'];
-    
+
     const hasValidType = validTypes.includes(file.type);
-    const hasValidExtension = validExtensions.some((ext) =>
-      file.name.toLowerCase().endsWith(ext)
-    );
+    const hasValidExtension = validExtensions.some((ext) => file.name.toLowerCase().endsWith(ext));
 
     return hasValidType || hasValidExtension;
   };
@@ -151,7 +149,7 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
             disabled={loading}
           />
-          
+
           {selectedFile ? (
             <div className="space-y-2">
               <svg
@@ -211,7 +209,9 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
                   browse
                 </button>
               </p>
-              <p className="text-xs text-engineering-400">Supports XML, CSDL, EDMX files up to 100MB</p>
+              <p className="text-xs text-engineering-400">
+                Supports XML, CSDL, EDMX files up to 100MB
+              </p>
             </div>
           )}
         </div>
@@ -221,7 +221,10 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
       {mode === 'url' && (
         <form onSubmit={handleUrlSubmit} className="space-y-4">
           <div>
-            <label htmlFor="metadata-url" className="block text-sm font-medium text-engineering-600 mb-1">
+            <label
+              htmlFor="metadata-url"
+              className="block text-sm font-medium text-engineering-600 mb-1"
+            >
               OData Metadata URL
             </label>
             <input

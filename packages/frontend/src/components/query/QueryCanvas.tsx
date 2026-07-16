@@ -26,12 +26,7 @@ const nodeTypes: NodeTypes = {
   entityNode: GraphNode as NodeTypes['entityNode'],
 };
 
-function QueryCanvasInner({
-  graphNodes,
-  graphEdges,
-  metadata,
-  onGraphChange,
-}: QueryCanvasProps) {
+function QueryCanvasInner({ graphNodes, graphEdges, metadata, onGraphChange }: QueryCanvasProps) {
   const { fitView } = useReactFlow();
   const prevCountRef = useRef(graphNodes.length);
 
@@ -49,7 +44,7 @@ function QueryCanvasInner({
       const laid = await layoutGraph(newState);
       onGraphChange(laid.nodes, laid.edges);
     },
-    [onGraphChange]
+    [onGraphChange],
   );
 
   const handleExpandNav = useCallback(
@@ -60,7 +55,7 @@ function QueryCanvasInner({
         doLayoutAndChange(newState);
       }
     },
-    [graphNodes, graphEdges, metadata, doLayoutAndChange]
+    [graphNodes, graphEdges, metadata, doLayoutAndChange],
   );
 
   const handleRemove = useCallback(
@@ -71,7 +66,7 @@ function QueryCanvasInner({
         doLayoutAndChange(newState);
       }
     },
-    [graphNodes, graphEdges, doLayoutAndChange]
+    [graphNodes, graphEdges, doLayoutAndChange],
   );
 
   const handleSelectToggle = useCallback(
@@ -83,10 +78,10 @@ function QueryCanvasInner({
         : [...node.select, propName];
       onGraphChange(
         graphNodes.map((n) => (n.id === nodeId ? { ...n, select: newSelect } : n)),
-        graphEdges
+        graphEdges,
       );
     },
-    [graphNodes, graphEdges, onGraphChange]
+    [graphNodes, graphEdges, onGraphChange],
   );
 
   const handleFilterAdd = useCallback(
@@ -100,26 +95,24 @@ function QueryCanvasInner({
         graphNodes.map((n) =>
           n.id === nodeId
             ? { ...n, filters: [...n.filters, { property: prop.name, operator: 'eq', value: '' }] }
-            : n
+            : n,
         ),
-        graphEdges
+        graphEdges,
       );
     },
-    [graphNodes, graphEdges, metadata, onGraphChange]
+    [graphNodes, graphEdges, metadata, onGraphChange],
   );
 
   const handleFilterRemove = useCallback(
     (nodeId: string, index: number) => {
       onGraphChange(
         graphNodes.map((n) =>
-          n.id === nodeId
-            ? { ...n, filters: n.filters.filter((_, i) => i !== index) }
-            : n
+          n.id === nodeId ? { ...n, filters: n.filters.filter((_, i) => i !== index) } : n,
         ),
-        graphEdges
+        graphEdges,
       );
     },
-    [graphNodes, graphEdges, onGraphChange]
+    [graphNodes, graphEdges, onGraphChange],
   );
 
   const handleFilterUpdate = useCallback(
@@ -129,66 +122,64 @@ function QueryCanvasInner({
           n.id === nodeId
             ? {
                 ...n,
-                filters: n.filters.map((f, i) =>
-                  i === index ? { ...f, [field]: value } : f
-                ),
+                filters: n.filters.map((f, i) => (i === index ? { ...f, [field]: value } : f)),
               }
-            : n
+            : n,
         ),
-        graphEdges
+        graphEdges,
       );
     },
-    [graphNodes, graphEdges, onGraphChange]
+    [graphNodes, graphEdges, onGraphChange],
   );
 
   const handleFilterLogicChange = useCallback(
     (nodeId: string, logic: 'and' | 'or') => {
       onGraphChange(
         graphNodes.map((n) => (n.id === nodeId ? { ...n, filterLogic: logic } : n)),
-        graphEdges
+        graphEdges,
       );
     },
-    [graphNodes, graphEdges, onGraphChange]
+    [graphNodes, graphEdges, onGraphChange],
   );
 
   const handleSortChange = useCallback(
     (nodeId: string, sort: string) => {
       onGraphChange(
         graphNodes.map((n) => (n.id === nodeId ? { ...n, sort } : n)),
-        graphEdges
+        graphEdges,
       );
     },
-    [graphNodes, graphEdges, onGraphChange]
+    [graphNodes, graphEdges, onGraphChange],
   );
 
   const handleSortDirectionChange = useCallback(
     (nodeId: string, dir: 'asc' | 'desc') => {
       onGraphChange(
         graphNodes.map((n) => (n.id === nodeId ? { ...n, sortDirection: dir } : n)),
-        graphEdges
+        graphEdges,
       );
     },
-    [graphNodes, graphEdges, onGraphChange]
+    [graphNodes, graphEdges, onGraphChange],
   );
 
   const handleTopChange = useCallback(
     (nodeId: string, top: number) => {
       onGraphChange(
         graphNodes.map((n) => (n.id === nodeId ? { ...n, top } : n)),
-        graphEdges
+        graphEdges,
       );
     },
-    [graphNodes, graphEdges, onGraphChange]
+    [graphNodes, graphEdges, onGraphChange],
   );
 
   const handleSkipChange = useCallback(
     (nodeId: string, skip: number) => {
       onGraphChange(
         graphNodes.map((n) => (n.id === nodeId ? { ...n, skip } : n)),
-        graphEdges
+        graphEdges,
       );
     },
-    [graphNodes, graphEdges, onGraphChange]
+    [graphNodes, graphEdges, onGraphChange],
   );
 
   const flowNodes: Node[] = useMemo(
@@ -214,7 +205,21 @@ function QueryCanvasInner({
           onRemove: handleRemove,
         } satisfies GraphNodeData,
       })),
-    [graphNodes, metadata, handleSelectToggle, handleFilterAdd, handleFilterRemove, handleFilterUpdate, handleFilterLogicChange, handleSortChange, handleSortDirectionChange, handleTopChange, handleSkipChange, handleExpandNav, handleRemove]
+    [
+      graphNodes,
+      metadata,
+      handleSelectToggle,
+      handleFilterAdd,
+      handleFilterRemove,
+      handleFilterUpdate,
+      handleFilterLogicChange,
+      handleSortChange,
+      handleSortDirectionChange,
+      handleTopChange,
+      handleSkipChange,
+      handleExpandNav,
+      handleRemove,
+    ],
   );
 
   const flowEdges: Edge[] = useMemo(
@@ -228,7 +233,7 @@ function QueryCanvasInner({
         animated: true,
         labelStyle: { fontSize: 10 },
       })),
-    [graphEdges]
+    [graphEdges],
   );
 
   if (graphNodes.length === 0) {

@@ -40,7 +40,7 @@ export function SearchableSelect({
       setSearch('');
       setOpen(false);
     },
-    [onChange]
+    [onChange],
   );
 
   useEffect(() => {
@@ -60,7 +60,11 @@ export function SearchableSelect({
         ref={inputRef}
         type="text"
         className="input text-xs w-full pr-6"
-        placeholder={selectedEntity ? `${selectedEntity.name}${isComplexType(selectedEntity) ? ' (ComplexType)' : ''}` : placeholder}
+        placeholder={
+          selectedEntity
+            ? `${selectedEntity.name}${isComplexType(selectedEntity) ? ' (ComplexType)' : ''}`
+            : placeholder
+        }
         value={search}
         onFocus={() => !disabled && setOpen(true)}
         onChange={(e) => {
@@ -104,7 +108,9 @@ export function SearchableSelect({
                 {e.name}
               </span>
               {isComplexType(e) && (
-                <span className="text-[9px] text-engineering-400 ml-1 flex-shrink-0">ComplexType</span>
+                <span className="text-[9px] text-engineering-400 ml-1 flex-shrink-0">
+                  ComplexType
+                </span>
               )}
             </button>
           ))}

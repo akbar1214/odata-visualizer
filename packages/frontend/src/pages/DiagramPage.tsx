@@ -40,10 +40,7 @@ export function DiagramPage({ metadata, parseTimeMs, fileSizeBytes, onClear }: D
               <span>{metadata.relationships.length} relationships</span>
               {parseTimeMs && <span>Parsed in {parseTimeMs}ms</span>}
               {fileSizeBytes && <span>{formatFileSize(fileSizeBytes)}</span>}
-              <Link
-                to="/query"
-                className="btn btn-primary text-sm"
-              >
+              <Link to="/query" className="btn btn-primary text-sm">
                 Query Builder
               </Link>
               <button

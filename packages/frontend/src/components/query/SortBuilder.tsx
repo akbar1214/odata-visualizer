@@ -19,7 +19,9 @@ export function SortBuilder({ properties, sort, direction, onChange }: SortBuild
         >
           <option value="">None</option>
           {properties.map((p) => (
-            <option key={p.name} value={p.name}>{p.name}</option>
+            <option key={p.name} value={p.name}>
+              {p.name}
+            </option>
           ))}
         </select>
 

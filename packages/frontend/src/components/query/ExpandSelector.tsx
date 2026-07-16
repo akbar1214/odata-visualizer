@@ -49,11 +49,7 @@ export function ExpandSelector({
   };
 
   const updateItem = (navName: string, updates: Partial<ExpandItem>) => {
-    onChange(
-      selected.map((s) =>
-        s.navProperty === navName ? { ...s, ...updates } : s
-      )
-    );
+    onChange(selected.map((s) => (s.navProperty === navName ? { ...s, ...updates } : s)));
   };
 
   if (navProperties.length === 0) {
@@ -78,7 +74,9 @@ export function ExpandSelector({
             ? findEntity(targetEntityName, metadata.entities)
             : undefined;
 
-          console.log(`[ExpandSelector] nav=${nav.name}, source=${sourceEntityName}, target=${targetEntityName}, found=${!!targetEntity}, relationships=${metadata.relationships.length}, sourceNavProps=${sourceEntity?.navigationProperties.map((n) => n.name).join(',')}`);
+          console.log(
+            `[ExpandSelector] nav=${nav.name}, source=${sourceEntityName}, target=${targetEntityName}, found=${!!targetEntity}, relationships=${metadata.relationships.length}, sourceNavProps=${sourceEntity?.navigationProperties.map((n) => n.name).join(',')}`,
+          );
           const targetNavProps = targetEntity
             ? getResolvedNavProperties(targetEntity, metadata.entities)
             : [];
@@ -133,9 +131,7 @@ export function ExpandSelector({
                               className="sr-only"
                               checked={selectedItem.select.includes(prop.name)}
                               onChange={() => {
-                                const newSelect = selectedItem.select.includes(
-                                  prop.name
-                                )
+                                const newSelect = selectedItem.select.includes(prop.name)
                                   ? selectedItem.select.filter((s) => s !== prop.name)
                                   : [...selectedItem.select, prop.name];
                                 updateItem(nav.name, { select: newSelect });
@@ -166,15 +162,11 @@ export function ExpandSelector({
                   {targetEntity && targetProps.length > 0 && (
                     <div className="flex gap-3 items-end">
                       <div>
-                        <label className="text-xs text-gray-400 block mb-1">
-                          Sort
-                        </label>
+                        <label className="text-xs text-gray-400 block mb-1">Sort</label>
                         <select
                           className="input text-xs"
                           value={selectedItem.sort}
-                          onChange={(e) =>
-                            updateItem(nav.name, { sort: e.target.value })
-                          }
+                          onChange={(e) => updateItem(nav.name, { sort: e.target.value })}
                         >
                           <option value="">None</option>
                           {targetProps.map((p) => (
@@ -186,9 +178,7 @@ export function ExpandSelector({
                       </div>
                       {selectedItem.sort && (
                         <div>
-                          <label className="text-xs text-gray-400 block mb-1">
-                            Direction
-                          </label>
+                          <label className="text-xs text-gray-400 block mb-1">Direction</label>
                           <select
                             className="input text-xs"
                             value={selectedItem.sortDirection}
@@ -204,9 +194,7 @@ export function ExpandSelector({
                         </div>
                       )}
                       <div>
-                        <label className="text-xs text-gray-400 block mb-1">
-                          Top
-                        </label>
+                        <label className="text-xs text-gray-400 block mb-1">Top</label>
                         <input
                           type="number"
                           className="input text-xs w-16"
@@ -221,9 +209,7 @@ export function ExpandSelector({
                         />
                       </div>
                       <div>
-                        <label className="text-xs text-gray-400 block mb-1">
-                          Skip
-                        </label>
+                        <label className="text-xs text-gray-400 block mb-1">Skip</label>
                         <input
                           type="number"
                           className="input text-xs w-16"
@@ -244,9 +230,7 @@ export function ExpandSelector({
                     <ExpandSelector
                       navProperties={targetNavProps}
                       selected={selectedItem.expand}
-                      onChange={(subExpand) =>
-                        updateItem(nav.name, { expand: subExpand })
-                      }
+                      onChange={(subExpand) => updateItem(nav.name, { expand: subExpand })}
                       metadata={metadata}
                       sourceEntityName={targetEntityName}
                       depth={depth + 1}

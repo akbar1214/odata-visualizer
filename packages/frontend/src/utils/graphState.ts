@@ -68,7 +68,7 @@ export function addExpandedNode(
   state: GraphState,
   parentId: string,
   navProperty: string,
-  metadata: ODataMetadata
+  metadata: ODataMetadata,
 ): GraphState {
   const parentNode = state.nodes.find((n) => n.id === parentId);
   if (!parentNode) return state;
@@ -80,7 +80,7 @@ export function addExpandedNode(
   if (!targetEntityName) return state;
 
   const existingChild = state.nodes.find(
-    (n) => n.parentId === parentId && n.navProperty === navProperty
+    (n) => n.parentId === parentId && n.navProperty === navProperty,
   );
   if (existingChild) return state;
 
@@ -123,10 +123,7 @@ export function addExpandedNode(
   };
 }
 
-export function removeExpandedNode(
-  state: GraphState,
-  nodeId: string
-): GraphState {
+export function removeExpandedNode(state: GraphState, nodeId: string): GraphState {
   const node = state.nodes.find((n) => n.id === nodeId);
   if (!node || node.id === 'root') return state;
 
@@ -150,7 +147,7 @@ export function removeExpandedNode(
     });
 
   const updatedEdges = state.edges.filter(
-    (e) => !idsToRemove.has(e.source) && !idsToRemove.has(e.target)
+    (e) => !idsToRemove.has(e.source) && !idsToRemove.has(e.target),
   );
 
   return { nodes: updatedNodes, edges: updatedEdges };
@@ -208,13 +205,18 @@ export async function layoutGraph(state: GraphState): Promise<GraphState> {
 export function getReachableEntities(
   entityName: string,
   metadata: ODataMetadata,
-  maxDepth: number = 4
+  maxDepth: number = 4,
 ): Map<string, { entity: ODataEntity; navProp: string; parentEntity: string }[]> {
-  const result = new Map<string, { entity: ODataEntity; navProp: string; parentEntity: string }[]>();
+  const result = new Map<
+    string,
+    { entity: ODataEntity; navProp: string; parentEntity: string }[]
+  >();
   const visited = new Set<string>();
 
   const bfs = (startEntityName: string) => {
-    const queue: { entityName: string; depth: number }[] = [{ entityName: startEntityName, depth: 0 }];
+    const queue: { entityName: string; depth: number }[] = [
+      { entityName: startEntityName, depth: 0 },
+    ];
     visited.add(startEntityName.toLowerCase());
 
     while (queue.length > 0) {
@@ -284,16 +286,11 @@ export function findPaths(
   sourceEntity: string,
   targetEntity: string,
   metadata: ODataMetadata,
-  maxDepth: number = 5
+  maxDepth: number = 5,
 ): EntityPath[] {
   const paths: EntityPath[] = [];
 
-  const dfs = (
-    currentEntity: string,
-    path: PathStep[],
-    visited: Set<string>,
-    depth: number
-  ) => {
+  const dfs = (currentEntity: string, path: PathStep[], visited: Set<string>, depth: number) => {
     if (depth > maxDepth) return;
 
     if (currentEntity.toLowerCase() === targetEntity.toLowerCase() && path.length > 0) {
@@ -333,10 +330,7 @@ export function findPaths(
   return paths;
 }
 
-export function expandPath(
-  sourceEntity: string,
-  path: EntityPath
-): GraphState {
+export function expandPath(sourceEntity: string, path: EntityPath): GraphState {
   const nodes: GraphNodeState[] = [];
   const edges: GraphEdge[] = [];
 

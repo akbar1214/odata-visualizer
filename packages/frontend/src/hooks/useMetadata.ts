@@ -39,33 +39,39 @@ export function useMetadata() {
     }
   }, []);
 
-  const loadFile = useCallback(async (file: File) => {
-    setState((prev) => ({ ...prev, loading: true, error: null }));
-    try {
-      const response = await parseFile(file);
-      handleResponse(response);
-    } catch (error) {
-      setState((prev) => ({
-        ...prev,
-        loading: false,
-        error: error instanceof Error ? error.message : 'Failed to parse file',
-      }));
-    }
-  }, [handleResponse]);
+  const loadFile = useCallback(
+    async (file: File) => {
+      setState((prev) => ({ ...prev, loading: true, error: null }));
+      try {
+        const response = await parseFile(file);
+        handleResponse(response);
+      } catch (error) {
+        setState((prev) => ({
+          ...prev,
+          loading: false,
+          error: error instanceof Error ? error.message : 'Failed to parse file',
+        }));
+      }
+    },
+    [handleResponse],
+  );
 
-  const loadUrl = useCallback(async (url: string) => {
-    setState((prev) => ({ ...prev, loading: true, error: null }));
-    try {
-      const response = await parseUrl(url);
-      handleResponse(response);
-    } catch (error) {
-      setState((prev) => ({
-        ...prev,
-        loading: false,
-        error: error instanceof Error ? error.message : 'Failed to fetch metadata',
-      }));
-    }
-  }, [handleResponse]);
+  const loadUrl = useCallback(
+    async (url: string) => {
+      setState((prev) => ({ ...prev, loading: true, error: null }));
+      try {
+        const response = await parseUrl(url);
+        handleResponse(response);
+      } catch (error) {
+        setState((prev) => ({
+          ...prev,
+          loading: false,
+          error: error instanceof Error ? error.message : 'Failed to fetch metadata',
+        }));
+      }
+    },
+    [handleResponse],
+  );
 
   const clear = useCallback(() => {
     setState({

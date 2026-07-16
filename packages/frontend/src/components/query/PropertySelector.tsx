@@ -28,8 +28,20 @@ export function PropertySelector({ properties, selected, onChange }: PropertySel
       <div className="flex items-center justify-between mb-1">
         <label className="text-xs font-medium text-gray-500">Select ($select)</label>
         <div className="flex gap-2">
-          <button type="button" onClick={selectAll} className="text-xs text-primary-600 hover:text-primary-700">All</button>
-          <button type="button" onClick={clearAll} className="text-xs text-gray-400 hover:text-gray-600">None</button>
+          <button
+            type="button"
+            onClick={selectAll}
+            className="text-xs text-primary-600 hover:text-primary-700"
+          >
+            All
+          </button>
+          <button
+            type="button"
+            onClick={clearAll}
+            className="text-xs text-gray-400 hover:text-gray-600"
+          >
+            None
+          </button>
         </div>
       </div>
 

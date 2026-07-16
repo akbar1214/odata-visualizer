@@ -54,7 +54,7 @@ function GraphNodeComponent({ data }: NodeProps) {
 
   const { allProperties, allNavProperties } = resolved;
   const availableNavProps = allNavProperties.filter(
-    (nav) => !nodeState.expandedNavProps.includes(nav.name)
+    (nav) => !nodeState.expandedNavProps.includes(nav.name),
   );
 
   return (
@@ -65,13 +65,19 @@ function GraphNodeComponent({ data }: NodeProps) {
           : 'bg-white border-engineering-200 text-engineering-600'
       }`}
     >
-      {!isRoot && <Handle type="target" position={Position.Top} className="!bg-engineering-400 !w-2 !h-2" />}
-      {isRoot && <Handle type="source" position={Position.Bottom} className="!bg-primary-300 !w-2 !h-2" />}
+      {!isRoot && (
+        <Handle type="target" position={Position.Top} className="!bg-engineering-400 !w-2 !h-2" />
+      )}
+      {isRoot && (
+        <Handle type="source" position={Position.Bottom} className="!bg-primary-300 !w-2 !h-2" />
+      )}
 
       {/* Header */}
-      <div className={`px-2 py-1.5 rounded-t font-bold flex items-center justify-between ${
-        isRoot ? 'bg-primary-600' : 'bg-engineering-100 border-b border-engineering-200'
-      }`}>
+      <div
+        className={`px-2 py-1.5 rounded-t font-bold flex items-center justify-between ${
+          isRoot ? 'bg-primary-600' : 'bg-engineering-100 border-b border-engineering-200'
+        }`}
+      >
         <span>{nodeState.entityName}</span>
         {!isRoot && (
           <button
@@ -87,7 +93,9 @@ function GraphNodeComponent({ data }: NodeProps) {
       <div className="p-2 space-y-2">
         {/* $select: Property checkboxes */}
         <div>
-          <div className={`text-[10px] font-medium mb-1 ${isRoot ? 'text-primary-100' : 'text-engineering-400'}`}>
+          <div
+            className={`text-[10px] font-medium mb-1 ${isRoot ? 'text-primary-100' : 'text-engineering-400'}`}
+          >
             $select
           </div>
           <div className="flex flex-wrap gap-0.5">
@@ -117,14 +125,18 @@ function GraphNodeComponent({ data }: NodeProps) {
           <button
             onClick={() => setShowFilters(!showFilters)}
             className={`text-[10px] font-medium flex items-center gap-1 ${
-              isRoot ? 'text-primary-100 hover:text-white' : 'text-engineering-400 hover:text-engineering-600'
+              isRoot
+                ? 'text-primary-100 hover:text-white'
+                : 'text-engineering-400 hover:text-engineering-600'
             }`}
           >
             $filter
             {nodeState.filters.length > 0 && (
-              <span className={`px-1 rounded text-[9px] ${
-                isRoot ? 'bg-white/20' : 'bg-engineering-200'
-              }`}>
+              <span
+                className={`px-1 rounded text-[9px] ${
+                  isRoot ? 'bg-white/20' : 'bg-engineering-200'
+                }`}
+              >
                 {nodeState.filters.length}
               </span>
             )}
@@ -133,14 +145,20 @@ function GraphNodeComponent({ data }: NodeProps) {
           {showFilters && (
             <div className="mt-1 space-y-0.5">
               {nodeState.filters.map((f, i) => {
-                const edmType = allProperties.find((p) => p.name === f.property)?.type || 'Edm.String';
+                const edmType =
+                  allProperties.find((p) => p.name === f.property)?.type || 'Edm.String';
                 const operators = getOperatorsForType(edmType);
                 return (
                   <div key={i}>
                     {i > 0 && (
                       <div className="flex justify-center my-0.5">
                         <button
-                          onClick={() => onFilterLogicChange(nodeState.id, nodeState.filterLogic === 'and' ? 'or' : 'and')}
+                          onClick={() =>
+                            onFilterLogicChange(
+                              nodeState.id,
+                              nodeState.filterLogic === 'and' ? 'or' : 'and',
+                            )
+                          }
                           className={`text-[9px] font-bold px-2 py-0 rounded-full border transition-colors ${
                             isRoot
                               ? nodeState.filterLogic === 'and'
@@ -158,30 +176,44 @@ function GraphNodeComponent({ data }: NodeProps) {
                     <div className="flex gap-0.5 items-center min-w-0">
                       <select
                         className={`text-[10px] rounded px-1 py-0.5 border flex-1 min-w-0 ${
-                          isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
+                          isRoot
+                            ? 'bg-primary-500 border-primary-400 text-white'
+                            : 'bg-white border-engineering-200'
                         }`}
                         value={f.property}
-                        onChange={(e) => onFilterUpdate(nodeState.id, i, 'property', e.target.value)}
+                        onChange={(e) =>
+                          onFilterUpdate(nodeState.id, i, 'property', e.target.value)
+                        }
                       >
                         {allProperties.map((p) => (
-                          <option key={p.name} value={p.name}>{p.name}</option>
+                          <option key={p.name} value={p.name}>
+                            {p.name}
+                          </option>
                         ))}
                       </select>
                       <select
                         className={`text-[10px] rounded px-1 py-0.5 border w-16 shrink-0 ${
-                          isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
+                          isRoot
+                            ? 'bg-primary-500 border-primary-400 text-white'
+                            : 'bg-white border-engineering-200'
                         }`}
                         value={f.operator}
-                        onChange={(e) => onFilterUpdate(nodeState.id, i, 'operator', e.target.value)}
+                        onChange={(e) =>
+                          onFilterUpdate(nodeState.id, i, 'operator', e.target.value)
+                        }
                       >
                         {operators.map((op) => (
-                          <option key={op} value={op}>{op}</option>
+                          <option key={op} value={op}>
+                            {op}
+                          </option>
                         ))}
                       </select>
                       <input
                         type={getInputTypeForEdm(edmType)}
                         className={`text-[10px] rounded px-1 py-0.5 border flex-1 min-w-0 ${
-                          isRoot ? 'bg-primary-500 border-primary-400 text-white placeholder-white/50' : 'bg-white border-engineering-200'
+                          isRoot
+                            ? 'bg-primary-500 border-primary-400 text-white placeholder-white/50'
+                            : 'bg-white border-engineering-200'
                         }`}
                         value={f.value}
                         placeholder="val"
@@ -200,7 +232,9 @@ function GraphNodeComponent({ data }: NodeProps) {
               <button
                 onClick={() => onFilterAdd(nodeState.id)}
                 className={`text-[10px] ${
-                  isRoot ? 'text-primary-100 hover:text-white' : 'text-primary-500 hover:text-primary-600'
+                  isRoot
+                    ? 'text-primary-100 hover:text-white'
+                    : 'text-primary-500 hover:text-primary-600'
                 }`}
               >
                 + add filter
@@ -214,7 +248,9 @@ function GraphNodeComponent({ data }: NodeProps) {
           <button
             onClick={() => setShowSort(!showSort)}
             className={`text-[10px] font-medium flex items-center gap-1 ${
-              isRoot ? 'text-primary-100 hover:text-white' : 'text-engineering-400 hover:text-engineering-600'
+              isRoot
+                ? 'text-primary-100 hover:text-white'
+                : 'text-engineering-400 hover:text-engineering-600'
             }`}
           >
             $orderby
@@ -229,23 +265,31 @@ function GraphNodeComponent({ data }: NodeProps) {
             <div className="mt-1 flex gap-1 min-w-0">
               <select
                 className={`text-[10px] rounded px-1 py-0.5 border flex-1 min-w-0 ${
-                  isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
+                  isRoot
+                    ? 'bg-primary-500 border-primary-400 text-white'
+                    : 'bg-white border-engineering-200'
                 }`}
                 value={nodeState.sort}
                 onChange={(e) => onSortChange(nodeState.id, e.target.value)}
               >
                 <option value="">None</option>
                 {allProperties.map((p) => (
-                  <option key={p.name} value={p.name}>{p.name}</option>
+                  <option key={p.name} value={p.name}>
+                    {p.name}
+                  </option>
                 ))}
               </select>
               {nodeState.sort && (
                 <select
                   className={`text-[10px] rounded px-1 py-0.5 border w-12 ${
-                    isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
+                    isRoot
+                      ? 'bg-primary-500 border-primary-400 text-white'
+                      : 'bg-white border-engineering-200'
                   }`}
                   value={nodeState.sortDirection}
-                  onChange={(e) => onSortDirectionChange(nodeState.id, e.target.value as 'asc' | 'desc')}
+                  onChange={(e) =>
+                    onSortDirectionChange(nodeState.id, e.target.value as 'asc' | 'desc')
+                  }
                 >
                   <option value="asc">ASC</option>
                   <option value="desc">DESC</option>
@@ -258,12 +302,18 @@ function GraphNodeComponent({ data }: NodeProps) {
         {/* $top / $skip */}
         <div className="flex gap-2">
           <div className="flex-1">
-            <div className={`text-[10px] font-medium ${isRoot ? 'text-primary-100' : 'text-engineering-400'}`}>$top</div>
+            <div
+              className={`text-[10px] font-medium ${isRoot ? 'text-primary-100' : 'text-engineering-400'}`}
+            >
+              $top
+            </div>
             <input
               type="number"
               min={0}
               className={`w-full text-[10px] rounded px-1 py-0.5 border ${
-                isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
+                isRoot
+                  ? 'bg-primary-500 border-primary-400 text-white'
+                  : 'bg-white border-engineering-200'
               }`}
               value={nodeState.top || ''}
               placeholder="0"
@@ -271,12 +321,18 @@ function GraphNodeComponent({ data }: NodeProps) {
             />
           </div>
           <div className="flex-1">
-            <div className={`text-[10px] font-medium ${isRoot ? 'text-primary-100' : 'text-engineering-400'}`}>$skip</div>
+            <div
+              className={`text-[10px] font-medium ${isRoot ? 'text-primary-100' : 'text-engineering-400'}`}
+            >
+              $skip
+            </div>
             <input
               type="number"
               min={0}
               className={`w-full text-[10px] rounded px-1 py-0.5 border ${
-                isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
+                isRoot
+                  ? 'bg-primary-500 border-primary-400 text-white'
+                  : 'bg-white border-engineering-200'
               }`}
               value={nodeState.skip || ''}
               placeholder="0"
@@ -291,14 +347,18 @@ function GraphNodeComponent({ data }: NodeProps) {
             <button
               onClick={() => setShowNav(!showNav)}
               className={`text-[10px] font-medium flex items-center gap-1 ${
-                isRoot ? 'text-primary-100 hover:text-white' : 'text-engineering-400 hover:text-engineering-600'
+                isRoot
+                  ? 'text-primary-100 hover:text-white'
+                  : 'text-engineering-400 hover:text-engineering-600'
               }`}
             >
               $expand
               {nodeState.expandedNavProps.length > 0 && (
-                <span className={`px-1 rounded text-[9px] ${
-                  isRoot ? 'bg-white/20' : 'bg-engineering-200'
-                }`}>
+                <span
+                  className={`px-1 rounded text-[9px] ${
+                    isRoot ? 'bg-white/20' : 'bg-engineering-200'
+                  }`}
+                >
                   {nodeState.expandedNavProps.length}
                 </span>
               )}
@@ -310,7 +370,7 @@ function GraphNodeComponent({ data }: NodeProps) {
                   const targetName = getTargetEntityName(
                     nav.name,
                     findEntity(nodeState.entityName, metadata.entities)!,
-                    metadata
+                    metadata,
                   );
                   return (
                     <button
@@ -324,7 +384,9 @@ function GraphNodeComponent({ data }: NodeProps) {
                     >
                       {nav.name}
                       {targetName && (
-                        <span className={`ml-0.5 ${isRoot ? 'text-white/50' : 'text-engineering-400'}`}>
+                        <span
+                          className={`ml-0.5 ${isRoot ? 'text-white/50' : 'text-engineering-400'}`}
+                        >
                           →{targetName}
                         </span>
                       )}
@@ -337,7 +399,13 @@ function GraphNodeComponent({ data }: NodeProps) {
         )}
       </div>
 
-      {!isRoot && <Handle type="source" position={Position.Bottom} className="!bg-engineering-400 !w-2 !h-2" />}
+      {!isRoot && (
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          className="!bg-engineering-400 !w-2 !h-2"
+        />
+      )}
     </div>
   );
 }

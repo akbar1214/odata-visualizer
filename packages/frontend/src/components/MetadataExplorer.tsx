@@ -30,7 +30,8 @@ const SORTABLE_TYPES = new Set([
 
 function isSortableType(type: string): boolean {
   if (SORTABLE_TYPES.has(type)) return true;
-  if (type.startsWith('Edm.Int') || type.startsWith('Edm.Float') || type.startsWith('Edm.Dec')) return true;
+  if (type.startsWith('Edm.Int') || type.startsWith('Edm.Float') || type.startsWith('Edm.Dec'))
+    return true;
   return false;
 }
 
@@ -50,7 +51,7 @@ export function MetadataExplorer({
       (e) =>
         e.name.toLowerCase().includes(lower) ||
         e.label?.toLowerCase().includes(lower) ||
-        e.namespace?.toLowerCase().includes(lower)
+        e.namespace?.toLowerCase().includes(lower),
     );
   }, [metadata.entities, searchTerm]);
 
@@ -58,7 +59,7 @@ export function MetadataExplorer({
     const totalProperties = metadata.entities.reduce((acc, e) => acc + e.properties.length, 0);
     const totalNavProps = metadata.entities.reduce(
       (acc, e) => acc + e.navigationProperties.length,
-      0
+      0,
     );
     const namespaces = new Set(metadata.entities.map((e) => e.namespace).filter(Boolean));
 
@@ -210,7 +211,14 @@ interface EntityCardProps {
   onNavigate?: (entityName: string) => void;
 }
 
-function EntityCard({ entity, isExpanded, isSelected, metadata, onToggle, onNavigate }: EntityCardProps) {
+function EntityCard({
+  entity,
+  isExpanded,
+  isSelected,
+  metadata,
+  onToggle,
+  onNavigate,
+}: EntityCardProps) {
   return (
     <div
       className={`border rounded overflow-hidden transition-all ${
@@ -222,7 +230,9 @@ function EntityCard({ entity, isExpanded, isSelected, metadata, onToggle, onNavi
         className="w-full px-4 py-3 text-left hover:bg-engineering-100 flex items-center justify-between"
       >
         <div className="flex-1 min-w-0">
-          <div className="font-medium text-sm truncate text-black">{entity.label || entity.name}</div>
+          <div className="font-medium text-sm truncate text-black">
+            {entity.label || entity.name}
+          </div>
           {entity.namespace && (
             <div className="text-xs text-engineering-500 truncate">{entity.namespace}</div>
           )}
@@ -278,8 +288,12 @@ function EntityCard({ entity, isExpanded, isSelected, metadata, onToggle, onNavi
                     <th className="py-1 pr-2">Name</th>
                     <th className="py-1 pr-2">Type</th>
                     <th className="py-1 pr-2">Nullable</th>
-                    <th className="py-1 pr-2" title="Can use in $select">$select</th>
-                    <th className="py-1" title="Can use in $orderby">$orderby</th>
+                    <th className="py-1 pr-2" title="Can use in $select">
+                      $select
+                    </th>
+                    <th className="py-1" title="Can use in $orderby">
+                      $orderby
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -296,9 +310,16 @@ function EntityCard({ entity, isExpanded, isSelected, metadata, onToggle, onNavi
                       <td className="py-1 pr-2 text-engineering-500">
                         {prop.type.replace('Edm.', '')}
                       </td>
-                      <td className="py-1 pr-2 text-engineering-400">{prop.nullable ? '✓' : '✗'}</td>
-                      <td className="py-1 pr-2 text-infineon-green" title="Selectable">✓</td>
-                      <td className="py-1 text-primary-500" title={isSortableType(prop.type) ? 'Sortable' : 'Not sortable'}>
+                      <td className="py-1 pr-2 text-engineering-400">
+                        {prop.nullable ? '✓' : '✗'}
+                      </td>
+                      <td className="py-1 pr-2 text-infineon-green" title="Selectable">
+                        ✓
+                      </td>
+                      <td
+                        className="py-1 text-primary-500"
+                        title={isSortableType(prop.type) ? 'Sortable' : 'Not sortable'}
+                      >
                         {isSortableType(prop.type) ? '✓' : '—'}
                       </td>
                     </tr>
@@ -311,7 +332,9 @@ function EntityCard({ entity, isExpanded, isSelected, metadata, onToggle, onNavi
           {/* Navigation Properties */}
           {entity.navigationProperties.length > 0 && (
             <div className="mt-3">
-              <div className="text-xs font-medium text-engineering-500 mb-1">Navigation Properties</div>
+              <div className="text-xs font-medium text-engineering-500 mb-1">
+                Navigation Properties
+              </div>
               <div className="space-y-1">
                 {entity.navigationProperties.map((nav) => {
                   const targetName = getTargetEntityName(nav.name, entity, metadata);
@@ -328,7 +351,9 @@ function EntityCard({ entity, isExpanded, isSelected, metadata, onToggle, onNavi
                           {targetName}
                         </button>
                       ) : (
-                        <span className="text-engineering-400">{nav.relationship || 'unknown'}</span>
+                        <span className="text-engineering-400">
+                          {nav.relationship || 'unknown'}
+                        </span>
                       )}
                     </div>
                   );

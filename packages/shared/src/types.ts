@@ -1,6 +1,6 @@
 /**
  * OData Visualizer - Shared Types
- * 
+ *
  * Core type definitions for OData metadata parsing and visualization.
  */
 

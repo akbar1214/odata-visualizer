@@ -1,5 +1,11 @@
 import { memo } from 'react';
-import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps, type Edge } from '@xyflow/react';
+import {
+  BaseEdge,
+  EdgeLabelRenderer,
+  getBezierPath,
+  type EdgeProps,
+  type Edge,
+} from '@xyflow/react';
 import type { ODataRelationship } from '@odata-visualizer/shared';
 
 export type RelationshipEdgeData = Edge<{
@@ -46,7 +52,9 @@ function RelationshipEdgeComponent({
   });
 
   const relationship = data?.relationship;
-  const fromMultiplicity = relationship ? getMultiplicitySymbol(relationship.from.multiplicity) : '';
+  const fromMultiplicity = relationship
+    ? getMultiplicitySymbol(relationship.from.multiplicity)
+    : '';
   const toMultiplicity = relationship ? getMultiplicitySymbol(relationship.to.multiplicity) : '';
 
   return (

@@ -5,16 +5,8 @@ import { QueryBuilderPage } from './pages/QueryBuilderPage';
 import { useMetadata } from './hooks/useMetadata';
 
 function App() {
-  const {
-    metadata,
-    loading,
-    error,
-    parseTimeMs,
-    fileSizeBytes,
-    loadFile,
-    loadUrl,
-    clear,
-  } = useMetadata();
+  const { metadata, loading, error, parseTimeMs, fileSizeBytes, loadFile, loadUrl, clear } =
+    useMetadata();
 
   if (!metadata) {
     return (
@@ -35,20 +27,14 @@ function App() {
         <main className="max-w-full mx-auto p-4">
           <div className="max-w-xl mx-auto mt-12">
             <div className="text-center mb-8">
-              <h2 className="text-2xl font-bold text-black mb-2">
-                Visualize OData Metadata
-              </h2>
+              <h2 className="text-2xl font-bold text-black mb-2">Visualize OData Metadata</h2>
               <p className="text-engineering-500">
                 Upload an OData metadata file or provide a URL to generate an interactive
                 entity-relationship diagram and build OData queries.
               </p>
             </div>
 
-            <MetadataInput
-              onFileSelect={loadFile}
-              onUrlSubmit={loadUrl}
-              loading={loading}
-            />
+            <MetadataInput onFileSelect={loadFile} onUrlSubmit={loadUrl} loading={loading} />
 
             {error && (
               <div className="mt-4 p-4 bg-red-50 border border-infineon-red/20 rounded">
@@ -139,10 +125,7 @@ function App() {
             />
           }
         />
-        <Route
-          path="/query"
-          element={<QueryBuilderPage metadata={metadata} />}
-        />
+        <Route path="/query" element={<QueryBuilderPage metadata={metadata} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
