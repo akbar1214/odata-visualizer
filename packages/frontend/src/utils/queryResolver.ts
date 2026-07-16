@@ -100,7 +100,9 @@ export function getResolvedEntity(entityName: string, entities: ODataEntity[]): 
 }
 
 export function getTargetEntityName(navProperty: string, sourceEntity: ODataEntity, metadata: ODataMetadata): string | undefined {
-  const relationship = sourceEntity.navigationProperties.find((n) => n.name === navProperty);
+  // Search through resolved (inherited) nav properties
+  const allNavProps = getResolvedNavProperties(sourceEntity, metadata.entities);
+  const relationship = allNavProps.find((n) => n.name === navProperty);
   if (!relationship) return undefined;
 
   // OData V4: use targetType directly if no relationship defined
