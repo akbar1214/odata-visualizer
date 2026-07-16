@@ -1,0 +1,121 @@
+import { useState, useMemo, useCallback } from 'react';
+import type { ODataMetadata } from '@odata-visualizer/shared';
+import { EntitySelector } from './query/EntitySelector';
+import { QueryPreview } from './query/QueryPreview';
+import { QueryCanvas } from './query/QueryCanvas';
+import {
+  buildODataQuery,
+  getQueryableEntities,
+  type QueryState,
+} from '../utils/queryResolver';
+import {
+  createRootNode,
+  graphToExpandItems,
+  type GraphNodeState,
+  type GraphEdge,
+} from '../utils/graphState';
+
+interface QueryBuilderProps {
+  metadata: ODataMetadata;
+}
+
+export function QueryBuilder({ metadata }: QueryBuilderProps) {
+  const queryableEntities = useMemo(() => getQueryableEntities(metadata.entities), [metadata.entities]);
+
+  const [selectedEntity, setSelectedEntity] = useState<string>(
+    queryableEntities.length > 0 ? queryableEntities[0].name : ''
+  );
+
+  const [graphNodes, setGraphNodes] = useState<GraphNodeState[]>(() =>
+    selectedEntity ? [createRootNode(selectedEntity)] : []
+  );
+  const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
+
+  const handleEntitySelect = useCallback((name: string) => {
+    setSelectedEntity(name);
+    setGraphNodes([createRootNode(name)]);
+    setGraphEdges([]);
+  }, []);
+
+  const handleGraphChange = useCallback((nodes: GraphNodeState[], edges: GraphEdge[]) => {
+    setGraphNodes(nodes);
+    setGraphEdges(edges);
+  }, []);
+
+  const query: QueryState = useMemo(() => {
+    const rootNode = graphNodes.find((n) => n.id === 'root');
+    if (!rootNode) {
+      return {
+        entityName: selectedEntity,
+        filters: [],
+        select: [],
+        expand: [],
+        sort: '',
+        sortDirection: 'asc',
+        top: 25,
+        skip: 0,
+      };
+    }
+
+    return {
+      entityName: rootNode.entityName,
+      filters: rootNode.filters,
+      select: rootNode.select,
+      expand: graphToExpandItems({ nodes: graphNodes, edges: graphEdges }, 'root'),
+      sort: rootNode.sort,
+      sortDirection: rootNode.sortDirection,
+      top: rootNode.top,
+      skip: rootNode.skip,
+    };
+  }, [graphNodes, graphEdges, selectedEntity, metadata]);
+
+  const queryString = useMemo(() => buildODataQuery(query, metadata), [query, metadata]);
+
+  return (
+    <div className="flex h-[calc(100vh-64px)]">
+      {/* Left: Minimal panel */}
+      <div className="w-72 flex-shrink-0 border-r bg-white overflow-y-auto flex flex-col">
+        <div className="p-4 space-y-4 flex-1">
+          <EntitySelector
+            entities={metadata.entities}
+            selected={selectedEntity}
+            onSelect={handleEntitySelect}
+          />
+
+          {queryableEntities.length === 0 && (
+            <p className="text-xs text-gray-400 text-center mt-4">
+              No queryable entities found. Upload metadata with entity types.
+            </p>
+          )}
+
+          {selectedEntity && (
+            <div className="text-xs text-gray-400 space-y-1">
+              <div className="font-medium text-gray-500">Quick Guide</div>
+              <div>Click <b>$select</b> properties on any node to choose fields</div>
+              <div>Click <b>$expand</b> nav properties to add related entities</div>
+              <div>Click <b>$filter</b> to add filter conditions</div>
+              <div>Click <b>$orderby</b> to set sorting</div>
+              <div>Use <b>$top</b>/<b>$skip</b> for pagination</div>
+              <div>Click <b>✕</b> on a node to remove it</div>
+              <div>Drag nodes to rearrange the layout</div>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t bg-gray-50 p-3">
+          <QueryPreview query={queryString} />
+        </div>
+      </div>
+
+      {/* Right: Full canvas */}
+      <div className="flex-1 bg-gray-50">
+        <QueryCanvas
+          graphNodes={graphNodes}
+          graphEdges={graphEdges}
+          metadata={metadata}
+          onGraphChange={handleGraphChange}
+        />
+      </div>
+    </div>
+  );
+}

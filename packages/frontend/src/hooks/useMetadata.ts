@@ -8,7 +8,6 @@ export interface MetadataState {
   error: string | null;
   parseTimeMs: number | null;
   fileSizeBytes: number | null;
-  sessionId: string | null;
 }
 
 export function useMetadata() {
@@ -18,10 +17,9 @@ export function useMetadata() {
     error: null,
     parseTimeMs: null,
     fileSizeBytes: null,
-    sessionId: null,
   });
 
-  const handleResponse = useCallback((response: ParseResponse, sessionId: string) => {
+  const handleResponse = useCallback((response: ParseResponse) => {
     if (response.success && response.data) {
       setState({
         metadata: response.data,
@@ -29,7 +27,6 @@ export function useMetadata() {
         error: null,
         parseTimeMs: response.parseTimeMs,
         fileSizeBytes: response.fileSizeBytes,
-        sessionId,
       });
     } else {
       setState({
@@ -38,39 +35,34 @@ export function useMetadata() {
         error: response.error || 'Unknown error',
         parseTimeMs: response.parseTimeMs,
         fileSizeBytes: response.fileSizeBytes,
-        sessionId: null,
       });
     }
   }, []);
 
   const loadFile = useCallback(async (file: File) => {
-    const sessionId = crypto.randomUUID();
     setState((prev) => ({ ...prev, loading: true, error: null }));
     try {
-      const response = await parseFile(file, sessionId);
-      handleResponse(response, sessionId);
+      const response = await parseFile(file);
+      handleResponse(response);
     } catch (error) {
       setState((prev) => ({
         ...prev,
         loading: false,
         error: error instanceof Error ? error.message : 'Failed to parse file',
-        sessionId: null,
       }));
     }
   }, [handleResponse]);
 
   const loadUrl = useCallback(async (url: string) => {
-    const sessionId = crypto.randomUUID();
     setState((prev) => ({ ...prev, loading: true, error: null }));
     try {
-      const response = await parseUrl(url, sessionId);
-      handleResponse(response, sessionId);
+      const response = await parseUrl(url);
+      handleResponse(response);
     } catch (error) {
       setState((prev) => ({
         ...prev,
         loading: false,
         error: error instanceof Error ? error.message : 'Failed to fetch metadata',
-        sessionId: null,
       }));
     }
   }, [handleResponse]);
@@ -82,7 +74,6 @@ export function useMetadata() {
       error: null,
       parseTimeMs: null,
       fileSizeBytes: null,
-      sessionId: null,
     });
   }, []);
 

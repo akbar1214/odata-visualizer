@@ -225,11 +225,27 @@ function parseNavigationProperty(navProp: XmlElement): ODataNavigationProperty {
   const fromRole = navProp['@_FromRole'] || '';
   const toRole = navProp['@_ToRole'] || '';
 
+  // OData V4: extract target entity type from Type attribute
+  const rawType = navProp['@_Type'] || '';
+  let targetType: string | undefined;
+  if (rawType) {
+    let typeStr = rawType;
+    if (typeStr.startsWith('Collection(') && typeStr.endsWith(')')) {
+      typeStr = typeStr.slice(11, -1);
+    }
+    if (typeStr.includes('.')) {
+      targetType = typeStr.split('.').pop() || typeStr;
+    } else {
+      targetType = typeStr;
+    }
+  }
+
   return {
     name,
     relationship,
     fromRole,
     toRole,
+    targetType,
   };
 }
 

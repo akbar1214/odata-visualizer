@@ -9,8 +9,6 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "test:watch": "pnpm -r test:watch",
-    "mcp:build": "pnpm --filter @odata-visualizer/mcp build",
-    "mcp:start": "pnpm --filter @odata-visualizer/mcp start",
     "docker:build": "docker build -f docker/Dockerfile -t odata-visualizer .",
     "docker:run": "docker run -p 3001:3001 odata-visualizer"
   },

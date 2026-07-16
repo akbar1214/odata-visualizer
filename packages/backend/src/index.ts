@@ -4,7 +4,6 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 import { parseRouter } from './routes/parse.js';
-import { chatRouter } from './routes/chat.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -18,7 +17,6 @@ app.use(express.json({ limit: '10mb' }));
 
 // API Routes
 app.use('/api/parse', parseRouter);
-app.use('/api/chat', chatRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {

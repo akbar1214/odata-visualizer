@@ -23,6 +23,7 @@ export interface ODataNavigationProperty {
   relationship: string;
   fromRole: string;
   toRole: string;
+  targetType?: string;
   label?: string;
   annotations?: Record<string, string>;
 }

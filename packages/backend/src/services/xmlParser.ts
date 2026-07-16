@@ -220,11 +220,31 @@ function parseNavigationProperty(navProp: XmlElement): ODataNavigationProperty {
   const fromRole = navProp['@_FromRole'] || '';
   const toRole = navProp['@_ToRole'] || '';
 
+  // OData V4: extract target entity type from Type attribute
+  // e.g., "Collection(NorthwindModel.Product)" -> "Product"
+  // e.g., "NorthwindModel.Order" -> "Order"
+  const rawType = navProp['@_Type'] || '';
+  let targetType: string | undefined;
+  if (rawType) {
+    let typeStr = rawType;
+    // Strip Collection() wrapper
+    if (typeStr.startsWith('Collection(') && typeStr.endsWith(')')) {
+      typeStr = typeStr.slice(11, -1);
+    }
+    // Extract entity name from namespace-qualified type
+    if (typeStr.includes('.')) {
+      targetType = typeStr.split('.').pop() || typeStr;
+    } else {
+      targetType = typeStr;
+    }
+  }
+
   return {
     name,
     relationship,
     fromRole,
     toRole,
+    targetType,
   };
 }
 
