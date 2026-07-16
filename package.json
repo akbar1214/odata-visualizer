@@ -12,8 +12,8 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "test:watch": "pnpm -r test:watch",
-    "docker:build": "docker build -f docker/Dockerfile -t odata-visualizer .",
-    "docker:run": "docker run -p 3001:3001 odata-visualizer"
+    "container:build": "docker build -f container/Containerfile -t odata-visualizer .",
+    "container:run": "docker run -p 3001:3001 odata-visualizer"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",

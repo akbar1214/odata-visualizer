@@ -175,7 +175,7 @@ litellm --config litellm_config.yaml --port 4000
 
 ```bash
 # Build the image
-docker build -f docker/Dockerfile -t odata-visualizer .
+docker build -f docker/Containerfile -t odata-visualizer .
 
 # Run with LiteLLM proxy
 docker run -p 3001:3001 \
@@ -193,7 +193,7 @@ services:
   odata-visualizer:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Containerfile
     ports:
       - "3001:3001"
     environment:
