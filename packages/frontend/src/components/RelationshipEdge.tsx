@@ -71,7 +71,7 @@ function RelationshipEdgeComponent({
           className="nodrag nopan"
         >
           {/* Multiplicity labels */}
-          <div className="flex items-center gap-2 bg-white px-2 py-0.5 rounded shadow-ifx border border-engineering-200">
+          <div className="flex items-center gap-2 bg-white px-2 py-0.5 rounded shadow-odv border border-engineering-200">
             <span className="text-[10px] font-mono text-primary-500 font-medium">
               {fromMultiplicity}
             </span>

@@ -83,7 +83,7 @@ export function SearchableSelect({
         </button>
       )}
       {open && (
-        <div className="absolute z-50 mt-1 w-full bg-white border border-engineering-200 rounded shadow-ifx max-h-48 overflow-auto">
+        <div className="absolute z-50 mt-1 w-full bg-white border border-engineering-200 rounded shadow-odv max-h-48 overflow-auto">
           {filtered.length === 0 && (
             <div className="px-2 py-1.5 text-[10px] text-engineering-400">No matches</div>
           )}

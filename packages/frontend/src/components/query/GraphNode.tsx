@@ -56,7 +56,7 @@ function GraphNodeComponent({ data }: NodeProps) {
 
   return (
     <div
-      className={`rounded border shadow-ifx text-xs min-w-[220px] max-w-[280px] ${
+      className={`rounded border shadow-odv text-xs min-w-[220px] max-w-[280px] ${
         isRoot
           ? 'bg-primary-500 border-primary-600 text-white'
           : 'bg-white border-engineering-200 text-engineering-600'

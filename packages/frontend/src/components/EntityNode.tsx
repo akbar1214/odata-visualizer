@@ -17,8 +17,8 @@ function EntityNodeComponent({ data, selected }: NodeProps<EntityNodeData>) {
 
   return (
     <div
-      className={`bg-white rounded shadow-ifx min-w-[200px] max-w-[280px] border-2 transition-all ${
-        selected ? 'border-primary-500 shadow-ifx-large' : 'border-engineering-200 hover:border-primary-300'
+      className={`bg-white rounded shadow-odv min-w-[200px] max-w-[280px] border-2 transition-all ${
+        selected ? 'border-primary-500 shadow-odv-large' : 'border-engineering-200 hover:border-primary-300'
       }`}
     >
       {/* Entity Header */}

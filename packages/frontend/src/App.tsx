@@ -20,7 +20,7 @@ function App() {
     return (
       <div className="min-h-screen bg-engineering-100">
         {/* Header */}
-        <header className="bg-engineering-600 text-white shadow-ifx">
+        <header className="bg-engineering-600 text-white shadow-odv">
           <div className="max-w-full mx-auto px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-primary-500 rounded flex items-center justify-center">

@@ -33,6 +33,6 @@
   }
 
   .card {
-    @apply rounded border border-engineering-200 bg-white shadow-ifx;
+    @apply rounded border border-engineering-200 bg-white shadow-odv;
   }
 }

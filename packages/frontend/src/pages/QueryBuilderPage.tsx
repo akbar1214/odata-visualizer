@@ -10,7 +10,7 @@ export function QueryBuilderPage({ metadata }: QueryBuilderPageProps) {
   return (
     <div className="min-h-screen bg-engineering-100 flex flex-col">
       {/* Header */}
-      <header className="bg-engineering-600 text-white shadow-ifx flex-shrink-0">
+      <header className="bg-engineering-600 text-white shadow-odv flex-shrink-0">
         <div className="max-w-full mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Link
