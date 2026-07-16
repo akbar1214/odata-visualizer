@@ -266,3 +266,114 @@ export function graphToExpandItems(
     skip: child.skip,
   }));
 }
+
+export interface PathStep {
+  fromEntity: string;
+  navProperty: string;
+  toEntity: string;
+}
+
+export type EntityPath = PathStep[];
+
+export function findPaths(
+  sourceEntity: string,
+  targetEntity: string,
+  metadata: ODataMetadata,
+  maxDepth: number = 5
+): EntityPath[] {
+  const paths: EntityPath[] = [];
+
+  const dfs = (
+    currentEntity: string,
+    path: PathStep[],
+    visited: Set<string>,
+    depth: number
+  ) => {
+    if (depth > maxDepth) return;
+
+    if (currentEntity.toLowerCase() === targetEntity.toLowerCase() && path.length > 0) {
+      paths.push([...path]);
+      return;
+    }
+
+    const entity = findEntity(currentEntity, metadata.entities);
+    if (!entity) return;
+
+    const navProps = getResolvedNavProperties(entity, metadata.entities);
+
+    for (const nav of navProps) {
+      const targetName = getTargetEntityName(nav.name, entity, metadata);
+      if (!targetName) continue;
+
+      const key = targetName.toLowerCase();
+      if (visited.has(key)) continue;
+
+      visited.add(key);
+      path.push({
+        fromEntity: currentEntity,
+        navProperty: nav.name,
+        toEntity: targetName,
+      });
+
+      dfs(targetName, path, visited, depth + 1);
+
+      path.pop();
+      visited.delete(key);
+    }
+  };
+
+  const startVisited = new Set<string>([sourceEntity.toLowerCase()]);
+  dfs(sourceEntity, [], startVisited, 0);
+
+  return paths;
+}
+
+export function expandPath(
+  sourceEntity: string,
+  path: EntityPath
+): GraphState {
+  const nodes: GraphNodeState[] = [];
+  const edges: GraphEdge[] = [];
+
+  const rootNode = createRootNode(sourceEntity);
+  nodes.push(rootNode);
+
+  let parentId = 'root';
+
+  for (const step of path) {
+    const nodeId = nextNodeId();
+
+    const newNode: GraphNodeState = {
+      id: nodeId,
+      entityName: step.toEntity,
+      parentId,
+      navProperty: step.navProperty,
+      select: [],
+      filters: [],
+      sort: '',
+      sortDirection: 'asc',
+      top: 0,
+      skip: 0,
+      expandedNavProps: [],
+      position: { x: 0, y: 0 },
+    };
+
+    nodes.push(newNode);
+
+    const parentNode = nodes.find((n) => n.id === parentId);
+    if (parentNode) {
+      parentNode.expandedNavProps.push(step.navProperty);
+    }
+
+    edges.push({
+      id: `edge-${parentId}-${nodeId}`,
+      source: parentId,
+      target: nodeId,
+      label: step.navProperty,
+    });
+
+    parentId = nodeId;
+  }
+
+  return { nodes, edges };
+}

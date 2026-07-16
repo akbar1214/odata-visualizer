@@ -1,0 +1,128 @@
+import { useState, useMemo } from 'react';
+import type { ODataMetadata } from '@odata-visualizer/shared';
+import { findPaths, getReachableEntities, type EntityPath } from '../../utils/graphState';
+import { getQueryableEntities } from '../../utils/queryResolver';
+
+interface PathFinderProps {
+  metadata: ODataMetadata;
+  currentEntity: string;
+  onSelectPath: (sourceEntity: string, path: EntityPath) => void;
+}
+
+export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinderProps) {
+  const queryableEntities = useMemo(
+    () => getQueryableEntities(metadata.entities),
+    [metadata.entities]
+  );
+
+  const [sourceEntity, setSourceEntity] = useState(currentEntity);
+  const [targetEntity, setTargetEntity] = useState('');
+  const [foundPaths, setFoundPaths] = useState<EntityPath[]>([]);
+  const [searched, setSearched] = useState(false);
+
+  const reachableEntities = useMemo(() => {
+    if (!sourceEntity) return new Set<string>();
+    const reachable = getReachableEntities(sourceEntity, metadata);
+    const names = new Set<string>();
+    for (const targets of reachable.values()) {
+      for (const t of targets) {
+        names.add(t.entity.name);
+      }
+    }
+    return names;
+  }, [sourceEntity, metadata]);
+
+  const handleFind = () => {
+    if (!sourceEntity || !targetEntity) return;
+    const paths = findPaths(sourceEntity, targetEntity, metadata);
+    setFoundPaths(paths);
+    setSearched(true);
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="text-xs font-medium text-gray-500">Path Finder</div>
+
+      <div className="space-y-2">
+        <div>
+          <label className="text-[10px] text-gray-400 block mb-0.5">From entity</label>
+          <select
+            className="input text-xs w-full"
+            value={sourceEntity}
+            onChange={(e) => {
+              setSourceEntity(e.target.value);
+              setTargetEntity('');
+              setFoundPaths([]);
+              setSearched(false);
+            }}
+          >
+            <option value="">Select source...</option>
+            {queryableEntities.map((e) => (
+              <option key={e.name} value={e.name}>{e.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="text-[10px] text-gray-400 block mb-0.5">To entity</label>
+          <select
+            className="input text-xs w-full"
+            value={targetEntity}
+            onChange={(e) => setTargetEntity(e.target.value)}
+            disabled={!sourceEntity}
+          >
+            <option value="">
+              {sourceEntity ? 'Select target...' : 'Select source first...'}
+            </option>
+            {queryableEntities
+              .filter((e) => e.name !== sourceEntity && reachableEntities.has(e.name))
+              .map((e) => (
+                <option key={e.name} value={e.name}>{e.name}</option>
+              ))}
+          </select>
+        </div>
+
+        <button
+          onClick={handleFind}
+          disabled={!sourceEntity || !targetEntity}
+          className="w-full px-3 py-1.5 bg-primary-600 text-white text-xs rounded hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Find Paths
+        </button>
+      </div>
+
+      {searched && (
+        <div className="space-y-2">
+          <div className="text-[10px] text-gray-400">
+            {foundPaths.length === 0
+              ? 'No paths found'
+              : `${foundPaths.length} path(s) found`}
+          </div>
+
+          {foundPaths.map((path, index) => (
+            <button
+              key={index}
+              onClick={() => onSelectPath(sourceEntity, path)}
+              className="w-full text-left p-2 rounded border border-gray-200 hover:border-primary-300 hover:bg-primary-50 transition-colors"
+            >
+              <div className="text-[10px] font-medium text-gray-600 mb-1">
+                Path {index + 1} ({path.length} hop{path.length !== 1 ? 's' : ''})
+              </div>
+              <div className="space-y-0.5">
+                {path.map((step, i) => (
+                  <div key={i} className="flex items-center gap-1 text-[10px]">
+                    <span className="text-gray-500">{step.fromEntity}</span>
+                    <span className="text-primary-500">→</span>
+                    <span className="text-primary-600 font-medium">.{step.navProperty}</span>
+                    <span className="text-primary-500">→</span>
+                    <span className="text-gray-500">{step.toEntity}</span>
+                  </div>
+                ))}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

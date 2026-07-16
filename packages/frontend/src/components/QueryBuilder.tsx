@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from 'react';
 import type { ODataMetadata } from '@odata-visualizer/shared';
 import { EntitySelector } from './query/EntitySelector';
+import { PathFinder } from './query/PathFinder';
 import { QueryPreview } from './query/QueryPreview';
 import { QueryCanvas } from './query/QueryCanvas';
 import {
@@ -10,9 +11,12 @@ import {
 } from '../utils/queryResolver';
 import {
   createRootNode,
+  expandPath,
+  layoutGraph,
   graphToExpandItems,
   type GraphNodeState,
   type GraphEdge,
+  type EntityPath,
 } from '../utils/graphState';
 
 interface QueryBuilderProps {
@@ -42,6 +46,17 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
     setGraphEdges(edges);
   }, []);
 
+  const handleSelectPath = useCallback(
+    async (sourceEntity: string, path: EntityPath) => {
+      const state = expandPath(sourceEntity, path);
+      const laid = await layoutGraph(state);
+      setSelectedEntity(sourceEntity);
+      setGraphNodes(laid.nodes);
+      setGraphEdges(laid.edges);
+    },
+    []
+  );
+
   const query: QueryState = useMemo(() => {
     const rootNode = graphNodes.find((n) => n.id === 'root');
     if (!rootNode) {
@@ -67,13 +82,13 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
       top: rootNode.top,
       skip: rootNode.skip,
     };
-  }, [graphNodes, graphEdges, selectedEntity, metadata]);
+  }, [graphNodes, graphEdges, selectedEntity]);
 
   const queryString = useMemo(() => buildODataQuery(query, metadata), [query, metadata]);
 
   return (
     <div className="flex h-[calc(100vh-64px)]">
-      {/* Left: Minimal panel */}
+      {/* Left: Panel */}
       <div className="w-72 flex-shrink-0 border-r bg-white overflow-y-auto flex flex-col">
         <div className="p-4 space-y-4 flex-1">
           <EntitySelector
@@ -89,16 +104,26 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
           )}
 
           {selectedEntity && (
-            <div className="text-xs text-gray-400 space-y-1">
-              <div className="font-medium text-gray-500">Quick Guide</div>
-              <div>Click <b>$select</b> properties on any node to choose fields</div>
-              <div>Click <b>$expand</b> nav properties to add related entities</div>
-              <div>Click <b>$filter</b> to add filter conditions</div>
-              <div>Click <b>$orderby</b> to set sorting</div>
-              <div>Use <b>$top</b>/<b>$skip</b> for pagination</div>
-              <div>Click <b>✕</b> on a node to remove it</div>
-              <div>Drag nodes to rearrange the layout</div>
-            </div>
+            <>
+              <div className="border-t pt-4">
+                <PathFinder
+                  metadata={metadata}
+                  currentEntity={selectedEntity}
+                  onSelectPath={handleSelectPath}
+                />
+              </div>
+
+              <div className="border-t pt-4 text-xs text-gray-400 space-y-1">
+                <div className="font-medium text-gray-500">Quick Guide</div>
+                <div><b>Path Finder</b> - find routes between two entities</div>
+                <div>Click <b>$select</b> properties on any node to choose fields</div>
+                <div>Click <b>$expand</b> nav properties to add related entities</div>
+                <div>Click <b>$filter</b> to add filter conditions</div>
+                <div>Click <b>$orderby</b> to set sorting</div>
+                <div>Use <b>$top</b>/<b>$skip</b> for pagination</div>
+                <div>Click <b>✕</b> on a node to remove it</div>
+              </div>
+            </>
           )}
         </div>
 
