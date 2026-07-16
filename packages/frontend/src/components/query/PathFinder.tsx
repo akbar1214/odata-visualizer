@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import type { ODataMetadata } from '@odata-visualizer/shared';
 import { findPaths, getReachableEntities, type EntityPath } from '../../utils/graphState';
-import { isComplexType } from '../../utils/queryResolver';
+import { SearchableSelect } from './SearchableSelect';
 
 interface PathFinderProps {
   metadata: ODataMetadata;
@@ -27,6 +27,11 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
     return names;
   }, [sourceEntity, metadata]);
 
+  const targetEntities = useMemo(
+    () => metadata.entities.filter((e) => e.name !== sourceEntity && reachableEntities.has(e.name)),
+    [metadata.entities, sourceEntity, reachableEntities]
+  );
+
   const handleFind = () => {
     if (!sourceEntity || !targetEntity) return;
     const paths = findPaths(sourceEntity, targetEntity, metadata);
@@ -41,44 +46,28 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
       <div className="space-y-2">
         <div>
           <label className="text-[10px] text-engineering-400 block mb-0.5">From entity</label>
-          <select
-            className="input text-xs w-full"
+          <SearchableSelect
+            entities={metadata.entities}
             value={sourceEntity}
-            onChange={(e) => {
-              setSourceEntity(e.target.value);
+            onChange={(name) => {
+              setSourceEntity(name);
               setTargetEntity('');
               setFoundPaths([]);
               setSearched(false);
             }}
-          >
-            <option value="">Select source...</option>
-            {metadata.entities.map((e) => (
-              <option key={e.name} value={e.name}>
-                {e.name}{isComplexType(e) ? ' (ComplexType)' : ''}
-              </option>
-            ))}
-          </select>
+            placeholder="Search source..."
+          />
         </div>
 
         <div>
           <label className="text-[10px] text-engineering-400 block mb-0.5">To entity</label>
-          <select
-            className="input text-xs w-full"
+          <SearchableSelect
+            entities={targetEntities}
             value={targetEntity}
-            onChange={(e) => setTargetEntity(e.target.value)}
+            onChange={setTargetEntity}
+            placeholder={sourceEntity ? 'Search target...' : 'Select source first...'}
             disabled={!sourceEntity}
-          >
-            <option value="">
-              {sourceEntity ? 'Select target...' : 'Select source first...'}
-            </option>
-            {metadata.entities
-              .filter((e) => e.name !== sourceEntity && reachableEntities.has(e.name))
-              .map((e) => (
-                <option key={e.name} value={e.name}>
-                  {e.name}{isComplexType(e) ? ' (ComplexType)' : ''}
-                </option>
-              ))}
-          </select>
+          />
         </div>
 
         <button

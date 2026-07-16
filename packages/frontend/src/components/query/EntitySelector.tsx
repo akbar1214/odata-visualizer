@@ -1,5 +1,5 @@
 import type { ODataEntity } from '@odata-visualizer/shared';
-import { groupEntitiesByNamespace, isComplexType } from '../../utils/queryResolver';
+import { SearchableSelect } from './SearchableSelect';
 
 interface EntitySelectorProps {
   entities: ODataEntity[];
@@ -8,27 +8,15 @@ interface EntitySelectorProps {
 }
 
 export function EntitySelector({ entities, selected, onSelect }: EntitySelectorProps) {
-  const grouped = groupEntitiesByNamespace(entities);
-
   return (
     <div>
       <label className="block text-xs font-medium text-engineering-500 mb-1">Entity</label>
-      <select
-        className="input text-sm"
+      <SearchableSelect
+        entities={entities}
         value={selected}
-        onChange={(e) => onSelect(e.target.value)}
-      >
-        <option value="">Select entity...</option>
-        {Array.from(grouped.entries()).map(([ns, ents]) => (
-          <optgroup key={ns} label={ns}>
-            {ents.map((e) => (
-              <option key={e.name} value={e.name}>
-                {e.name}{isComplexType(e) ? ' (ComplexType)' : ''}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
+        onChange={onSelect}
+        placeholder="Search entities..."
+      />
     </div>
   );
 }
