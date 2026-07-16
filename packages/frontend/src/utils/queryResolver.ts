@@ -133,16 +133,52 @@ const STRING_OPERATORS = ['eq', 'ne', 'contains', 'startswith', 'endswith'];
 const NUMBER_OPERATORS = ['eq', 'ne', 'gt', 'lt', 'ge', 'le'];
 const BOOLEAN_OPERATORS = ['eq'];
 const DATE_OPERATORS = ['eq', 'ne', 'gt', 'lt', 'ge', 'le'];
+const GUID_OPERATORS = ['eq', 'ne'];
 
 export function getOperatorsForType(edmType: string): string[] {
   if (edmType === 'Edm.Boolean') return BOOLEAN_OPERATORS;
-  if (edmType.startsWith('Edm.Int') || edmType === 'Edm.Decimal' || edmType === 'Edm.Double' || edmType === 'Edm.Single') {
+  if (
+    edmType.startsWith('Edm.Int') ||
+    edmType === 'Edm.Decimal' ||
+    edmType === 'Edm.Double' ||
+    edmType === 'Edm.Single' ||
+    edmType === 'Edm.Byte' ||
+    edmType === 'Edm.SByte'
+  ) {
     return NUMBER_OPERATORS;
   }
-  if (edmType === 'Edm.DateTime' || edmType === 'Edm.DateTimeOffset' || edmType === 'Edm.Date') {
+  if (
+    edmType === 'Edm.DateTime' ||
+    edmType === 'Edm.DateTimeOffset' ||
+    edmType === 'Edm.Date' ||
+    edmType === 'Edm.Time' ||
+    edmType === 'Edm.Duration'
+  ) {
     return DATE_OPERATORS;
   }
+  if (edmType === 'Edm.Guid') return GUID_OPERATORS;
   return STRING_OPERATORS;
+}
+
+export function getInputTypeForEdm(edmType: string): 'number' | 'date' | 'text' {
+  if (
+    edmType.startsWith('Edm.Int') ||
+    edmType === 'Edm.Decimal' ||
+    edmType === 'Edm.Double' ||
+    edmType === 'Edm.Single' ||
+    edmType === 'Edm.Byte' ||
+    edmType === 'Edm.SByte'
+  ) {
+    return 'number';
+  }
+  if (
+    edmType === 'Edm.DateTime' ||
+    edmType === 'Edm.DateTimeOffset' ||
+    edmType === 'Edm.Date'
+  ) {
+    return 'date';
+  }
+  return 'text';
 }
 
 export function formatODataValue(value: string, edmType: string): string {

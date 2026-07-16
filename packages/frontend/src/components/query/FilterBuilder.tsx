@@ -1,6 +1,6 @@
 import type { ODataProperty } from '@odata-visualizer/shared';
 import type { QueryFilter } from '../../utils/queryResolver';
-import { getOperatorsForType } from '../../utils/queryResolver';
+import { getOperatorsForType, getInputTypeForEdm } from '../../utils/queryResolver';
 
 interface FilterBuilderProps {
   properties: ODataProperty[];
@@ -77,7 +77,7 @@ export function FilterBuilder({ properties, filters, onChange }: FilterBuilderPr
               </select>
 
               <select
-                className="input text-xs w-20"
+                className="input text-xs w-24"
                 value={filter.operator}
                 onChange={(e) => updateFilter(index, 'operator', e.target.value)}
               >
@@ -87,7 +87,7 @@ export function FilterBuilder({ properties, filters, onChange }: FilterBuilderPr
               </select>
 
               <input
-                type={edmType === 'Edm.Int32' || edmType === 'Edm.Int64' || edmType === 'Edm.Decimal' || edmType === 'Edm.Double' ? 'number' : 'text'}
+                type={getInputTypeForEdm(edmType)}
                 className="input text-xs flex-1"
                 value={filter.value}
                 onChange={(e) => updateFilter(index, 'value', e.target.value)}

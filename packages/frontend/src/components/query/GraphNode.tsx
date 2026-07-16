@@ -6,6 +6,7 @@ import {
   getTargetEntityName,
   findEntity,
   getOperatorsForType,
+  getInputTypeForEdm,
 } from '../../utils/queryResolver';
 import type { GraphNodeState } from '../../utils/graphState';
 
@@ -145,7 +146,7 @@ function GraphNodeComponent({ data }: NodeProps) {
                       ))}
                     </select>
                     <select
-                      className={`text-[10px] rounded px-1 py-0.5 border w-12 ${
+                      className={`text-[10px] rounded px-1 py-0.5 border w-16 ${
                         isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
                       }`}
                       value={f.operator}
@@ -156,6 +157,7 @@ function GraphNodeComponent({ data }: NodeProps) {
                       ))}
                     </select>
                     <input
+                      type={getInputTypeForEdm(edmType)}
                       className={`text-[10px] rounded px-1 py-0.5 border flex-1 ${
                         isRoot ? 'bg-primary-500 border-primary-400 text-white placeholder-white/50' : 'bg-white border-engineering-200'
                       }`}
