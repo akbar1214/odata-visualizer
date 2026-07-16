@@ -201,10 +201,18 @@ function parseComplexType(complexType: XmlElement, namespace: string): ODataEnti
   const isOpenType = complexType['@_OpenType'] === 'true';
 
   const properties: ODataProperty[] = [];
+  const navigationProperties: ODataNavigationProperty[] = [];
 
   const propElements = ensureArray(complexType['Property'] || complexType['edm:Property'] || []);
   for (const prop of propElements) {
     properties.push(parseProperty(prop, []));
+  }
+
+  const navPropElements = ensureArray(
+    complexType['NavigationProperty'] || complexType['edm:NavigationProperty'] || []
+  );
+  for (const navProp of navPropElements) {
+    navigationProperties.push(parseNavigationProperty(navProp));
   }
 
   return {
@@ -214,7 +222,7 @@ function parseComplexType(complexType: XmlElement, namespace: string): ODataEnti
     abstract: false,
     openType: isOpenType,
     properties,
-    navigationProperties: [],
+    navigationProperties,
     keys: [],
   };
 }

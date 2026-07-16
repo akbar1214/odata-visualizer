@@ -22,7 +22,7 @@ export function EntitySelector({ entities, selected, onSelect }: EntitySelectorP
         {Array.from(grouped.entries()).map(([ns, ents]) => (
           <optgroup key={ns} label={ns}>
             {ents.map((e) => (
-              <option key={e.name} value={e.name} disabled={isComplexType(e)}>
+              <option key={e.name} value={e.name}>
                 {e.name}{isComplexType(e) ? ' (ComplexType)' : ''}
               </option>
             ))}

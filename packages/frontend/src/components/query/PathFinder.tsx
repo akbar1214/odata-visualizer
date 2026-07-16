@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import type { ODataMetadata } from '@odata-visualizer/shared';
 import { findPaths, getReachableEntities, type EntityPath } from '../../utils/graphState';
-import { getQueryableEntities } from '../../utils/queryResolver';
+import { isComplexType } from '../../utils/queryResolver';
 
 interface PathFinderProps {
   metadata: ODataMetadata;
@@ -10,11 +10,6 @@ interface PathFinderProps {
 }
 
 export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinderProps) {
-  const queryableEntities = useMemo(
-    () => getQueryableEntities(metadata.entities),
-    [metadata.entities]
-  );
-
   const [sourceEntity, setSourceEntity] = useState(currentEntity);
   const [targetEntity, setTargetEntity] = useState('');
   const [foundPaths, setFoundPaths] = useState<EntityPath[]>([]);
@@ -57,8 +52,10 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
             }}
           >
             <option value="">Select source...</option>
-            {queryableEntities.map((e) => (
-              <option key={e.name} value={e.name}>{e.name}</option>
+            {metadata.entities.map((e) => (
+              <option key={e.name} value={e.name}>
+                {e.name}{isComplexType(e) ? ' (ComplexType)' : ''}
+              </option>
             ))}
           </select>
         </div>
@@ -74,10 +71,12 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
             <option value="">
               {sourceEntity ? 'Select target...' : 'Select source first...'}
             </option>
-            {queryableEntities
+            {metadata.entities
               .filter((e) => e.name !== sourceEntity && reachableEntities.has(e.name))
               .map((e) => (
-                <option key={e.name} value={e.name}>{e.name}</option>
+                <option key={e.name} value={e.name}>
+                  {e.name}{isComplexType(e) ? ' (ComplexType)' : ''}
+                </option>
               ))}
           </select>
         </div>
