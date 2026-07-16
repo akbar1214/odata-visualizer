@@ -1,0 +1,24 @@
+{
+  "name": "odata-visualizer",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"pnpm --filter @odata-visualizer/backend dev\" \"pnpm --filter @odata-visualizer/frontend dev\"",
+    "build": "pnpm -r build",
+    "lint": "eslint packages/*/src packages/*/__tests__",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:watch": "pnpm -r test:watch",
+    "mcp:build": "pnpm --filter @odata-visualizer/mcp build",
+    "mcp:start": "pnpm --filter @odata-visualizer/mcp start",
+    "docker:build": "docker build -f docker/Dockerfile -t odata-visualizer .",
+    "docker:run": "docker run -p 3001:3001 odata-visualizer"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "concurrently": "^8.2.2",
+    "eslint": "^9.0.0",
+    "typescript": "^5.4.5",
+    "typescript-eslint": "^8.63.0"
+  }
+}
