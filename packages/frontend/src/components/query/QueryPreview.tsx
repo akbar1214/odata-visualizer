@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 
 interface QueryPreviewProps {
   query: string;
@@ -7,7 +7,7 @@ interface QueryPreviewProps {
 export function QueryPreview({ query }: QueryPreviewProps) {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = async () => {
+  const handleCopy = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(query);
       setCopied(true);
@@ -22,7 +22,7 @@ export function QueryPreview({ query }: QueryPreviewProps) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
-  };
+  }, [query]);
 
   return (
     <div>

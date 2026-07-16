@@ -43,6 +43,29 @@ export function SearchableSelect({
     [onChange],
   );
 
+  const handleFocus = useCallback(() => {
+    if (!disabled) setOpen(true);
+  }, [disabled]);
+
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearch(e.target.value);
+    setOpen(true);
+  }, []);
+
+  const handleClear = useCallback(() => {
+    onChange('');
+    setSearch('');
+    inputRef.current?.focus();
+  }, [onChange]);
+
+  const handleOptionMouseDown = useCallback(
+    (name: string) => (ev: React.MouseEvent) => {
+      ev.preventDefault();
+      handleSelect(name);
+    },
+    [handleSelect],
+  );
+
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
@@ -66,22 +89,15 @@ export function SearchableSelect({
             : placeholder
         }
         value={search}
-        onFocus={() => !disabled && setOpen(true)}
-        onChange={(e) => {
-          setSearch(e.target.value);
-          setOpen(true);
-        }}
+        onFocus={handleFocus}
+        onChange={handleInputChange}
         disabled={disabled}
       />
       {value && !open && (
         <button
           type="button"
           className="absolute right-1.5 top-1/2 -translate-y-1/2 text-engineering-400 hover:text-engineering-600 text-[10px]"
-          onClick={() => {
-            onChange('');
-            setSearch('');
-            inputRef.current?.focus();
-          }}
+          onClick={handleClear}
         >
           ✕
         </button>
@@ -98,10 +114,7 @@ export function SearchableSelect({
               className={`w-full text-left px-2 py-1.5 text-[11px] hover:bg-primary-50 flex items-center justify-between ${
                 e.name === value ? 'bg-primary-100 text-primary-600' : 'text-engineering-600'
               }`}
-              onMouseDown={(ev) => {
-                ev.preventDefault();
-                handleSelect(e.name);
-              }}
+              onMouseDown={handleOptionMouseDown(e.name)}
             >
               <span className="truncate">
                 {e.namespace && <span className="text-engineering-400">{e.namespace}.</span>}

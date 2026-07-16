@@ -69,6 +69,30 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
     [url, loading, onUrlSubmit],
   );
 
+  const handleSelectFileMode = useCallback(() => {
+    setMode('file');
+    setTimeout(() => fileInputRef.current?.click(), 0);
+  }, []);
+
+  const handleSelectUrlMode = useCallback(() => {
+    setMode('url');
+  }, []);
+
+  const handleChooseDifferentFile = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedFile(null);
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleBrowse = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleUrlChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    setUrl(e.target.value);
+  }, []);
+
   const isValidXmlFile = (file: File): boolean => {
     const validTypes = ['application/xml', 'text/xml', 'application/octet-stream'];
     const validExtensions = ['.xml', '.csdl', '.edmx'];
@@ -93,10 +117,7 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
       <div className="flex gap-2 mb-4">
         <button
           type="button"
-          onClick={() => {
-            setMode('file');
-            setTimeout(() => fileInputRef.current?.click(), 0);
-          }}
+          onClick={handleSelectFileMode}
           className={`btn ${mode === 'file' ? 'btn-primary' : 'btn-secondary'}`}
           disabled={loading}
         >
@@ -112,7 +133,7 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
         </button>
         <button
           type="button"
-          onClick={() => setMode('url')}
+          onClick={handleSelectUrlMode}
           className={`btn ${mode === 'url' ? 'btn-primary' : 'btn-secondary'}`}
           disabled={loading}
         >
@@ -169,11 +190,7 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
               <p className="text-xs text-engineering-500">{formatFileSize(selectedFile.size)}</p>
               <button
                 type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedFile(null);
-                  fileInputRef.current?.click();
-                }}
+                onClick={handleChooseDifferentFile}
                 className="text-sm text-primary-500 hover:text-primary-600"
                 disabled={loading}
               >
@@ -199,10 +216,7 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
                 Drag and drop your OData metadata file here, or{' '}
                 <button
                   type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    fileInputRef.current?.click();
-                  }}
+                  onClick={handleBrowse}
                   className="text-primary-500 hover:text-primary-600 font-medium"
                   disabled={loading}
                 >
@@ -231,7 +245,7 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
               id="metadata-url"
               type="url"
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              onChange={handleUrlChange}
               placeholder="https://services.odata.org/V4/OData/OData.svc/$metadata"
               className="input"
               disabled={loading}

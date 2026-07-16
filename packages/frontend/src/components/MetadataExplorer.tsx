@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import type { ODataMetadata, ODataEntity, ODataProperty } from '@odata-visualizer/shared';
 import { getTargetEntityName } from '../utils/queryResolver';
 
@@ -30,9 +30,7 @@ const SORTABLE_TYPES = new Set([
 
 function isSortableType(type: string): boolean {
   if (SORTABLE_TYPES.has(type)) return true;
-  if (type.startsWith('Edm.Int') || type.startsWith('Edm.Float') || type.startsWith('Edm.Dec'))
-    return true;
-  return false;
+  return type.startsWith('Edm.Int') || type.startsWith('Edm.Float') || type.startsWith('Edm.Dec');
 }
 
 export function MetadataExplorer({
@@ -72,6 +70,29 @@ export function MetadataExplorer({
     };
   }, [metadata]);
 
+  const handleTabClick = useCallback((tabId: TabId) => {
+    setActiveTab(tabId);
+  }, []);
+
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchTerm(e.target.value);
+  }, []);
+
+  const handleEntityToggle = useCallback(
+    (entityName: string) => {
+      setExpandedEntity(expandedEntity === entityName ? null : entityName);
+      onEntitySelect?.(entityName);
+    },
+    [expandedEntity, onEntitySelect],
+  );
+
+  const handleRelationshipClick = useCallback(
+    (entityName: string) => {
+      onEntitySelect?.(entityName);
+    },
+    [onEntitySelect],
+  );
+
   return (
     <div className="card h-full flex flex-col">
       {/* Tabs */}
@@ -87,7 +108,7 @@ export function MetadataExplorer({
         ].map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => handleTabClick(tab.id)}
             className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
               activeTab === tab.id
                 ? 'text-primary-500 border-b-2 border-primary-500'
@@ -114,7 +135,7 @@ export function MetadataExplorer({
                 type="text"
                 placeholder="Search entities..."
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={handleSearchChange}
                 className="input"
               />
             </div>
@@ -127,10 +148,7 @@ export function MetadataExplorer({
                   isExpanded={expandedEntity === entity.name}
                   isSelected={selectedEntity === entity.name}
                   metadata={metadata}
-                  onToggle={() => {
-                    setExpandedEntity(expandedEntity === entity.name ? null : entity.name);
-                    onEntitySelect?.(entity.name);
-                  }}
+                  onToggle={() => handleEntityToggle(entity.name)}
                   onNavigate={onEntitySelect}
                 />
               ))}
@@ -149,9 +167,7 @@ export function MetadataExplorer({
                 <div
                   key={rel.name}
                   className="p-3 bg-engineering-100 rounded hover:bg-engineering-200 cursor-pointer"
-                  onClick={() => {
-                    onEntitySelect?.(rel.from.entity);
-                  }}
+                  onClick={() => handleRelationshipClick(rel.from.entity)}
                 >
                   <div className="font-mono text-sm font-medium text-black">{rel.name}</div>
                   <div className="text-xs text-engineering-500 mt-1 flex items-center gap-2">

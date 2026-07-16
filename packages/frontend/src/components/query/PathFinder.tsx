@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import type { ODataMetadata } from '@odata-visualizer/shared';
 import { findPaths, getReachableEntities, type EntityPath } from '../../utils/graphState';
 import { SearchableSelect } from './SearchableSelect';
@@ -39,6 +39,20 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
     setSearched(true);
   };
 
+  const handleSourceChange = useCallback((name: string) => {
+    setSourceEntity(name);
+    setTargetEntity('');
+    setFoundPaths([]);
+    setSearched(false);
+  }, []);
+
+  const handleSelectPath = useCallback(
+    (path: EntityPath) => {
+      onSelectPath(sourceEntity, path);
+    },
+    [onSelectPath, sourceEntity],
+  );
+
   return (
     <div className="space-y-3">
       <div className="text-xs font-medium text-engineering-500">Path Finder</div>
@@ -49,12 +63,7 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
           <SearchableSelect
             entities={metadata.entities}
             value={sourceEntity}
-            onChange={(name) => {
-              setSourceEntity(name);
-              setTargetEntity('');
-              setFoundPaths([]);
-              setSearched(false);
-            }}
+            onChange={handleSourceChange}
             placeholder="Search source..."
           />
         </div>
@@ -88,7 +97,7 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
           {foundPaths.map((path, index) => (
             <button
               key={path.map((s) => s.navProperty).join('-') || `path-${index}`}
-              onClick={() => onSelectPath(sourceEntity, path)}
+              onClick={() => handleSelectPath(path)}
               className="w-full text-left p-2 rounded border border-engineering-200 hover:border-primary-300 hover:bg-primary-50 transition-colors"
             >
               <div className="text-[10px] font-medium text-engineering-600 mb-1">
@@ -96,7 +105,10 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
               </div>
               <div className="space-y-0.5">
                 {path.map((step) => (
-                  <div key={`${step.fromEntity}-${step.navProperty}-${step.toEntity}`} className="flex items-center gap-1 text-[10px]">
+                  <div
+                    key={`${step.fromEntity}-${step.navProperty}-${step.toEntity}`}
+                    className="flex items-center gap-1 text-[10px]"
+                  >
                     <span className="text-engineering-500">{step.fromEntity}</span>
                     <span className="text-primary-500">→</span>
                     <span className="text-primary-500 font-medium">.{step.navProperty}</span>

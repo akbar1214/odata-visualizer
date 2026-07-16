@@ -4,6 +4,39 @@ import { DiagramPage } from './pages/DiagramPage';
 import { QueryBuilderPage } from './pages/QueryBuilderPage';
 import { useMetadata } from './hooks/useMetadata';
 
+const interactiveDiagramIcon = (
+  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"
+    />
+  </svg>
+);
+
+const largeFileIcon = (
+  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"
+    />
+  </svg>
+);
+
+const queryBuilderIcon = (
+  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
+    />
+  </svg>
+);
+
 function App() {
   const { metadata, loading, error, parseTimeMs, fileSizeBytes, loadFile, loadUrl, clear } =
     useMetadata();
@@ -65,44 +98,17 @@ function App() {
               <FeatureCard
                 title="Interactive Diagram"
                 description="Zoom, pan, and explore entity relationships visually"
-                icon={
-                  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"
-                    />
-                  </svg>
-                }
+                icon={interactiveDiagramIcon}
               />
               <FeatureCard
                 title="Large File Support"
                 description="Handles OData metadata files up to 100MB with streaming parsing"
-                icon={
-                  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"
-                    />
-                  </svg>
-                }
+                icon={largeFileIcon}
               />
               <FeatureCard
                 title="Query Builder"
                 description="Build OData queries interactively with type-aware filters and sorting"
-                icon={
-                  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
-                    />
-                  </svg>
-                }
+                icon={queryBuilderIcon}
               />
             </div>
           </div>
@@ -111,22 +117,23 @@ function App() {
     );
   }
 
+  const diagramPage = (
+    <DiagramPage
+      metadata={metadata}
+      parseTimeMs={parseTimeMs}
+      fileSizeBytes={fileSizeBytes}
+      onClear={clear}
+    />
+  );
+  const queryBuilderPage = <QueryBuilderPage metadata={metadata} />;
+  const navigateHome = <Navigate to="/" replace />;
+
   return (
     <BrowserRouter>
       <Routes>
-        <Route
-          path="/"
-          element={
-            <DiagramPage
-              metadata={metadata}
-              parseTimeMs={parseTimeMs}
-              fileSizeBytes={fileSizeBytes}
-              onClear={clear}
-            />
-          }
-        />
-        <Route path="/query" element={<QueryBuilderPage metadata={metadata} />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="/" element={diagramPage} />
+        <Route path="/query" element={queryBuilderPage} />
+        <Route path="*" element={navigateHome} />
       </Routes>
     </BrowserRouter>
   );

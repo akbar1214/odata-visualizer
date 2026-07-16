@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import type { ODataMetadata } from '@odata-visualizer/shared';
 
 interface FunctionImportSelectorProps {
@@ -50,6 +50,17 @@ export function FunctionImportSelector({ metadata, onSelect }: FunctionImportSel
     return `${selectedFunc.name}${queryString}`;
   };
 
+  const handleFunctionChangeEvent = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    handleFunctionChange(e.target.value);
+  }, []);
+
+  const handleParamChangeEvent = useCallback(
+    (paramName: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
+      handleParamChange(paramName, e.target.value);
+    },
+    [],
+  );
+
   const handleExecute = () => {
     const query = buildFunctionQuery();
     if (query) {
@@ -68,7 +79,7 @@ export function FunctionImportSelector({ metadata, onSelect }: FunctionImportSel
       <select
         className="input text-xs w-full"
         value={selectedFunction}
-        onChange={(e) => handleFunctionChange(e.target.value)}
+        onChange={handleFunctionChangeEvent}
       >
         <option value="">Select function...</option>
         {functionImports.map((func) => (
@@ -105,7 +116,7 @@ export function FunctionImportSelector({ metadata, onSelect }: FunctionImportSel
                     className="input text-[10px] flex-1 py-1"
                     placeholder={param.type.replace('Edm.', '')}
                     value={paramValues[param.name] || ''}
-                    onChange={(e) => handleParamChange(param.name, e.target.value)}
+                    onChange={handleParamChangeEvent(param.name)}
                   />
                   <span className="text-[9px] text-engineering-400 w-12 truncate">
                     {param.type.replace('Edm.', '')}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ReactFlowProvider } from '@xyflow/react';
 import { ERDiagram } from '../components/ERDiagram';
@@ -14,6 +14,11 @@ interface DiagramPageProps {
 
 export function DiagramPage({ metadata, parseTimeMs, fileSizeBytes, onClear }: DiagramPageProps) {
   const [selectedEntity, setSelectedEntity] = useState<string | null>(null);
+
+  const handleNewFile = useCallback(() => {
+    onClear();
+    setSelectedEntity(null);
+  }, [onClear]);
 
   const formatFileSize = (bytes: number | null): string => {
     if (bytes === null) return '';
@@ -43,13 +48,7 @@ export function DiagramPage({ metadata, parseTimeMs, fileSizeBytes, onClear }: D
               <Link to="/query" className="btn btn-primary text-sm">
                 Query Builder
               </Link>
-              <button
-                onClick={() => {
-                  onClear();
-                  setSelectedEntity(null);
-                }}
-                className="btn btn-secondary text-sm"
-              >
+              <button onClick={handleNewFile} className="btn btn-secondary text-sm">
                 New File
               </button>
             </div>

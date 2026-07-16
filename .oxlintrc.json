@@ -30,9 +30,9 @@
     "react/hook-use-state": "warn",
     "react/exhaustive-deps": "warn",
     "react-perf/jsx-no-jsx-as-prop": "off",
-    "react-perf/jsx-no-new-array-as-prop": "off",
-    "react-perf/jsx-no-new-function-as-prop": "off",
-    "react-perf/jsx-no-new-object-as-prop": "off"
+    "react-perf/jsx-no-new-array-as-prop": "warn",
+    "react-perf/jsx-no-new-object-as-prop": "warn",
+    "react-perf/jsx-no-new-function-as-prop": "off"
   },
   "ignorePatterns": ["dist", "node_modules", "*.config.*"]
 }

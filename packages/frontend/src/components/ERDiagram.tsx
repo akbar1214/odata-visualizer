@@ -26,6 +26,14 @@ const edgeTypes = {
   relationship: RelationshipEdge,
 };
 
+const fitViewOptions = { padding: 0.2 };
+
+const defaultEdgeOptions = {
+  type: 'relationship',
+};
+
+const proOptions = { hideAttribution: true };
+
 interface ERDiagramProps {
   metadata: ODataMetadata;
   selectedEntity?: string | null;
@@ -105,6 +113,15 @@ export function ERDiagram({ metadata, selectedEntity, onEntitySelect }: ERDiagra
     }
   }, [reactFlowInstance, nodes.length, loading]);
 
+  // MiniMap node color based on selection
+  const miniMapNodeColor = useCallback(
+    (node: Node) => {
+      if (node.id === selectedEntity) return '#0A8276';
+      return '#EEEDED';
+    },
+    [selectedEntity],
+  );
+
   // Highlight selected entity
   const highlightedNodes = useMemo(() => {
     return nodes.map((node) => ({
@@ -156,21 +173,16 @@ export function ERDiagram({ metadata, selectedEntity, onEntitySelect }: ERDiagra
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        fitViewOptions={fitViewOptions}
         minZoom={0.1}
         maxZoom={3}
-        defaultEdgeOptions={{
-          type: 'relationship',
-        }}
-        proOptions={{ hideAttribution: true }}
+        defaultEdgeOptions={defaultEdgeOptions}
+        proOptions={proOptions}
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
         <Controls position="bottom-left" showInteractive={false} />
         <MiniMap
-          nodeColor={(node) => {
-            if (node.id === selectedEntity) return '#0A8276';
-            return '#EEEDED';
-          }}
+          nodeColor={miniMapNodeColor}
           maskColor="rgba(0, 0, 0, 0.1)"
           position="bottom-right"
         />

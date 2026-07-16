@@ -26,6 +26,10 @@ const nodeTypes: NodeTypes = {
   entityNode: GraphNode as NodeTypes['entityNode'],
 };
 
+const proOptions = { hideAttribution: true };
+
+const defaultEdgeOptions = { type: 'smoothstep', animated: true };
+
 function QueryCanvasInner({ graphNodes, graphEdges, metadata, onGraphChange }: QueryCanvasProps) {
   const { fitView } = useReactFlow();
   const prevCountRef = useRef(graphNodes.length);
@@ -236,6 +240,8 @@ function QueryCanvasInner({ graphNodes, graphEdges, metadata, onGraphChange }: Q
     [graphEdges],
   );
 
+  const fitViewOptions = useMemo(() => ({ padding: 0.2 }), []);
+
   if (graphNodes.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-engineering-400 text-sm">
@@ -251,12 +257,12 @@ function QueryCanvasInner({ graphNodes, graphEdges, metadata, onGraphChange }: Q
         edges={flowEdges}
         nodeTypes={nodeTypes}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
-        proOptions={{ hideAttribution: true }}
+        fitViewOptions={fitViewOptions}
+        proOptions={proOptions}
         nodesDraggable
         nodesConnectable={false}
         elementsSelectable={false}
-        defaultEdgeOptions={{ type: 'smoothstep', animated: true }}
+        defaultEdgeOptions={defaultEdgeOptions}
       >
         <Background gap={20} size={1} />
         <Controls showInteractive={false} />

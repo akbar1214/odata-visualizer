@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import type { ODataProperty } from '@odata-visualizer/shared';
 
 interface PropertySelectorProps {
@@ -7,13 +8,16 @@ interface PropertySelectorProps {
 }
 
 export function PropertySelector({ properties, selected, onChange }: PropertySelectorProps) {
-  const toggle = (name: string) => {
-    if (selected.includes(name)) {
-      onChange(selected.filter((n) => n !== name));
-    } else {
-      onChange([...selected, name]);
-    }
-  };
+  const toggle = useCallback(
+    (name: string) => {
+      if (selected.includes(name)) {
+        onChange(selected.filter((n) => n !== name));
+      } else {
+        onChange([...selected, name]);
+      }
+    },
+    [selected, onChange],
+  );
 
   const selectAll = () => {
     onChange(properties.map((p) => p.name));

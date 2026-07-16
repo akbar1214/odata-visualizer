@@ -1,4 +1,9 @@
-import type { ODataMetadata, ODataNavigationProperty } from '@odata-visualizer/shared';
+import { useMemo } from 'react';
+import type {
+  ODataMetadata,
+  ODataNavigationProperty,
+  ODataProperty,
+} from '@odata-visualizer/shared';
 import type { ExpandItem } from '../../utils/queryResolver';
 import {
   getTargetEntityName,
@@ -6,6 +11,9 @@ import {
   getResolvedNavProperties,
 } from '../../utils/queryResolver';
 import { FilterBuilder } from './FilterBuilder';
+
+const EMPTY_NAV_PROPS: ODataNavigationProperty[] = [];
+const EMPTY_PROPS: ODataProperty[] = [];
 
 interface ExpandSelectorProps {
   navProperties: ODataNavigationProperty[];
@@ -52,6 +60,25 @@ export function ExpandSelector({
     onChange(selected.map((s) => (s.navProperty === navName ? { ...s, ...updates } : s)));
   };
 
+  const handleSelectToggle = (navName: string, propName: string, select: string[]) => {
+    const newSelect = select.includes(propName)
+      ? select.filter((s) => s !== propName)
+      : [...select, propName];
+    updateItem(navName, { select: newSelect });
+  };
+
+  const sortDirectionOptions = useMemo(
+    () => [
+      <option key="asc" value="asc">
+        ASC
+      </option>,
+      <option key="desc" value="desc">
+        DESC
+      </option>,
+    ],
+    [],
+  );
+
   if (navProperties.length === 0) {
     return null;
   }
@@ -74,13 +101,10 @@ export function ExpandSelector({
             ? findEntity(targetEntityName, metadata.entities)
             : undefined;
 
-          console.log(
-            `[ExpandSelector] nav=${nav.name}, source=${sourceEntityName}, target=${targetEntityName}, found=${!!targetEntity}, relationships=${metadata.relationships.length}, sourceNavProps=${sourceEntity?.navigationProperties.map((n) => n.name).join(',')}`,
-          );
           const targetNavProps = targetEntity
             ? getResolvedNavProperties(targetEntity, metadata.entities)
-            : [];
-          const targetProps = targetEntity ? targetEntity.properties : [];
+            : EMPTY_NAV_PROPS;
+          const targetProps = targetEntity ? targetEntity.properties : EMPTY_PROPS;
 
           return (
             <div key={nav.name}>
@@ -130,12 +154,9 @@ export function ExpandSelector({
                               type="checkbox"
                               className="sr-only"
                               checked={selectedItem.select.includes(prop.name)}
-                              onChange={() => {
-                                const newSelect = selectedItem.select.includes(prop.name)
-                                  ? selectedItem.select.filter((s) => s !== prop.name)
-                                  : [...selectedItem.select, prop.name];
-                                updateItem(nav.name, { select: newSelect });
-                              }}
+                              onChange={() =>
+                                handleSelectToggle(nav.name, prop.name, selectedItem.select)
+                              }
                             />
                             {prop.name}
                           </label>
@@ -154,7 +175,9 @@ export function ExpandSelector({
                         filters={selectedItem.filters}
                         filterLogic={selectedItem.filterLogic}
                         onChange={(filters) => updateItem(nav.name, { filters })}
-                        onFilterLogicChange={(filterLogic) => updateItem(nav.name, { filterLogic })}
+                        onFilterLogicChange={(logic) =>
+                          updateItem(nav.name, { filterLogic: logic })
+                        }
                       />
                     </div>
                   )}
@@ -188,8 +211,7 @@ export function ExpandSelector({
                               })
                             }
                           >
-                            <option value="asc">ASC</option>
-                            <option value="desc">DESC</option>
+                            {sortDirectionOptions}
                           </select>
                         </div>
                       )}
@@ -202,9 +224,7 @@ export function ExpandSelector({
                           min={0}
                           placeholder="0"
                           onChange={(e) =>
-                            updateItem(nav.name, {
-                              top: parseInt(e.target.value) || 0,
-                            })
+                            updateItem(nav.name, { top: parseInt(e.target.value) || 0 })
                           }
                         />
                       </div>
@@ -217,9 +237,7 @@ export function ExpandSelector({
                           min={0}
                           placeholder="0"
                           onChange={(e) =>
-                            updateItem(nav.name, {
-                              skip: parseInt(e.target.value) || 0,
-                            })
+                            updateItem(nav.name, { skip: parseInt(e.target.value) || 0 })
                           }
                         />
                       </div>
