@@ -9,6 +9,30 @@ interface MetadataExplorerProps {
 
 type TabId = 'entities' | 'relationships' | 'stats';
 
+const SORTABLE_TYPES = new Set([
+  'Edm.String',
+  'Edm.Boolean',
+  'Edm.Guid',
+  'Edm.Date',
+  'Edm.DateTime',
+  'Edm.DateTimeOffset',
+  'Edm.Time',
+  'Edm.Decimal',
+  'Edm.Double',
+  'Edm.Single',
+  'Edm.Int16',
+  'Edm.Int32',
+  'Edm.Int64',
+  'Edm.Byte',
+  'Edm.SByte',
+]);
+
+function isSortableType(type: string): boolean {
+  if (SORTABLE_TYPES.has(type)) return true;
+  if (type.startsWith('Edm.Int') || type.startsWith('Edm.Float') || type.startsWith('Edm.Dec')) return true;
+  return false;
+}
+
 export function MetadataExplorer({
   metadata,
   selectedEntity,
@@ -248,7 +272,9 @@ function EntityCard({ entity, isExpanded, isSelected, onToggle }: EntityCardProp
                   <tr className="text-left text-engineering-500 border-b border-engineering-200">
                     <th className="py-1 pr-2">Name</th>
                     <th className="py-1 pr-2">Type</th>
-                    <th className="py-1">Nullable</th>
+                    <th className="py-1 pr-2">Nullable</th>
+                    <th className="py-1 pr-2" title="Can use in $select">$select</th>
+                    <th className="py-1" title="Can use in $orderby">$orderby</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -265,7 +291,11 @@ function EntityCard({ entity, isExpanded, isSelected, onToggle }: EntityCardProp
                       <td className="py-1 pr-2 text-engineering-500">
                         {prop.type.replace('Edm.', '')}
                       </td>
-                      <td className="py-1 text-engineering-400">{prop.nullable ? '✓' : '✗'}</td>
+                      <td className="py-1 pr-2 text-engineering-400">{prop.nullable ? '✓' : '✗'}</td>
+                      <td className="py-1 pr-2 text-infineon-green" title="Selectable">✓</td>
+                      <td className="py-1 text-primary-500" title={isSortableType(prop.type) ? 'Sortable' : 'Not sortable'}>
+                        {isSortableType(prop.type) ? '✓' : '—'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
