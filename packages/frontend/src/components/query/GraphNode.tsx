@@ -57,7 +57,7 @@ function GraphNodeComponent({ data }: NodeProps) {
 
   return (
     <div
-      className={`rounded border shadow-odv text-xs min-w-[220px] max-w-[280px] ${
+      className={`rounded border shadow-odv text-xs min-w-[220px] max-w-[280px] overflow-hidden ${
         isRoot
           ? 'bg-primary-500 border-primary-600 text-white'
           : 'bg-white border-engineering-200 text-engineering-600'
@@ -133,9 +133,9 @@ function GraphNodeComponent({ data }: NodeProps) {
                 const edmType = allProperties.find((p) => p.name === f.property)?.type || 'Edm.String';
                 const operators = getOperatorsForType(edmType);
                 return (
-                  <div key={i} className="flex gap-0.5 items-center">
+                  <div key={i} className="flex gap-0.5 items-center min-w-0">
                     <select
-                      className={`text-[10px] rounded px-1 py-0.5 border flex-1 ${
+                      className={`text-[10px] rounded px-1 py-0.5 border flex-1 min-w-0 ${
                         isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
                       }`}
                       value={f.property}
@@ -146,7 +146,7 @@ function GraphNodeComponent({ data }: NodeProps) {
                       ))}
                     </select>
                     <select
-                      className={`text-[10px] rounded px-1 py-0.5 border w-16 ${
+                      className={`text-[10px] rounded px-1 py-0.5 border w-16 shrink-0 ${
                         isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
                       }`}
                       value={f.operator}
@@ -158,7 +158,7 @@ function GraphNodeComponent({ data }: NodeProps) {
                     </select>
                     <input
                       type={getInputTypeForEdm(edmType)}
-                      className={`text-[10px] rounded px-1 py-0.5 border flex-1 ${
+                      className={`text-[10px] rounded px-1 py-0.5 border flex-1 min-w-0 ${
                         isRoot ? 'bg-primary-500 border-primary-400 text-white placeholder-white/50' : 'bg-white border-engineering-200'
                       }`}
                       value={f.value}
@@ -203,9 +203,9 @@ function GraphNodeComponent({ data }: NodeProps) {
             <span className="text-[8px]">{showSort ? '▼' : '▶'}</span>
           </button>
           {showSort && (
-            <div className="mt-1 flex gap-1">
+            <div className="mt-1 flex gap-1 min-w-0">
               <select
-                className={`text-[10px] rounded px-1 py-0.5 border flex-1 ${
+                className={`text-[10px] rounded px-1 py-0.5 border flex-1 min-w-0 ${
                   isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
                 }`}
                 value={nodeState.sort}
@@ -282,7 +282,7 @@ function GraphNodeComponent({ data }: NodeProps) {
               <span className="text-[8px]">{showNav ? '▼' : '▶'}</span>
             </button>
             {showNav && (
-              <div className="mt-1 flex flex-wrap gap-0.5">
+              <div className="mt-1 flex flex-wrap gap-0.5 overflow-hidden">
                 {availableNavProps.map((nav) => {
                   const targetName = getTargetEntityName(
                     nav.name,

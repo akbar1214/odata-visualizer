@@ -65,9 +65,9 @@ export function FilterBuilder({ properties, filters, onChange }: FilterBuilderPr
           const operators = getOperatorsForType(edmType);
 
           return (
-            <div key={index} className="flex gap-1 items-center">
+            <div key={index} className="flex gap-1 items-center min-w-0">
               <select
-                className="input text-xs flex-1"
+                className="input text-xs flex-1 min-w-0"
                 value={filter.property}
                 onChange={(e) => updateFilter(index, 'property', e.target.value)}
               >
@@ -88,7 +88,7 @@ export function FilterBuilder({ properties, filters, onChange }: FilterBuilderPr
 
               <input
                 type={getInputTypeForEdm(edmType)}
-                className="input text-xs flex-1"
+                className="input text-xs flex-1 min-w-0"
                 value={filter.value}
                 onChange={(e) => updateFilter(index, 'value', e.target.value)}
                 placeholder="value"
