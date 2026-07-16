@@ -38,6 +38,7 @@ export function ExpandSelector({
           select: [],
           expand: [],
           filters: [],
+          filterLogic: 'and',
           sort: '',
           sortDirection: 'asc',
           top: 0,
@@ -155,7 +156,9 @@ export function ExpandSelector({
                       <FilterBuilder
                         properties={targetProps}
                         filters={selectedItem.filters}
+                        filterLogic={selectedItem.filterLogic}
                         onChange={(filters) => updateItem(nav.name, { filters })}
+                        onFilterLogicChange={(filterLogic) => updateItem(nav.name, { filterLogic })}
                       />
                     </div>
                   )}

@@ -71,6 +71,7 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
       return {
         entityName: selectedEntity,
         filters: [],
+        filterLogic: 'and',
         select: [],
         expand: [],
         sort: '',
@@ -83,6 +84,7 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
     return {
       entityName: rootNode.entityName,
       filters: rootNode.filters,
+      filterLogic: rootNode.filterLogic,
       select: rootNode.select,
       expand: graphToExpandItems({ nodes: graphNodes, edges: graphEdges }, 'root'),
       sort: rootNode.sort,

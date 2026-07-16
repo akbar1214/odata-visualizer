@@ -141,6 +141,16 @@ function QueryCanvasInner({
     [graphNodes, graphEdges, onGraphChange]
   );
 
+  const handleFilterLogicChange = useCallback(
+    (nodeId: string, logic: 'and' | 'or') => {
+      onGraphChange(
+        graphNodes.map((n) => (n.id === nodeId ? { ...n, filterLogic: logic } : n)),
+        graphEdges
+      );
+    },
+    [graphNodes, graphEdges, onGraphChange]
+  );
+
   const handleSortChange = useCallback(
     (nodeId: string, sort: string) => {
       onGraphChange(
@@ -195,6 +205,7 @@ function QueryCanvasInner({
           onFilterAdd: handleFilterAdd,
           onFilterRemove: handleFilterRemove,
           onFilterUpdate: handleFilterUpdate,
+          onFilterLogicChange: handleFilterLogicChange,
           onSortChange: handleSortChange,
           onSortDirectionChange: handleSortDirectionChange,
           onTopChange: handleTopChange,
@@ -203,7 +214,7 @@ function QueryCanvasInner({
           onRemove: handleRemove,
         } satisfies GraphNodeData,
       })),
-    [graphNodes, metadata, handleSelectToggle, handleFilterAdd, handleFilterRemove, handleFilterUpdate, handleSortChange, handleSortDirectionChange, handleTopChange, handleSkipChange, handleExpandNav, handleRemove]
+    [graphNodes, metadata, handleSelectToggle, handleFilterAdd, handleFilterRemove, handleFilterUpdate, handleFilterLogicChange, handleSortChange, handleSortDirectionChange, handleTopChange, handleSkipChange, handleExpandNav, handleRemove]
   );
 
   const flowEdges: Edge[] = useMemo(

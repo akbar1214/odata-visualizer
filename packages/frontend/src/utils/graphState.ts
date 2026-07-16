@@ -5,6 +5,7 @@ import {
   findEntity,
   getResolvedNavProperties,
   type QueryFilter,
+  type FilterLogic,
 } from './queryResolver';
 
 const elk = new ELK();
@@ -19,6 +20,7 @@ export interface GraphNodeState {
   navProperty: string | null;
   select: string[];
   filters: QueryFilter[];
+  filterLogic: FilterLogic;
   sort: string;
   sortDirection: 'asc' | 'desc';
   top: number;
@@ -52,6 +54,7 @@ export function createRootNode(entityName: string): GraphNodeState {
     navProperty: null,
     select: [],
     filters: [],
+    filterLogic: 'and',
     sort: '',
     sortDirection: 'asc',
     top: 25,
@@ -90,6 +93,7 @@ export function addExpandedNode(
     navProperty,
     select: [],
     filters: [],
+    filterLogic: 'and',
     sort: '',
     sortDirection: 'asc',
     top: 0,
@@ -260,6 +264,7 @@ export function graphToExpandItems(
     select: child.select,
     expand: graphToExpandItems(state, child.id),
     filters: child.filters,
+    filterLogic: child.filterLogic,
     sort: child.sort,
     sortDirection: child.sortDirection,
     top: child.top,
@@ -350,6 +355,7 @@ export function expandPath(
       navProperty: step.navProperty,
       select: [],
       filters: [],
+      filterLogic: 'and',
       sort: '',
       sortDirection: 'asc',
       top: 0,

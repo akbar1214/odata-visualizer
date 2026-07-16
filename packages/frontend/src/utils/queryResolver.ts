@@ -12,11 +12,14 @@ export interface QueryFilter {
   value: string;
 }
 
+export type FilterLogic = 'and' | 'or';
+
 export interface ExpandItem {
   navProperty: string;
   select: string[];
   expand: ExpandItem[];
   filters: QueryFilter[];
+  filterLogic: FilterLogic;
   sort: string;
   sortDirection: 'asc' | 'desc';
   top: number;
@@ -26,6 +29,7 @@ export interface ExpandItem {
 export interface QueryState {
   entityName: string;
   filters: QueryFilter[];
+  filterLogic: FilterLogic;
   select: string[];
   expand: ExpandItem[];
   sort: string;
@@ -203,7 +207,7 @@ export function formatODataValue(value: string, edmType: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-function buildFilterString(filters: QueryFilter[], properties: ODataProperty[]): string {
+function buildFilterString(filters: QueryFilter[], properties: ODataProperty[], logic: FilterLogic = 'and'): string {
   if (filters.length === 0) return '';
 
   const parts = filters.map((f) => {
@@ -218,7 +222,7 @@ function buildFilterString(filters: QueryFilter[], properties: ODataProperty[]):
     return `${f.property} ${f.operator} ${formattedValue}`;
   });
 
-  return parts.join(' and ');
+  return parts.join(` ${logic} `);
 }
 
 function buildExpandString(expands: ExpandItem[], metadata: ODataMetadata, parentEntityName: string): string {
@@ -241,7 +245,7 @@ function buildExpandString(expands: ExpandItem[], metadata: ODataMetadata, paren
         if (targetEntity) {
           const resolved = getResolvedEntity(targetEntity, metadata.entities);
           if (resolved) {
-            const filterStr = buildFilterString(item.filters, resolved.allProperties);
+            const filterStr = buildFilterString(item.filters, resolved.allProperties, item.filterLogic);
             if (filterStr) parts.push(`$filter=${filterStr}`);
           }
         }
@@ -289,7 +293,7 @@ export function buildODataQuery(
   const parts: string[] = [];
 
   if (query.filters.length > 0) {
-    const filterStr = buildFilterString(query.filters, resolved.allProperties);
+    const filterStr = buildFilterString(query.filters, resolved.allProperties, query.filterLogic);
     if (filterStr) parts.push(`$filter=${filterStr}`);
   }
 
@@ -322,6 +326,7 @@ export function getDefaultQuery(entityName: string): QueryState {
   return {
     entityName,
     filters: [],
+    filterLogic: 'and',
     select: [],
     expand: [],
     sort: '',

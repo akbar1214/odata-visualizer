@@ -18,6 +18,7 @@ export interface GraphNodeData {
   onFilterAdd: (nodeId: string) => void;
   onFilterRemove: (nodeId: string, index: number) => void;
   onFilterUpdate: (nodeId: string, index: number, field: string, value: string) => void;
+  onFilterLogicChange: (nodeId: string, logic: 'and' | 'or') => void;
   onSortChange: (nodeId: string, sort: string) => void;
   onSortDirectionChange: (nodeId: string, dir: 'asc' | 'desc') => void;
   onTopChange: (nodeId: string, top: number) => void;
@@ -35,6 +36,7 @@ function GraphNodeComponent({ data }: NodeProps) {
     onFilterAdd,
     onFilterRemove,
     onFilterUpdate,
+    onFilterLogicChange,
     onSortChange,
     onSortDirectionChange,
     onTopChange,
@@ -128,49 +130,69 @@ function GraphNodeComponent({ data }: NodeProps) {
             <span className="text-[8px]">{showFilters ? '▼' : '▶'}</span>
           </button>
           {showFilters && (
-            <div className="mt-1 space-y-1">
+            <div className="mt-1 space-y-0.5">
               {nodeState.filters.map((f, i) => {
                 const edmType = allProperties.find((p) => p.name === f.property)?.type || 'Edm.String';
                 const operators = getOperatorsForType(edmType);
                 return (
-                  <div key={i} className="flex gap-0.5 items-center min-w-0">
-                    <select
-                      className={`text-[10px] rounded px-1 py-0.5 border flex-1 min-w-0 ${
-                        isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
-                      }`}
-                      value={f.property}
-                      onChange={(e) => onFilterUpdate(nodeState.id, i, 'property', e.target.value)}
-                    >
-                      {allProperties.map((p) => (
-                        <option key={p.name} value={p.name}>{p.name}</option>
-                      ))}
-                    </select>
-                    <select
-                      className={`text-[10px] rounded px-1 py-0.5 border w-16 shrink-0 ${
-                        isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
-                      }`}
-                      value={f.operator}
-                      onChange={(e) => onFilterUpdate(nodeState.id, i, 'operator', e.target.value)}
-                    >
-                      {operators.map((op) => (
-                        <option key={op} value={op}>{op}</option>
-                      ))}
-                    </select>
-                    <input
-                      type={getInputTypeForEdm(edmType)}
-                      className={`text-[10px] rounded px-1 py-0.5 border flex-1 min-w-0 ${
-                        isRoot ? 'bg-primary-500 border-primary-400 text-white placeholder-white/50' : 'bg-white border-engineering-200'
-                      }`}
-                      value={f.value}
-                      placeholder="val"
-                      onChange={(e) => onFilterUpdate(nodeState.id, i, 'value', e.target.value)}
-                    />
-                    <button
-                      onClick={() => onFilterRemove(nodeState.id, i)}
-                      className="text-infineon-red/70 hover:text-infineon-red text-[10px]"
-                    >
-                      ✕
-                    </button>
+                  <div key={i}>
+                    {i > 0 && (
+                      <div className="flex justify-center my-0.5">
+                        <button
+                          onClick={() => onFilterLogicChange(nodeState.id, nodeState.filterLogic === 'and' ? 'or' : 'and')}
+                          className={`text-[9px] font-bold px-2 py-0 rounded-full border transition-colors ${
+                            isRoot
+                              ? nodeState.filterLogic === 'and'
+                                ? 'bg-white/20 border-white/40 text-white'
+                                : 'bg-white/5 border-white/20 text-white/60'
+                              : nodeState.filterLogic === 'and'
+                                ? 'bg-primary-500 border-primary-400 text-white'
+                                : 'bg-engineering-200 border-engineering-300 text-engineering-600'
+                          }`}
+                        >
+                          {nodeState.filterLogic.toUpperCase()}
+                        </button>
+                      </div>
+                    )}
+                    <div className="flex gap-0.5 items-center min-w-0">
+                      <select
+                        className={`text-[10px] rounded px-1 py-0.5 border flex-1 min-w-0 ${
+                          isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
+                        }`}
+                        value={f.property}
+                        onChange={(e) => onFilterUpdate(nodeState.id, i, 'property', e.target.value)}
+                      >
+                        {allProperties.map((p) => (
+                          <option key={p.name} value={p.name}>{p.name}</option>
+                        ))}
+                      </select>
+                      <select
+                        className={`text-[10px] rounded px-1 py-0.5 border w-16 shrink-0 ${
+                          isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
+                        }`}
+                        value={f.operator}
+                        onChange={(e) => onFilterUpdate(nodeState.id, i, 'operator', e.target.value)}
+                      >
+                        {operators.map((op) => (
+                          <option key={op} value={op}>{op}</option>
+                        ))}
+                      </select>
+                      <input
+                        type={getInputTypeForEdm(edmType)}
+                        className={`text-[10px] rounded px-1 py-0.5 border flex-1 min-w-0 ${
+                          isRoot ? 'bg-primary-500 border-primary-400 text-white placeholder-white/50' : 'bg-white border-engineering-200'
+                        }`}
+                        value={f.value}
+                        placeholder="val"
+                        onChange={(e) => onFilterUpdate(nodeState.id, i, 'value', e.target.value)}
+                      />
+                      <button
+                        onClick={() => onFilterRemove(nodeState.id, i)}
+                        className="text-infineon-red/70 hover:text-infineon-red text-[10px]"
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </div>
                 );
               })}

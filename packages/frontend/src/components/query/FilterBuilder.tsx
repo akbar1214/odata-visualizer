@@ -1,14 +1,16 @@
 import type { ODataProperty } from '@odata-visualizer/shared';
-import type { QueryFilter } from '../../utils/queryResolver';
+import type { QueryFilter, FilterLogic } from '../../utils/queryResolver';
 import { getOperatorsForType, getInputTypeForEdm } from '../../utils/queryResolver';
 
 interface FilterBuilderProps {
   properties: ODataProperty[];
   filters: QueryFilter[];
+  filterLogic: FilterLogic;
   onChange: (filters: QueryFilter[]) => void;
+  onFilterLogicChange: (logic: FilterLogic) => void;
 }
 
-export function FilterBuilder({ properties, filters, onChange }: FilterBuilderProps) {
+export function FilterBuilder({ properties, filters, filterLogic, onChange, onFilterLogicChange }: FilterBuilderProps) {
   const addFilter = () => {
     if (properties.length === 0) return;
     const prop = properties[0];
@@ -65,42 +67,59 @@ export function FilterBuilder({ properties, filters, onChange }: FilterBuilderPr
           const operators = getOperatorsForType(edmType);
 
           return (
-            <div key={index} className="flex gap-1 items-center min-w-0">
-              <select
-                className="input text-xs flex-1 min-w-0"
-                value={filter.property}
-                onChange={(e) => updateFilter(index, 'property', e.target.value)}
-              >
-                {properties.map((p) => (
-                  <option key={p.name} value={p.name}>{p.name}</option>
-                ))}
-              </select>
+            <div key={index}>
+              {index > 0 && (
+                <div className="flex justify-center my-1">
+                  <button
+                    type="button"
+                    onClick={() => onFilterLogicChange(filterLogic === 'and' ? 'or' : 'and')}
+                    className={`text-[10px] font-bold px-3 py-0.5 rounded-full border transition-colors ${
+                      filterLogic === 'and'
+                        ? 'bg-primary-500 border-primary-400 text-white'
+                        : 'bg-engineering-200 border-engineering-300 text-engineering-600'
+                    }`}
+                  >
+                    {filterLogic.toUpperCase()}
+                  </button>
+                </div>
+              )}
+              <div className="flex gap-1 items-center min-w-0">
+                <select
+                  className="input text-xs flex-1 min-w-0"
+                  value={filter.property}
+                  onChange={(e) => updateFilter(index, 'property', e.target.value)}
+                >
+                  {properties.map((p) => (
+                    <option key={p.name} value={p.name}>{p.name}</option>
+                  ))}
+                </select>
 
-              <select
-                className="input text-xs w-24"
-                value={filter.operator}
-                onChange={(e) => updateFilter(index, 'operator', e.target.value)}
-              >
-                {operators.map((op) => (
-                  <option key={op} value={op}>{op}</option>
-                ))}
-              </select>
+                <select
+                  className="input text-xs w-24"
+                  value={filter.operator}
+                  onChange={(e) => updateFilter(index, 'operator', e.target.value)}
+                >
+                  {operators.map((op) => (
+                    <option key={op} value={op}>{op}</option>
+                  ))}
+                </select>
 
-              <input
-                type={getInputTypeForEdm(edmType)}
-                className="input text-xs flex-1 min-w-0"
-                value={filter.value}
-                onChange={(e) => updateFilter(index, 'value', e.target.value)}
-                placeholder="value"
-              />
+                <input
+                  type={getInputTypeForEdm(edmType)}
+                  className="input text-xs flex-1 min-w-0"
+                  value={filter.value}
+                  onChange={(e) => updateFilter(index, 'value', e.target.value)}
+                  placeholder="value"
+                />
 
-              <button
-                type="button"
-                onClick={() => removeFilter(index)}
-                className="text-red-500 hover:text-red-700 text-xs p-1"
-              >
-                x
-              </button>
+                <button
+                  type="button"
+                  onClick={() => removeFilter(index)}
+                  className="text-red-500 hover:text-red-700 text-xs p-1"
+                >
+                  x
+                </button>
+              </div>
             </div>
           );
         })}
