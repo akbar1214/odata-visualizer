@@ -115,7 +115,7 @@ export function FilterBuilder({ properties, filters, filterLogic, onChange, onFi
                 <button
                   type="button"
                   onClick={() => removeFilter(index)}
-                  className="text-red-500 hover:text-red-700 text-xs p-1"
+                  className="text-engineering-300 hover:text-engineering-500 text-xs p-1"
                 >
                   x
                 </button>

@@ -188,7 +188,7 @@ function GraphNodeComponent({ data }: NodeProps) {
                       />
                       <button
                         onClick={() => onFilterRemove(nodeState.id, i)}
-                        className="text-infineon-red/70 hover:text-infineon-red text-[10px]"
+                        className="text-engineering-300 hover:text-engineering-500 text-[10px]"
                       >
                         ✕
                       </button>
