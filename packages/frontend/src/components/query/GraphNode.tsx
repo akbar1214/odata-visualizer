@@ -56,23 +56,23 @@ function GraphNodeComponent({ data }: NodeProps) {
 
   return (
     <div
-      className={`rounded-lg border shadow-sm text-xs min-w-[220px] max-w-[280px] ${
+      className={`rounded border shadow-ifx text-xs min-w-[220px] max-w-[280px] ${
         isRoot
-          ? 'bg-primary-600 border-primary-700 text-white'
-          : 'bg-white border-gray-200 text-gray-800'
+          ? 'bg-primary-500 border-primary-600 text-white'
+          : 'bg-white border-engineering-200 text-engineering-600'
       }`}
     >
-      {!isRoot && <Handle type="target" position={Position.Top} className="!bg-gray-400 !w-2 !h-2" />}
+      {!isRoot && <Handle type="target" position={Position.Top} className="!bg-engineering-400 !w-2 !h-2" />}
 
       {/* Header */}
-      <div className={`px-2 py-1.5 rounded-t-lg font-bold flex items-center justify-between ${
-        isRoot ? 'bg-primary-700' : 'bg-gray-50 border-b'
+      <div className={`px-2 py-1.5 rounded-t font-bold flex items-center justify-between ${
+        isRoot ? 'bg-primary-600' : 'bg-engineering-100 border-b border-engineering-200'
       }`}>
         <span>{nodeState.entityName}</span>
         {!isRoot && (
           <button
             onClick={() => onRemove(nodeState.id)}
-            className="text-gray-400 hover:text-red-500 text-[10px] ml-2"
+            className="text-engineering-400 hover:text-infineon-red text-[10px] ml-2"
             title="Remove"
           >
             ✕
@@ -83,7 +83,7 @@ function GraphNodeComponent({ data }: NodeProps) {
       <div className="p-2 space-y-2">
         {/* $select: Property checkboxes */}
         <div>
-          <div className={`text-[10px] font-medium mb-1 ${isRoot ? 'text-primary-200' : 'text-gray-400'}`}>
+          <div className={`text-[10px] font-medium mb-1 ${isRoot ? 'text-primary-100' : 'text-engineering-400'}`}>
             $select
           </div>
           <div className="flex flex-wrap gap-0.5">
@@ -95,10 +95,10 @@ function GraphNodeComponent({ data }: NodeProps) {
                   nodeState.select.includes(prop.name)
                     ? isRoot
                       ? 'bg-white/20 border-white/40 text-white'
-                      : 'bg-green-100 border-green-300 text-green-700'
+                      : 'bg-infineon-green/10 border-infineon-green/30 text-infineon-green'
                     : isRoot
                       ? 'bg-white/5 border-white/20 text-white/70 hover:bg-white/10'
-                      : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100'
+                      : 'bg-engineering-100 border-engineering-200 text-engineering-500 hover:bg-engineering-200'
                 }`}
               >
                 {prop.name}
@@ -113,13 +113,13 @@ function GraphNodeComponent({ data }: NodeProps) {
           <button
             onClick={() => setShowFilters(!showFilters)}
             className={`text-[10px] font-medium flex items-center gap-1 ${
-              isRoot ? 'text-primary-200 hover:text-white' : 'text-gray-400 hover:text-gray-600'
+              isRoot ? 'text-primary-100 hover:text-white' : 'text-engineering-400 hover:text-engineering-600'
             }`}
           >
             $filter
             {nodeState.filters.length > 0 && (
               <span className={`px-1 rounded text-[9px] ${
-                isRoot ? 'bg-white/20' : 'bg-gray-200'
+                isRoot ? 'bg-white/20' : 'bg-engineering-200'
               }`}>
                 {nodeState.filters.length}
               </span>
@@ -135,7 +135,7 @@ function GraphNodeComponent({ data }: NodeProps) {
                   <div key={i} className="flex gap-0.5 items-center">
                     <select
                       className={`text-[10px] rounded px-1 py-0.5 border flex-1 ${
-                        isRoot ? 'bg-primary-600 border-primary-500 text-white' : 'bg-white border-gray-200'
+                        isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
                       }`}
                       value={f.property}
                       onChange={(e) => onFilterUpdate(nodeState.id, i, 'property', e.target.value)}
@@ -146,7 +146,7 @@ function GraphNodeComponent({ data }: NodeProps) {
                     </select>
                     <select
                       className={`text-[10px] rounded px-1 py-0.5 border w-12 ${
-                        isRoot ? 'bg-primary-600 border-primary-500 text-white' : 'bg-white border-gray-200'
+                        isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
                       }`}
                       value={f.operator}
                       onChange={(e) => onFilterUpdate(nodeState.id, i, 'operator', e.target.value)}
@@ -157,7 +157,7 @@ function GraphNodeComponent({ data }: NodeProps) {
                     </select>
                     <input
                       className={`text-[10px] rounded px-1 py-0.5 border flex-1 ${
-                        isRoot ? 'bg-primary-600 border-primary-500 text-white placeholder-white/50' : 'bg-white border-gray-200'
+                        isRoot ? 'bg-primary-500 border-primary-400 text-white placeholder-white/50' : 'bg-white border-engineering-200'
                       }`}
                       value={f.value}
                       placeholder="val"
@@ -165,7 +165,7 @@ function GraphNodeComponent({ data }: NodeProps) {
                     />
                     <button
                       onClick={() => onFilterRemove(nodeState.id, i)}
-                      className="text-red-400 hover:text-red-600 text-[10px]"
+                      className="text-infineon-red/70 hover:text-infineon-red text-[10px]"
                     >
                       ✕
                     </button>
@@ -175,7 +175,7 @@ function GraphNodeComponent({ data }: NodeProps) {
               <button
                 onClick={() => onFilterAdd(nodeState.id)}
                 className={`text-[10px] ${
-                  isRoot ? 'text-primary-200 hover:text-white' : 'text-primary-600 hover:text-primary-700'
+                  isRoot ? 'text-primary-100 hover:text-white' : 'text-primary-500 hover:text-primary-600'
                 }`}
               >
                 + add filter
@@ -189,12 +189,12 @@ function GraphNodeComponent({ data }: NodeProps) {
           <button
             onClick={() => setShowSort(!showSort)}
             className={`text-[10px] font-medium flex items-center gap-1 ${
-              isRoot ? 'text-primary-200 hover:text-white' : 'text-gray-400 hover:text-gray-600'
+              isRoot ? 'text-primary-100 hover:text-white' : 'text-engineering-400 hover:text-engineering-600'
             }`}
           >
             $orderby
             {nodeState.sort && (
-              <span className={`text-[9px] ${isRoot ? 'text-white/80' : 'text-gray-500'}`}>
+              <span className={`text-[9px] ${isRoot ? 'text-white/80' : 'text-engineering-500'}`}>
                 {nodeState.sort} {nodeState.sortDirection}
               </span>
             )}
@@ -204,7 +204,7 @@ function GraphNodeComponent({ data }: NodeProps) {
             <div className="mt-1 flex gap-1">
               <select
                 className={`text-[10px] rounded px-1 py-0.5 border flex-1 ${
-                  isRoot ? 'bg-primary-600 border-primary-500 text-white' : 'bg-white border-gray-200'
+                  isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
                 }`}
                 value={nodeState.sort}
                 onChange={(e) => onSortChange(nodeState.id, e.target.value)}
@@ -217,7 +217,7 @@ function GraphNodeComponent({ data }: NodeProps) {
               {nodeState.sort && (
                 <select
                   className={`text-[10px] rounded px-1 py-0.5 border w-12 ${
-                    isRoot ? 'bg-primary-600 border-primary-500 text-white' : 'bg-white border-gray-200'
+                    isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
                   }`}
                   value={nodeState.sortDirection}
                   onChange={(e) => onSortDirectionChange(nodeState.id, e.target.value as 'asc' | 'desc')}
@@ -233,12 +233,12 @@ function GraphNodeComponent({ data }: NodeProps) {
         {/* $top / $skip */}
         <div className="flex gap-2">
           <div className="flex-1">
-            <div className={`text-[10px] font-medium ${isRoot ? 'text-primary-200' : 'text-gray-400'}`}>$top</div>
+            <div className={`text-[10px] font-medium ${isRoot ? 'text-primary-100' : 'text-engineering-400'}`}>$top</div>
             <input
               type="number"
               min={0}
               className={`w-full text-[10px] rounded px-1 py-0.5 border ${
-                isRoot ? 'bg-primary-600 border-primary-500 text-white' : 'bg-white border-gray-200'
+                isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
               }`}
               value={nodeState.top || ''}
               placeholder="0"
@@ -246,12 +246,12 @@ function GraphNodeComponent({ data }: NodeProps) {
             />
           </div>
           <div className="flex-1">
-            <div className={`text-[10px] font-medium ${isRoot ? 'text-primary-200' : 'text-gray-400'}`}>$skip</div>
+            <div className={`text-[10px] font-medium ${isRoot ? 'text-primary-100' : 'text-engineering-400'}`}>$skip</div>
             <input
               type="number"
               min={0}
               className={`w-full text-[10px] rounded px-1 py-0.5 border ${
-                isRoot ? 'bg-primary-600 border-primary-500 text-white' : 'bg-white border-gray-200'
+                isRoot ? 'bg-primary-500 border-primary-400 text-white' : 'bg-white border-engineering-200'
               }`}
               value={nodeState.skip || ''}
               placeholder="0"
@@ -266,13 +266,13 @@ function GraphNodeComponent({ data }: NodeProps) {
             <button
               onClick={() => setShowNav(!showNav)}
               className={`text-[10px] font-medium flex items-center gap-1 ${
-                isRoot ? 'text-primary-200 hover:text-white' : 'text-gray-400 hover:text-gray-600'
+                isRoot ? 'text-primary-100 hover:text-white' : 'text-engineering-400 hover:text-engineering-600'
               }`}
             >
               $expand
               {nodeState.expandedNavProps.length > 0 && (
                 <span className={`px-1 rounded text-[9px] ${
-                  isRoot ? 'bg-white/20' : 'bg-gray-200'
+                  isRoot ? 'bg-white/20' : 'bg-engineering-200'
                 }`}>
                   {nodeState.expandedNavProps.length}
                 </span>
@@ -294,12 +294,12 @@ function GraphNodeComponent({ data }: NodeProps) {
                       className={`px-1.5 py-0.5 rounded text-[10px] border transition-colors ${
                         isRoot
                           ? 'bg-white/5 border-white/20 text-white/70 hover:bg-white/10'
-                          : 'bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100'
+                          : 'bg-primary-50 border-primary-200 text-primary-500 hover:bg-primary-100'
                       }`}
                     >
                       {nav.name}
                       {targetName && (
-                        <span className={`ml-0.5 ${isRoot ? 'text-white/50' : 'text-gray-400'}`}>
+                        <span className={`ml-0.5 ${isRoot ? 'text-white/50' : 'text-engineering-400'}`}>
                           →{targetName}
                         </span>
                       )}
@@ -312,7 +312,7 @@ function GraphNodeComponent({ data }: NodeProps) {
         )}
       </div>
 
-      {!isRoot && <Handle type="source" position={Position.Bottom} className="!bg-gray-400 !w-2 !h-2" />}
+      {!isRoot && <Handle type="source" position={Position.Bottom} className="!bg-engineering-400 !w-2 !h-2" />}
     </div>
   );
 }

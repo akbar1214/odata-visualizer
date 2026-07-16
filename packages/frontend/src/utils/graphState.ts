@@ -133,7 +133,7 @@ export function removeExpandedNode(
   };
   collectDescendants(nodeId);
 
-  let updatedNodes = state.nodes
+  const updatedNodes = state.nodes
     .filter((n) => !idsToRemove.has(n.id))
     .map((n) => {
       if (n.id === node.parentId && node.navProperty) {

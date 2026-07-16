@@ -57,7 +57,7 @@ function RelationshipEdgeComponent({
         markerEnd={markerEnd}
         style={{
           ...style,
-          stroke: '#94a3b8',
+          stroke: '#8D8786',
           strokeWidth: 2,
         }}
       />
@@ -71,12 +71,12 @@ function RelationshipEdgeComponent({
           className="nodrag nopan"
         >
           {/* Multiplicity labels */}
-          <div className="flex items-center gap-2 bg-white px-2 py-0.5 rounded shadow-sm border border-gray-200">
-            <span className="text-[10px] font-mono text-primary-600 font-medium">
+          <div className="flex items-center gap-2 bg-white px-2 py-0.5 rounded shadow-ifx border border-engineering-200">
+            <span className="text-[10px] font-mono text-primary-500 font-medium">
               {fromMultiplicity}
             </span>
-            <span className="text-[10px] text-gray-400">—</span>
-            <span className="text-[10px] font-mono text-primary-600 font-medium">
+            <span className="text-[10px] text-engineering-400">—</span>
+            <span className="text-[10px] font-mono text-primary-500 font-medium">
               {toMultiplicity}
             </span>
           </div>

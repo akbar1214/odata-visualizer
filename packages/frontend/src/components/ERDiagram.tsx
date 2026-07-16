@@ -114,7 +114,7 @@ export function ERDiagram({ metadata, selectedEntity, onEntitySelect }: ERDiagra
 
   if (loading) {
     return (
-      <div className="w-full h-[600px] border rounded-lg bg-gray-50 flex items-center justify-center">
+      <div className="w-full h-[600px] border border-engineering-200 rounded bg-engineering-100 flex items-center justify-center">
         <div className="text-center">
           <svg
             className="animate-spin h-10 w-10 text-primary-500 mx-auto mb-4"
@@ -135,8 +135,8 @@ export function ERDiagram({ metadata, selectedEntity, onEntitySelect }: ERDiagra
               d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
             />
           </svg>
-          <p className="text-gray-600">Layouting diagram...</p>
-          <p className="text-sm text-gray-400 mt-1">
+          <p className="text-engineering-600">Layouting diagram...</p>
+          <p className="text-sm text-engineering-400 mt-1">
             Processing {metadata.entities.length} entities
           </p>
         </div>
@@ -145,7 +145,7 @@ export function ERDiagram({ metadata, selectedEntity, onEntitySelect }: ERDiagra
   }
 
   return (
-    <div className="w-full h-[600px] border rounded-lg bg-white">
+    <div className="w-full h-[600px] border border-engineering-200 rounded bg-white">
       <ReactFlow
         nodes={highlightedNodes}
         edges={edges}
@@ -170,8 +170,8 @@ export function ERDiagram({ metadata, selectedEntity, onEntitySelect }: ERDiagra
         />
         <MiniMap
           nodeColor={(node) => {
-            if (node.id === selectedEntity) return '#3b82f6';
-            return '#e2e8f0';
+            if (node.id === selectedEntity) return '#0A8276';
+            return '#EEEDED';
           }}
           maskColor="rgba(0, 0, 0, 0.1)"
           position="bottom-right"

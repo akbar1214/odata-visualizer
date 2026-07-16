@@ -17,17 +17,17 @@ function EntityNodeComponent({ data, selected }: NodeProps<EntityNodeData>) {
 
   return (
     <div
-      className={`bg-white rounded-lg shadow-lg min-w-[200px] max-w-[280px] border-2 transition-all ${
-        selected ? 'border-primary-500 shadow-xl' : 'border-gray-200 hover:border-primary-300'
+      className={`bg-white rounded shadow-ifx min-w-[200px] max-w-[280px] border-2 transition-all ${
+        selected ? 'border-primary-500 shadow-ifx-large' : 'border-engineering-200 hover:border-primary-300'
       }`}
     >
       {/* Entity Header */}
-      <div className="bg-primary-600 text-white px-3 py-2 rounded-t-[6px]">
+      <div className="bg-primary-500 text-white px-3 py-2 rounded-t-[4px]">
         <div className="font-semibold text-sm truncate" title={entity.name}>
           {entity.label || entity.name}
         </div>
         {entity.namespace && (
-          <div className="text-xs text-primary-200 truncate" title={entity.namespace}>
+          <div className="text-xs text-primary-100 truncate" title={entity.namespace}>
             {entity.namespace}
           </div>
         )}
@@ -38,7 +38,7 @@ function EntityNodeComponent({ data, selected }: NodeProps<EntityNodeData>) {
         {/* Key Properties */}
         {keyProperties.map((prop) => (
           <div key={prop.name} className="flex items-center gap-1.5 text-xs">
-            <span className="text-yellow-500 flex-shrink-0" title="Primary Key">
+            <span className="text-infineon-sand flex-shrink-0" title="Primary Key">
               <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
                 <path
                   fillRule="evenodd"
@@ -47,10 +47,10 @@ function EntityNodeComponent({ data, selected }: NodeProps<EntityNodeData>) {
                 />
               </svg>
             </span>
-            <span className="font-mono font-medium text-gray-900 truncate" title={prop.name}>
+            <span className="font-mono font-medium text-black truncate" title={prop.name}>
               {prop.name}
             </span>
-            <span className="text-gray-400 flex-shrink-0">
+            <span className="text-engineering-400 flex-shrink-0">
               {prop.type.replace('Edm.', '')}
             </span>
           </div>
@@ -58,17 +58,17 @@ function EntityNodeComponent({ data, selected }: NodeProps<EntityNodeData>) {
 
         {/* Divider if we have both key and regular properties */}
         {keyProperties.length > 0 && regularProperties.length > 0 && (
-          <div className="border-t border-gray-100 my-1" />
+          <div className="border-t border-engineering-100 my-1" />
         )}
 
         {/* Regular Properties */}
         {visibleProperties.map((prop) => (
           <div key={prop.name} className="flex items-center gap-1.5 text-xs">
-            <span className="text-gray-300 flex-shrink-0">•</span>
-            <span className="font-mono text-gray-700 truncate" title={prop.name}>
+            <span className="text-engineering-300 flex-shrink-0">•</span>
+            <span className="font-mono text-engineering-600 truncate" title={prop.name}>
               {prop.name}
             </span>
-            <span className="text-gray-400 flex-shrink-0 text-[10px]">
+            <span className="text-engineering-400 flex-shrink-0 text-[10px]">
               {prop.type.replace('Edm.', '')}
             </span>
           </div>
@@ -76,20 +76,20 @@ function EntityNodeComponent({ data, selected }: NodeProps<EntityNodeData>) {
 
         {/* More properties indicator */}
         {hiddenCount > 0 && (
-          <div className="text-[10px] text-gray-400 text-center pt-1">
+          <div className="text-[10px] text-engineering-400 text-center pt-1">
             +{hiddenCount} more propert{hiddenCount === 1 ? 'y' : 'ies'}
           </div>
         )}
 
         {/* Empty state */}
         {entity.properties.length === 0 && (
-          <div className="text-xs text-gray-400 text-center py-1">No properties</div>
+          <div className="text-xs text-engineering-400 text-center py-1">No properties</div>
         )}
 
         {/* Navigation Properties indicator */}
         {entity.navigationProperties.length > 0 && (
-          <div className="border-t border-gray-100 mt-1 pt-1">
-            <div className="flex items-center gap-1 text-[10px] text-primary-600">
+          <div className="border-t border-engineering-100 mt-1 pt-1">
+            <div className="flex items-center gap-1 text-[10px] text-primary-500">
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path
                   strokeLinecap="round"

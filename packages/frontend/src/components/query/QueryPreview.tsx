@@ -27,11 +27,11 @@ export function QueryPreview({ query }: QueryPreviewProps) {
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <label className="text-xs font-medium text-gray-500">Generated Query</label>
+        <label className="text-xs font-medium text-engineering-500">Generated Query</label>
         <button
           type="button"
           onClick={handleCopy}
-          className="text-xs text-primary-600 hover:text-primary-700 flex items-center gap-1"
+          className="text-xs text-primary-500 hover:text-primary-600 flex items-center gap-1"
         >
           {copied ? (
             <>
@@ -51,7 +51,7 @@ export function QueryPreview({ query }: QueryPreviewProps) {
         </button>
       </div>
 
-      <pre className="bg-gray-900 text-green-400 rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all min-h-[60px]">
+      <pre className="bg-engineering-600 text-primary-200 rounded p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all min-h-[60px]">
         {query || 'Select an entity to generate a query'}
       </pre>
     </div>

@@ -41,11 +41,11 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
 
   return (
     <div className="space-y-3">
-      <div className="text-xs font-medium text-gray-500">Path Finder</div>
+      <div className="text-xs font-medium text-engineering-500">Path Finder</div>
 
       <div className="space-y-2">
         <div>
-          <label className="text-[10px] text-gray-400 block mb-0.5">From entity</label>
+          <label className="text-[10px] text-engineering-400 block mb-0.5">From entity</label>
           <select
             className="input text-xs w-full"
             value={sourceEntity}
@@ -64,7 +64,7 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
         </div>
 
         <div>
-          <label className="text-[10px] text-gray-400 block mb-0.5">To entity</label>
+          <label className="text-[10px] text-engineering-400 block mb-0.5">To entity</label>
           <select
             className="input text-xs w-full"
             value={targetEntity}
@@ -85,7 +85,7 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
         <button
           onClick={handleFind}
           disabled={!sourceEntity || !targetEntity}
-          className="w-full px-3 py-1.5 bg-primary-600 text-white text-xs rounded hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full px-3 py-1.5 bg-primary-500 text-white text-xs rounded hover:bg-primary-600 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Find Paths
         </button>
@@ -93,7 +93,7 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
 
       {searched && (
         <div className="space-y-2">
-          <div className="text-[10px] text-gray-400">
+          <div className="text-[10px] text-engineering-400">
             {foundPaths.length === 0
               ? 'No paths found'
               : `${foundPaths.length} path(s) found`}
@@ -103,19 +103,19 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
             <button
               key={index}
               onClick={() => onSelectPath(sourceEntity, path)}
-              className="w-full text-left p-2 rounded border border-gray-200 hover:border-primary-300 hover:bg-primary-50 transition-colors"
+              className="w-full text-left p-2 rounded border border-engineering-200 hover:border-primary-300 hover:bg-primary-50 transition-colors"
             >
-              <div className="text-[10px] font-medium text-gray-600 mb-1">
+              <div className="text-[10px] font-medium text-engineering-600 mb-1">
                 Path {index + 1} ({path.length} hop{path.length !== 1 ? 's' : ''})
               </div>
               <div className="space-y-0.5">
                 {path.map((step, i) => (
                   <div key={i} className="flex items-center gap-1 text-[10px]">
-                    <span className="text-gray-500">{step.fromEntity}</span>
+                    <span className="text-engineering-500">{step.fromEntity}</span>
                     <span className="text-primary-500">→</span>
-                    <span className="text-primary-600 font-medium">.{step.navProperty}</span>
+                    <span className="text-primary-500 font-medium">.{step.navProperty}</span>
                     <span className="text-primary-500">→</span>
-                    <span className="text-gray-500">{step.toEntity}</span>
+                    <span className="text-engineering-500">{step.toEntity}</span>
                   </div>
                 ))}
               </div>

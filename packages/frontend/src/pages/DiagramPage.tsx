@@ -24,18 +24,18 @@ export function DiagramPage({ metadata, parseTimeMs, fileSizeBytes, onClear }: D
 
   return (
     <ReactFlowProvider>
-      <div className="min-h-screen bg-gray-100 flex flex-col">
+      <div className="min-h-screen bg-engineering-100 flex flex-col">
         {/* Header */}
-        <header className="bg-white border-b shadow-sm flex-shrink-0">
+        <header className="bg-engineering-600 text-white shadow-ifx flex-shrink-0">
           <div className="max-w-full mx-auto px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
+              <div className="w-8 h-8 bg-primary-500 rounded flex items-center justify-center">
                 <span className="text-white font-bold text-sm">OD</span>
               </div>
-              <h1 className="text-xl font-semibold text-gray-900">OData Visualizer</h1>
+              <h1 className="text-xl font-semibold">OData Visualizer</h1>
             </div>
 
-            <div className="flex items-center gap-4 text-sm text-gray-500">
+            <div className="flex items-center gap-4 text-sm text-engineering-200">
               <span>{metadata.entities.length} entities</span>
               <span>{metadata.relationships.length} relationships</span>
               {parseTimeMs && <span>Parsed in {parseTimeMs}ms</span>}

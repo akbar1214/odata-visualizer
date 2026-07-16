@@ -89,7 +89,7 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
   return (
     <div className="flex h-[calc(100vh-64px)]">
       {/* Left: Panel */}
-      <div className="w-72 flex-shrink-0 border-r bg-white overflow-y-auto flex flex-col">
+      <div className="w-72 flex-shrink-0 border-r border-engineering-200 bg-white overflow-y-auto flex flex-col">
         <div className="p-4 space-y-4 flex-1">
           <EntitySelector
             entities={metadata.entities}
@@ -98,14 +98,14 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
           />
 
           {queryableEntities.length === 0 && (
-            <p className="text-xs text-gray-400 text-center mt-4">
+            <p className="text-xs text-engineering-400 text-center mt-4">
               No queryable entities found. Upload metadata with entity types.
             </p>
           )}
 
           {selectedEntity && (
             <>
-              <div className="border-t pt-4">
+              <div className="border-t border-engineering-200 pt-4">
                 <PathFinder
                   metadata={metadata}
                   currentEntity={selectedEntity}
@@ -113,8 +113,8 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
                 />
               </div>
 
-              <div className="border-t pt-4 text-xs text-gray-400 space-y-1">
-                <div className="font-medium text-gray-500">Quick Guide</div>
+              <div className="border-t border-engineering-200 pt-4 text-xs text-engineering-400 space-y-1">
+                <div className="font-medium text-engineering-500">Quick Guide</div>
                 <div><b>Path Finder</b> - find routes between two entities</div>
                 <div>Click <b>$select</b> properties on any node to choose fields</div>
                 <div>Click <b>$expand</b> nav properties to add related entities</div>
@@ -127,13 +127,13 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
           )}
         </div>
 
-        <div className="border-t bg-gray-50 p-3">
+        <div className="border-t border-engineering-200 bg-engineering-100 p-3">
           <QueryPreview query={queryString} />
         </div>
       </div>
 
       {/* Right: Full canvas */}
-      <div className="flex-1 bg-gray-50">
+      <div className="flex-1 bg-engineering-100">
         <QueryCanvas
           graphNodes={graphNodes}
           graphEdges={graphEdges}

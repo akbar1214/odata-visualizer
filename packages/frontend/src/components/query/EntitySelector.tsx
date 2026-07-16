@@ -12,7 +12,7 @@ export function EntitySelector({ entities, selected, onSelect }: EntitySelectorP
 
   return (
     <div>
-      <label className="block text-xs font-medium text-gray-500 mb-1">Entity</label>
+      <label className="block text-xs font-medium text-engineering-500 mb-1">Entity</label>
       <select
         className="input text-sm"
         value={selected}

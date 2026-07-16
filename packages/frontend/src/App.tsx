@@ -18,15 +18,15 @@ function App() {
 
   if (!metadata) {
     return (
-      <div className="min-h-screen bg-gray-100">
+      <div className="min-h-screen bg-engineering-100">
         {/* Header */}
-        <header className="bg-white border-b shadow-sm">
+        <header className="bg-engineering-600 text-white shadow-ifx">
           <div className="max-w-full mx-auto px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
+              <div className="w-8 h-8 bg-primary-500 rounded flex items-center justify-center">
                 <span className="text-white font-bold text-sm">OD</span>
               </div>
-              <h1 className="text-xl font-semibold text-gray-900">OData Visualizer</h1>
+              <h1 className="text-xl font-semibold">OData Visualizer</h1>
             </div>
           </div>
         </header>
@@ -35,10 +35,10 @@ function App() {
         <main className="max-w-full mx-auto p-4">
           <div className="max-w-xl mx-auto mt-12">
             <div className="text-center mb-8">
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">
+              <h2 className="text-2xl font-bold text-black mb-2">
                 Visualize OData Metadata
               </h2>
-              <p className="text-gray-600">
+              <p className="text-engineering-500">
                 Upload an OData metadata file or provide a URL to generate an interactive
                 entity-relationship diagram and build OData queries.
               </p>
@@ -51,10 +51,10 @@ function App() {
             />
 
             {error && (
-              <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+              <div className="mt-4 p-4 bg-red-50 border border-infineon-red/20 rounded">
                 <div className="flex items-start gap-3">
                   <svg
-                    className="w-5 h-5 text-red-500 mt-0.5"
+                    className="w-5 h-5 text-infineon-red mt-0.5"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -67,8 +67,8 @@ function App() {
                     />
                   </svg>
                   <div>
-                    <h3 className="text-sm font-medium text-red-800">Error</h3>
-                    <p className="text-sm text-red-700 mt-1">{error}</p>
+                    <h3 className="text-sm font-medium text-infineon-red-dark">Error</h3>
+                    <p className="text-sm text-infineon-red mt-1">{error}</p>
                   </div>
                 </div>
               </div>
@@ -160,11 +160,11 @@ function FeatureCard({
 }) {
   return (
     <div className="card p-6">
-      <div className="w-12 h-12 bg-primary-100 text-primary-600 rounded-lg flex items-center justify-center mb-4">
+      <div className="w-12 h-12 bg-primary-100 text-primary-600 rounded flex items-center justify-center mb-4">
         {icon}
       </div>
-      <h3 className="font-medium text-gray-900 mb-1">{title}</h3>
-      <p className="text-sm text-gray-500">{description}</p>
+      <h3 className="font-medium text-black mb-1">{title}</h3>
+      <p className="text-sm text-engineering-500">{description}</p>
     </div>
   );
 }

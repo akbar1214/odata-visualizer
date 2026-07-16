@@ -222,7 +222,7 @@ function QueryCanvasInner({
 
   if (graphNodes.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+      <div className="flex items-center justify-center h-full text-engineering-400 text-sm">
         Select an entity to start building a query
       </div>
     );
