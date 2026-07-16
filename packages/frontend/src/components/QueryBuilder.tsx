@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react';
 import type { ODataMetadata } from '@odata-visualizer/shared';
 import { EntitySelector } from './query/EntitySelector';
 import { PathFinder } from './query/PathFinder';
+import { FunctionImportSelector } from './query/FunctionImportSelector';
 import { QueryPreview } from './query/QueryPreview';
 import { QueryCanvas } from './query/QueryCanvas';
 import {
@@ -34,11 +35,13 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
     selectedEntity ? [createRootNode(selectedEntity)] : []
   );
   const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
+  const [functionQuery, setFunctionQuery] = useState<string | null>(null);
 
   const handleEntitySelect = useCallback((name: string) => {
     setSelectedEntity(name);
     setGraphNodes([createRootNode(name)]);
     setGraphEdges([]);
+    setFunctionQuery(null);
   }, []);
 
   const handleGraphChange = useCallback((nodes: GraphNodeState[], edges: GraphEdge[]) => {
@@ -53,9 +56,14 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
       setSelectedEntity(sourceEntity);
       setGraphNodes(laid.nodes);
       setGraphEdges(laid.edges);
+      setFunctionQuery(null);
     },
     []
   );
+
+  const handleFunctionSelect = useCallback((query: string) => {
+    setFunctionQuery(query);
+  }, []);
 
   const query: QueryState = useMemo(() => {
     const rootNode = graphNodes.find((n) => n.id === 'root');
@@ -84,7 +92,12 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
     };
   }, [graphNodes, graphEdges, selectedEntity]);
 
-  const queryString = useMemo(() => buildODataQuery(query, metadata), [query, metadata]);
+  const queryString = useMemo(() => {
+    if (functionQuery) {
+      return functionQuery;
+    }
+    return buildODataQuery(query, metadata);
+  }, [functionQuery, query, metadata]);
 
   return (
     <div className="flex h-[calc(100vh-64px)]">
@@ -113,9 +126,17 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
                 />
               </div>
 
+              <div className="border-t border-engineering-200 pt-4">
+                <FunctionImportSelector
+                  metadata={metadata}
+                  onSelect={handleFunctionSelect}
+                />
+              </div>
+
               <div className="border-t border-engineering-200 pt-4 text-xs text-engineering-400 space-y-1">
                 <div className="font-medium text-engineering-500">Quick Guide</div>
                 <div><b>Path Finder</b> - find routes between two entities</div>
+                <div><b>Function Imports</b> - call OData functions</div>
                 <div>Click <b>$select</b> properties on any node to choose fields</div>
                 <div>Click <b>$expand</b> nav properties to add related entities</div>
                 <div>Click <b>$filter</b> to add filter conditions</div>

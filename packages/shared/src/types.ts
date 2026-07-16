@@ -81,6 +81,7 @@ export interface ODataFunctionImport {
   functionName: string;
   entitySet?: string;
   parameter?: ODataParameter[];
+  returnType?: string;
   annotations?: Record<string, string>;
 }
 
