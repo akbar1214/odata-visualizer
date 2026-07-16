@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { ODataMetadata, ODataEntity, ODataProperty } from '@odata-visualizer/shared';
+import { getTargetEntityName } from '../utils/queryResolver';
 
 interface MetadataExplorerProps {
   metadata: ODataMetadata;
@@ -124,10 +125,12 @@ export function MetadataExplorer({
                   entity={entity}
                   isExpanded={expandedEntity === entity.name}
                   isSelected={selectedEntity === entity.name}
+                  metadata={metadata}
                   onToggle={() => {
                     setExpandedEntity(expandedEntity === entity.name ? null : entity.name);
                     onEntitySelect?.(entity.name);
                   }}
+                  onNavigate={onEntitySelect}
                 />
               ))}
               {filteredEntities.length === 0 && (
@@ -202,10 +205,12 @@ interface EntityCardProps {
   entity: ODataEntity;
   isExpanded: boolean;
   isSelected: boolean;
+  metadata: ODataMetadata;
   onToggle: () => void;
+  onNavigate?: (entityName: string) => void;
 }
 
-function EntityCard({ entity, isExpanded, isSelected, onToggle }: EntityCardProps) {
+function EntityCard({ entity, isExpanded, isSelected, metadata, onToggle, onNavigate }: EntityCardProps) {
   return (
     <div
       className={`border rounded overflow-hidden transition-all ${
@@ -308,11 +313,26 @@ function EntityCard({ entity, isExpanded, isSelected, onToggle }: EntityCardProp
             <div className="mt-3">
               <div className="text-xs font-medium text-engineering-500 mb-1">Navigation Properties</div>
               <div className="space-y-1">
-                {entity.navigationProperties.map((nav) => (
-                  <div key={nav.name} className="text-xs text-primary-500">
-                    {nav.name} → {nav.relationship}
-                  </div>
-                ))}
+                {entity.navigationProperties.map((nav) => {
+                  const targetName = getTargetEntityName(nav.name, entity, metadata);
+                  return (
+                    <div key={nav.name} className="text-xs flex items-center gap-1">
+                      <span className="text-engineering-600 font-mono">{nav.name}</span>
+                      <span className="text-engineering-400">→</span>
+                      {targetName ? (
+                        <button
+                          type="button"
+                          onClick={() => onNavigate?.(targetName)}
+                          className="text-primary-500 hover:text-primary-600 hover:underline font-medium"
+                        >
+                          {targetName}
+                        </button>
+                      ) : (
+                        <span className="text-engineering-400">{nav.relationship || 'unknown'}</span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
