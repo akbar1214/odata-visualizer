@@ -66,6 +66,7 @@ function GraphNodeComponent({ data }: NodeProps) {
       }`}
     >
       {!isRoot && <Handle type="target" position={Position.Top} className="!bg-engineering-400 !w-2 !h-2" />}
+      {isRoot && <Handle type="source" position={Position.Bottom} className="!bg-primary-300 !w-2 !h-2" />}
 
       {/* Header */}
       <div className={`px-2 py-1.5 rounded-t font-bold flex items-center justify-between ${
