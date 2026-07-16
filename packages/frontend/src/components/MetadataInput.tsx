@@ -95,7 +95,10 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
       <div className="flex gap-2 mb-4">
         <button
           type="button"
-          onClick={() => setMode('file')}
+          onClick={() => {
+            setMode('file');
+            setTimeout(() => fileInputRef.current?.click(), 0);
+          }}
           className={`btn ${mode === 'file' ? 'btn-primary' : 'btn-secondary'}`}
           disabled={loading}
         >
@@ -134,10 +137,10 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
           onDragLeave={handleDrag}
           onDragOver={handleDrag}
           onDrop={handleDrop}
-          className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+          className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
             dragActive
               ? 'border-primary-500 bg-primary-50'
-              : 'border-gray-300 hover:border-gray-400'
+              : 'border-gray-300 hover:border-gray-400 hover:bg-gray-50'
           }`}
         >
           <input
@@ -145,7 +148,7 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
             type="file"
             accept=".xml,.csdl,.edmx"
             onChange={handleFileChange}
-            className="hidden"
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
             disabled={loading}
           />
           
@@ -168,7 +171,8 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
               <p className="text-xs text-gray-500">{formatFileSize(selectedFile.size)}</p>
               <button
                 type="button"
-                onClick={() => {
+                onClick={(e) => {
+                  e.stopPropagation();
                   setSelectedFile(null);
                   fileInputRef.current?.click();
                 }}
@@ -197,7 +201,10 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
                 Drag and drop your OData metadata file here, or{' '}
                 <button
                   type="button"
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    fileInputRef.current?.click();
+                  }}
                   className="text-primary-600 hover:text-primary-700 font-medium"
                   disabled={loading}
                 >
