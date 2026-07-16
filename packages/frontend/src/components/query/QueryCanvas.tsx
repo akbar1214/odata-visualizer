@@ -253,7 +253,7 @@ function QueryCanvasInner({ graphNodes, graphEdges, metadata, onGraphChange }: Q
         fitView
         fitViewOptions={{ padding: 0.2 }}
         proOptions={{ hideAttribution: true }}
-        nodesDraggable={true}
+        nodesDraggable
         nodesConnectable={false}
         elementsSelectable={false}
         defaultEdgeOptions={{ type: 'smoothstep', animated: true }}

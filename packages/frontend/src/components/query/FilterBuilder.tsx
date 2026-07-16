@@ -71,7 +71,7 @@ export function FilterBuilder({
           const operators = getOperatorsForType(edmType);
 
           return (
-            <div key={index}>
+            <div key={`${filter.property}-${filter.operator}-${filter.value}`}>
               {index > 0 && (
                 <div className="flex justify-center my-1">
                   <button

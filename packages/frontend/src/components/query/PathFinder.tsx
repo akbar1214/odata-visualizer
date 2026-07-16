@@ -87,7 +87,7 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
 
           {foundPaths.map((path, index) => (
             <button
-              key={index}
+              key={path.map((s) => s.navProperty).join('-') || `path-${index}`}
               onClick={() => onSelectPath(sourceEntity, path)}
               className="w-full text-left p-2 rounded border border-engineering-200 hover:border-primary-300 hover:bg-primary-50 transition-colors"
             >
@@ -95,8 +95,8 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
                 Path {index + 1} ({path.length} hop{path.length !== 1 ? 's' : ''})
               </div>
               <div className="space-y-0.5">
-                {path.map((step, i) => (
-                  <div key={i} className="flex items-center gap-1 text-[10px]">
+                {path.map((step) => (
+                  <div key={`${step.fromEntity}-${step.navProperty}-${step.toEntity}`} className="flex items-center gap-1 text-[10px]">
                     <span className="text-engineering-500">{step.fromEntity}</span>
                     <span className="text-primary-500">→</span>
                     <span className="text-primary-500 font-medium">.{step.navProperty}</span>

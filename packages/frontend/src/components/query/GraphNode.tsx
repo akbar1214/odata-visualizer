@@ -149,7 +149,7 @@ function GraphNodeComponent({ data }: NodeProps) {
                   allProperties.find((p) => p.name === f.property)?.type || 'Edm.String';
                 const operators = getOperatorsForType(edmType);
                 return (
-                  <div key={i}>
+                  <div key={`${f.property}-${f.operator}-${f.value}`}>
                     {i > 0 && (
                       <div className="flex justify-center my-0.5">
                         <button
