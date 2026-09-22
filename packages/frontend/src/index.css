@@ -1,35 +1,38 @@
+@import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,300;0,400;0,600;0,700;1,400&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   body {
-    @apply bg-gray-50 text-gray-900 antialiased;
+    @apply bg-engineering-100 text-black antialiased;
+    font-family: 'Source Sans 3', system-ui, sans-serif;
   }
 }
 
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center rounded px-4 py-2 text-sm font-semibold transition-colors focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
   .btn-primary {
-    @apply bg-primary-600 text-white hover:bg-primary-700 focus:ring-primary-500;
+    @apply bg-primary-500 text-white hover:bg-primary-600 focus:ring-2 focus:ring-primary-300 focus:ring-offset-2;
   }
 
   .btn-secondary {
-    @apply bg-gray-200 text-gray-800 hover:bg-gray-300 focus:ring-gray-500;
+    @apply bg-engineering-200 text-engineering-600 hover:bg-engineering-300 focus:ring-2 focus:ring-engineering-300 focus:ring-offset-2;
   }
 
   .btn-danger {
-    @apply bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+    @apply bg-infineon-red text-white hover:bg-infineon-red-dark focus:ring-2 focus:ring-infineon-red focus:ring-offset-2;
   }
 
   .input {
-    @apply block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500;
+    @apply block w-full rounded border border-engineering-300 bg-white px-3 py-2 text-sm placeholder:text-engineering-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500;
   }
 
   .card {
-    @apply rounded-lg border border-gray-200 bg-white shadow-sm;
+    @apply rounded border border-engineering-200 bg-white shadow-odv;
   }
 }

@@ -5,18 +5,12 @@ const API_BASE = '/api';
 /**
  * Parse OData metadata from uploaded file
  */
-export async function parseFile(file: File, sessionId?: string): Promise<ParseResponse> {
+export async function parseFile(file: File): Promise<ParseResponse> {
   const formData = new FormData();
   formData.append('metadata', file);
 
-  const headers: Record<string, string> = {};
-  if (sessionId) {
-    headers['X-Session-Id'] = sessionId;
-  }
-
   const response = await fetch(`${API_BASE}/parse/file`, {
     method: 'POST',
-    headers,
     body: formData,
   });
 
@@ -31,17 +25,12 @@ export async function parseFile(file: File, sessionId?: string): Promise<ParseRe
 /**
  * Parse OData metadata from URL
  */
-export async function parseUrl(url: string, sessionId?: string): Promise<ParseResponse> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  if (sessionId) {
-    headers['X-Session-Id'] = sessionId;
-  }
-
+export async function parseUrl(url: string): Promise<ParseResponse> {
   const response = await fetch(`${API_BASE}/parse/url`, {
     method: 'POST',
-    headers,
+    headers: {
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({ url }),
   });
 
@@ -56,17 +45,12 @@ export async function parseUrl(url: string, sessionId?: string): Promise<ParseRe
 /**
  * Parse OData metadata from raw XML content
  */
-export async function parseContent(content: string, sessionId?: string): Promise<ParseResponse> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  if (sessionId) {
-    headers['X-Session-Id'] = sessionId;
-  }
-
+export async function parseContent(content: string): Promise<ParseResponse> {
   const response = await fetch(`${API_BASE}/parse/content`, {
     method: 'POST',
-    headers,
+    headers: {
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({ content }),
   });
 

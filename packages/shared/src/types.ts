@@ -1,6 +1,6 @@
 /**
  * OData Visualizer - Shared Types
- * 
+ *
  * Core type definitions for OData metadata parsing and visualization.
  */
 
@@ -23,6 +23,7 @@ export interface ODataNavigationProperty {
   relationship: string;
   fromRole: string;
   toRole: string;
+  targetType?: string;
   label?: string;
   annotations?: Record<string, string>;
 }
@@ -80,6 +81,7 @@ export interface ODataFunctionImport {
   functionName: string;
   entitySet?: string;
   parameter?: ODataParameter[];
+  returnType?: string;
   annotations?: Record<string, string>;
 }
 

@@ -5,20 +5,20 @@
   "scripts": {
     "dev": "concurrently \"pnpm --filter @odata-visualizer/backend dev\" \"pnpm --filter @odata-visualizer/frontend dev\"",
     "build": "pnpm -r build",
-    "lint": "eslint packages/*/src packages/*/__tests__",
+    "lint": "oxlint packages/*/src",
+    "lint:fix": "oxlint --fix packages/*/src",
+    "format": "prettier --write \"packages/*/src/**/*.{ts,tsx,js,jsx,json,css}\"",
+    "format:check": "prettier --check \"packages/*/src/**/*.{ts,tsx,js,jsx,json,css}\"",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "test:watch": "pnpm -r test:watch",
-    "mcp:build": "pnpm --filter @odata-visualizer/mcp build",
-    "mcp:start": "pnpm --filter @odata-visualizer/mcp start",
-    "docker:build": "docker build -f docker/Dockerfile -t odata-visualizer .",
-    "docker:run": "docker run -p 3001:3001 odata-visualizer"
+    "container:build": "docker build -f container/Containerfile -t odata-visualizer .",
+    "container:run": "docker run -p 3001:3001 odata-visualizer"
   },
   "devDependencies": {
-    "@eslint/js": "^9.0.0",
     "concurrently": "^8.2.2",
-    "eslint": "^9.0.0",
-    "typescript": "^5.4.5",
-    "typescript-eslint": "^8.63.0"
+    "oxlint": "^1.74.0",
+    "prettier": "^3.9.5",
+    "typescript": "^5.4.5"
   }
 }

@@ -52,7 +52,7 @@ function formatRelationship(rel: ODataRelationship): string {
 
 export async function handleToolCall(
   name: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
 ): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   switch (name) {
     case 'load_metadata': {
@@ -140,7 +140,7 @@ export async function handleToolCall(
       }
 
       const entity = currentMetadata.entities.find(
-        (e) => e.name.toLowerCase() === entityName.toLowerCase()
+        (e) => e.name.toLowerCase() === entityName.toLowerCase(),
       );
 
       if (!entity) {

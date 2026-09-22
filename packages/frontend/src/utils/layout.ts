@@ -18,7 +18,7 @@ interface LayoutOptions {
  */
 export async function layoutDiagram(
   metadata: ODataMetadata,
-  options: LayoutOptions = {}
+  options: LayoutOptions = {},
 ): Promise<{ nodes: Node[]; edges: Edge[] }> {
   const { direction = 'TB', spacing = 80, nodeSpacing = 50 } = options;
 
@@ -86,10 +86,7 @@ export async function layoutDiagram(
 /**
  * Apply a simple grid layout as fallback
  */
-function applyGridLayout(
-  nodes: Node[],
-  edges: Edge[]
-): { nodes: Node[]; edges: Edge[] } {
+function applyGridLayout(nodes: Node[], edges: Edge[]): { nodes: Node[]; edges: Edge[] } {
   const columns = Math.ceil(Math.sqrt(nodes.length));
   const spacingX = NODE_WIDTH + 100;
   const spacingY = NODE_HEIGHT + 100;
@@ -115,7 +112,7 @@ export function filterMetadata(
     search?: string;
     entityNames?: string[];
     maxEntities?: number;
-  }
+  },
 ): ODataMetadata {
   let filteredEntities = [...metadata.entities];
 
@@ -126,14 +123,14 @@ export function filterMetadata(
       (entity) =>
         entity.name.toLowerCase().includes(searchLower) ||
         entity.label?.toLowerCase().includes(searchLower) ||
-        entity.namespace?.toLowerCase().includes(searchLower)
+        entity.namespace?.toLowerCase().includes(searchLower),
     );
   }
 
   // Filter by specific entity names
   if (filter.entityNames && filter.entityNames.length > 0) {
     filteredEntities = filteredEntities.filter((entity) =>
-      filter.entityNames!.includes(entity.name)
+      filter.entityNames!.includes(entity.name),
     );
   }
 
@@ -146,8 +143,7 @@ export function filterMetadata(
 
   // Filter relationships to only include filtered entities
   const filteredRelationships = metadata.relationships.filter(
-    (rel) =>
-      filteredEntityNames.has(rel.from.entity) && filteredEntityNames.has(rel.to.entity)
+    (rel) => filteredEntityNames.has(rel.from.entity) && filteredEntityNames.has(rel.to.entity),
   );
 
   return {

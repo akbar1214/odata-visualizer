@@ -1,5 +1,6 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import type { ODataMetadata, ODataEntity, ODataProperty } from '@odata-visualizer/shared';
+import { getTargetEntityName } from '../utils/queryResolver';
 
 interface MetadataExplorerProps {
   metadata: ODataMetadata;
@@ -8,6 +9,29 @@ interface MetadataExplorerProps {
 }
 
 type TabId = 'entities' | 'relationships' | 'stats';
+
+const SORTABLE_TYPES = new Set([
+  'Edm.String',
+  'Edm.Boolean',
+  'Edm.Guid',
+  'Edm.Date',
+  'Edm.DateTime',
+  'Edm.DateTimeOffset',
+  'Edm.Time',
+  'Edm.Decimal',
+  'Edm.Double',
+  'Edm.Single',
+  'Edm.Int16',
+  'Edm.Int32',
+  'Edm.Int64',
+  'Edm.Byte',
+  'Edm.SByte',
+]);
+
+function isSortableType(type: string): boolean {
+  if (SORTABLE_TYPES.has(type)) return true;
+  return type.startsWith('Edm.Int') || type.startsWith('Edm.Float') || type.startsWith('Edm.Dec');
+}
 
 export function MetadataExplorer({
   metadata,
@@ -18,7 +42,6 @@ export function MetadataExplorer({
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedEntity, setExpandedEntity] = useState<string | null>(selectedEntity || null);
 
-  // Filter entities based on search
   const filteredEntities = useMemo(() => {
     if (!searchTerm) return metadata.entities;
     const lower = searchTerm.toLowerCase();
@@ -26,16 +49,15 @@ export function MetadataExplorer({
       (e) =>
         e.name.toLowerCase().includes(lower) ||
         e.label?.toLowerCase().includes(lower) ||
-        e.namespace?.toLowerCase().includes(lower)
+        e.namespace?.toLowerCase().includes(lower),
     );
   }, [metadata.entities, searchTerm]);
 
-  // Calculate stats
   const stats = useMemo(() => {
     const totalProperties = metadata.entities.reduce((acc, e) => acc + e.properties.length, 0);
     const totalNavProps = metadata.entities.reduce(
       (acc, e) => acc + e.navigationProperties.length,
-      0
+      0,
     );
     const namespaces = new Set(metadata.entities.map((e) => e.namespace).filter(Boolean));
 
@@ -48,10 +70,33 @@ export function MetadataExplorer({
     };
   }, [metadata]);
 
+  const handleTabClick = useCallback((tabId: TabId) => {
+    setActiveTab(tabId);
+  }, []);
+
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchTerm(e.target.value);
+  }, []);
+
+  const handleEntityToggle = useCallback(
+    (entityName: string) => {
+      setExpandedEntity(expandedEntity === entityName ? null : entityName);
+      onEntitySelect?.(entityName);
+    },
+    [expandedEntity, onEntitySelect],
+  );
+
+  const handleRelationshipClick = useCallback(
+    (entityName: string) => {
+      onEntitySelect?.(entityName);
+    },
+    [onEntitySelect],
+  );
+
   return (
     <div className="card h-full flex flex-col">
       {/* Tabs */}
-      <div className="flex border-b">
+      <div className="flex border-b border-engineering-200">
         {[
           { id: 'entities' as const, label: 'Entities', count: metadata.entities.length },
           {
@@ -63,16 +108,16 @@ export function MetadataExplorer({
         ].map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => handleTabClick(tab.id)}
             className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
               activeTab === tab.id
-                ? 'text-primary-600 border-b-2 border-primary-600'
-                : 'text-gray-500 hover:text-gray-700'
+                ? 'text-primary-500 border-b-2 border-primary-500'
+                : 'text-engineering-500 hover:text-engineering-600'
             }`}
           >
             {tab.label}
             {tab.count !== null && (
-              <span className="ml-1.5 text-xs bg-gray-100 px-1.5 py-0.5 rounded-full">
+              <span className="ml-1.5 text-xs bg-engineering-100 px-1.5 py-0.5 rounded">
                 {tab.count}
               </span>
             )}
@@ -85,18 +130,16 @@ export function MetadataExplorer({
         {/* Entities Tab */}
         {activeTab === 'entities' && (
           <div className="p-4">
-            {/* Search */}
             <div className="mb-4">
               <input
                 type="text"
                 placeholder="Search entities..."
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={handleSearchChange}
                 className="input"
               />
             </div>
 
-            {/* Entity List */}
             <div className="space-y-2">
               {filteredEntities.map((entity) => (
                 <EntityCard
@@ -104,14 +147,13 @@ export function MetadataExplorer({
                   entity={entity}
                   isExpanded={expandedEntity === entity.name}
                   isSelected={selectedEntity === entity.name}
-                  onToggle={() => {
-                    setExpandedEntity(expandedEntity === entity.name ? null : entity.name);
-                    onEntitySelect?.(entity.name);
-                  }}
+                  metadata={metadata}
+                  onToggle={() => handleEntityToggle(entity.name)}
+                  onNavigate={onEntitySelect}
                 />
               ))}
               {filteredEntities.length === 0 && (
-                <div className="text-center py-8 text-gray-500">No entities found</div>
+                <div className="text-center py-8 text-engineering-500">No entities found</div>
               )}
             </div>
           </div>
@@ -124,23 +166,21 @@ export function MetadataExplorer({
               {metadata.relationships.map((rel) => (
                 <div
                   key={rel.name}
-                  className="p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer"
-                  onClick={() => {
-                    onEntitySelect?.(rel.from.entity);
-                  }}
+                  className="p-3 bg-engineering-100 rounded hover:bg-engineering-200 cursor-pointer"
+                  onClick={() => handleRelationshipClick(rel.from.entity)}
                 >
-                  <div className="font-mono text-sm font-medium">{rel.name}</div>
-                  <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
-                    <span className="text-primary-600">{rel.from.entity}</span>
+                  <div className="font-mono text-sm font-medium text-black">{rel.name}</div>
+                  <div className="text-xs text-engineering-500 mt-1 flex items-center gap-2">
+                    <span className="text-primary-500">{rel.from.entity}</span>
                     <span>({rel.from.multiplicity})</span>
                     <span>→</span>
-                    <span className="text-primary-600">{rel.to.entity}</span>
+                    <span className="text-primary-500">{rel.to.entity}</span>
                     <span>({rel.to.multiplicity})</span>
                   </div>
                 </div>
               ))}
               {metadata.relationships.length === 0 && (
-                <div className="text-center py-8 text-gray-500">No relationships found</div>
+                <div className="text-center py-8 text-engineering-500">No relationships found</div>
               )}
             </div>
           </div>
@@ -158,12 +198,12 @@ export function MetadataExplorer({
 
             {stats.namespaces.length > 0 && (
               <div className="mt-6">
-                <h3 className="text-sm font-medium text-gray-700 mb-2">Namespaces</h3>
+                <h3 className="text-sm font-medium text-engineering-600 mb-2">Namespaces</h3>
                 <div className="space-y-1">
                   {stats.namespaces.map((ns) => (
                     <div
                       key={ns}
-                      className="text-xs font-mono text-gray-600 bg-gray-50 px-2 py-1 rounded"
+                      className="text-xs font-mono text-engineering-600 bg-engineering-100 px-2 py-1 rounded"
                     >
                       {ns}
                     </div>
@@ -182,30 +222,41 @@ interface EntityCardProps {
   entity: ODataEntity;
   isExpanded: boolean;
   isSelected: boolean;
+  metadata: ODataMetadata;
   onToggle: () => void;
+  onNavigate?: (entityName: string) => void;
 }
 
-function EntityCard({ entity, isExpanded, isSelected, onToggle }: EntityCardProps) {
+function EntityCard({
+  entity,
+  isExpanded,
+  isSelected,
+  metadata,
+  onToggle,
+  onNavigate,
+}: EntityCardProps) {
   return (
     <div
-      className={`border rounded-lg overflow-hidden transition-all ${
-        isSelected ? 'border-primary-500 ring-1 ring-primary-500' : 'border-gray-200'
+      className={`border rounded overflow-hidden transition-all ${
+        isSelected ? 'border-primary-500 ring-1 ring-primary-500' : 'border-engineering-200'
       }`}
     >
       <button
         onClick={onToggle}
-        className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center justify-between"
+        className="w-full px-4 py-3 text-left hover:bg-engineering-100 flex items-center justify-between"
       >
         <div className="flex-1 min-w-0">
-          <div className="font-medium text-sm truncate">{entity.label || entity.name}</div>
+          <div className="font-medium text-sm truncate text-black">
+            {entity.label || entity.name}
+          </div>
           {entity.namespace && (
-            <div className="text-xs text-gray-500 truncate">{entity.namespace}</div>
+            <div className="text-xs text-engineering-500 truncate">{entity.namespace}</div>
           )}
         </div>
         <div className="flex items-center gap-2 ml-2">
-          <span className="text-xs text-gray-400">{entity.properties.length} props</span>
+          <span className="text-xs text-engineering-400">{entity.properties.length} props</span>
           <svg
-            className={`w-4 h-4 text-gray-400 transition-transform ${
+            className={`w-4 h-4 text-engineering-400 transition-transform ${
               isExpanded ? 'rotate-180' : ''
             }`}
             fill="none"
@@ -218,16 +269,16 @@ function EntityCard({ entity, isExpanded, isSelected, onToggle }: EntityCardProp
       </button>
 
       {isExpanded && (
-        <div className="px-4 pb-4 border-t bg-gray-50">
+        <div className="px-4 pb-4 border-t border-engineering-200 bg-engineering-100">
           {/* Keys */}
           {entity.keys.length > 0 && (
             <div className="mt-3">
-              <div className="text-xs font-medium text-gray-500 mb-1">Primary Keys</div>
+              <div className="text-xs font-medium text-engineering-500 mb-1">Primary Keys</div>
               <div className="flex flex-wrap gap-1">
                 {entity.keys.map((key) => (
                   <span
                     key={key}
-                    className="inline-flex items-center gap-1 text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded"
+                    className="inline-flex items-center gap-1 text-xs bg-infineon-sand/20 text-engineering-600 px-2 py-0.5 rounded"
                   >
                     <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
                       <path
@@ -245,31 +296,48 @@ function EntityCard({ entity, isExpanded, isSelected, onToggle }: EntityCardProp
 
           {/* Properties Table */}
           <div className="mt-3">
-            <div className="text-xs font-medium text-gray-500 mb-1">Properties</div>
+            <div className="text-xs font-medium text-engineering-500 mb-1">Properties</div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="text-left text-gray-500 border-b">
+                  <tr className="text-left text-engineering-500 border-b border-engineering-200">
                     <th className="py-1 pr-2">Name</th>
                     <th className="py-1 pr-2">Type</th>
-                    <th className="py-1">Nullable</th>
+                    <th className="py-1 pr-2">Nullable</th>
+                    <th className="py-1 pr-2" title="Can use in $select">
+                      $select
+                    </th>
+                    <th className="py-1" title="Can use in $orderby">
+                      $orderby
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {entity.properties.map((prop: ODataProperty) => (
-                    <tr key={prop.name} className="border-b border-gray-100">
+                    <tr key={prop.name} className="border-b border-engineering-100">
                       <td className="py-1 pr-2 font-mono">
                         {prop.isKey && (
-                          <span className="text-yellow-500 mr-1" title="Primary Key">
+                          <span className="text-infineon-sand mr-1" title="Primary Key">
                             🔑
                           </span>
                         )}
                         {prop.name}
                       </td>
-                      <td className="py-1 pr-2 text-gray-500">
+                      <td className="py-1 pr-2 text-engineering-500">
                         {prop.type.replace('Edm.', '')}
                       </td>
-                      <td className="py-1 text-gray-400">{prop.nullable ? '✓' : '✗'}</td>
+                      <td className="py-1 pr-2 text-engineering-400">
+                        {prop.nullable ? '✓' : '✗'}
+                      </td>
+                      <td className="py-1 pr-2 text-infineon-green" title="Selectable">
+                        ✓
+                      </td>
+                      <td
+                        className="py-1 text-primary-500"
+                        title={isSortableType(prop.type) ? 'Sortable' : 'Not sortable'}
+                      >
+                        {isSortableType(prop.type) ? '✓' : '—'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -280,13 +348,32 @@ function EntityCard({ entity, isExpanded, isSelected, onToggle }: EntityCardProp
           {/* Navigation Properties */}
           {entity.navigationProperties.length > 0 && (
             <div className="mt-3">
-              <div className="text-xs font-medium text-gray-500 mb-1">Navigation Properties</div>
+              <div className="text-xs font-medium text-engineering-500 mb-1">
+                Navigation Properties
+              </div>
               <div className="space-y-1">
-                {entity.navigationProperties.map((nav) => (
-                  <div key={nav.name} className="text-xs text-primary-600">
-                    {nav.name} → {nav.relationship}
-                  </div>
-                ))}
+                {entity.navigationProperties.map((nav) => {
+                  const targetName = getTargetEntityName(nav.name, entity, metadata);
+                  return (
+                    <div key={nav.name} className="text-xs flex items-center gap-1">
+                      <span className="text-engineering-600 font-mono">{nav.name}</span>
+                      <span className="text-engineering-400">→</span>
+                      {targetName ? (
+                        <button
+                          type="button"
+                          onClick={() => onNavigate?.(targetName)}
+                          className="text-primary-500 hover:text-primary-600 hover:underline font-medium"
+                        >
+                          {targetName}
+                        </button>
+                      ) : (
+                        <span className="text-engineering-400">
+                          {nav.relationship || 'unknown'}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -298,9 +385,9 @@ function EntityCard({ entity, isExpanded, isSelected, onToggle }: EntityCardProp
 
 function StatCard({ label, value }: { label: string; value: number }) {
   return (
-    <div className="bg-gray-50 rounded-lg p-4">
-      <div className="text-2xl font-bold text-primary-600">{value.toLocaleString()}</div>
-      <div className="text-sm text-gray-500 mt-1">{label}</div>
+    <div className="bg-engineering-100 rounded p-4">
+      <div className="text-2xl font-bold text-primary-500">{value.toLocaleString()}</div>
+      <div className="text-sm text-engineering-500 mt-1">{label}</div>
     </div>
   );
 }

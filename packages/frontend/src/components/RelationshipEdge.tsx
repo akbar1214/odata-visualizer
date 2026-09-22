@@ -1,5 +1,11 @@
-import { memo } from 'react';
-import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps, type Edge } from '@xyflow/react';
+import { memo, useMemo } from 'react';
+import {
+  BaseEdge,
+  EdgeLabelRenderer,
+  getBezierPath,
+  type EdgeProps,
+  type Edge,
+} from '@xyflow/react';
 import type { ODataRelationship } from '@odata-visualizer/shared';
 
 export type RelationshipEdgeData = Edge<{
@@ -46,37 +52,41 @@ function RelationshipEdgeComponent({
   });
 
   const relationship = data?.relationship;
-  const fromMultiplicity = relationship ? getMultiplicitySymbol(relationship.from.multiplicity) : '';
+  const fromMultiplicity = relationship
+    ? getMultiplicitySymbol(relationship.from.multiplicity)
+    : '';
   const toMultiplicity = relationship ? getMultiplicitySymbol(relationship.to.multiplicity) : '';
+
+  const baseEdgeStyle = useMemo(
+    () => ({
+      ...style,
+      stroke: '#8D8786',
+      strokeWidth: 2,
+    }),
+    [style],
+  );
+
+  const labelWrapperStyle = useMemo(
+    () => ({
+      position: 'absolute' as const,
+      transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+      pointerEvents: 'all' as const,
+    }),
+    [labelX, labelY],
+  );
 
   return (
     <>
-      <BaseEdge
-        id={id}
-        path={edgePath}
-        markerEnd={markerEnd}
-        style={{
-          ...style,
-          stroke: '#94a3b8',
-          strokeWidth: 2,
-        }}
-      />
+      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={baseEdgeStyle} />
       <EdgeLabelRenderer>
-        <div
-          style={{
-            position: 'absolute',
-            transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
-            pointerEvents: 'all',
-          }}
-          className="nodrag nopan"
-        >
+        <div style={labelWrapperStyle} className="nodrag nopan">
           {/* Multiplicity labels */}
-          <div className="flex items-center gap-2 bg-white px-2 py-0.5 rounded shadow-sm border border-gray-200">
-            <span className="text-[10px] font-mono text-primary-600 font-medium">
+          <div className="flex items-center gap-2 bg-white px-2 py-0.5 rounded shadow-odv border border-engineering-200">
+            <span className="text-[10px] font-mono text-primary-500 font-medium">
               {fromMultiplicity}
             </span>
-            <span className="text-[10px] text-gray-400">—</span>
-            <span className="text-[10px] font-mono text-primary-600 font-medium">
+            <span className="text-[10px] text-engineering-400">—</span>
+            <span className="text-[10px] font-mono text-primary-500 font-medium">
               {toMultiplicity}
             </span>
           </div>

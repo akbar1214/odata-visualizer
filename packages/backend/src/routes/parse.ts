@@ -1,7 +1,6 @@
 import { Router, type Request, type Response, type Router as ExpressRouter } from 'express';
 import multer from 'multer';
 import { parseCSDL } from '../services/xmlParser.js';
-import { createSession } from '../services/sessionManager.js';
 import type { ParseRequest, ParseResponse } from '@odata-visualizer/shared';
 
 const router: ExpressRouter = Router();
@@ -12,7 +11,12 @@ const upload = multer({
   },
   fileFilter: (_req, file, cb) => {
     const allowedMimes = ['application/xml', 'text/xml', 'application/octet-stream'];
-    if (allowedMimes.includes(file.mimetype) || file.originalname.endsWith('.xml') || file.originalname.endsWith('.csdl') || file.originalname.endsWith('.edmx')) {
+    if (
+      allowedMimes.includes(file.mimetype) ||
+      file.originalname.endsWith('.xml') ||
+      file.originalname.endsWith('.csdl') ||
+      file.originalname.endsWith('.edmx')
+    ) {
       cb(null, true);
     } else {
       cb(new Error('Invalid file type. Only XML files are allowed.'));
@@ -41,11 +45,6 @@ router.post('/file', upload.single('metadata'), async (req: Request, res: Respon
 
     const xmlContent = req.file.buffer.toString('utf-8');
     const data = await parseCSDL(xmlContent);
-
-    const sessionId = req.headers['x-session-id'] as string | undefined;
-    if (sessionId) {
-      createSession(sessionId, data);
-    }
 
     const response: ParseResponse = {
       success: true,
@@ -134,11 +133,6 @@ router.post('/url', async (req: Request, res: Response) => {
 
       const data = await parseCSDL(xmlContent);
 
-      const sessionId = req.headers['x-session-id'] as string | undefined;
-      if (sessionId) {
-        createSession(sessionId, data);
-      }
-
       const result: ParseResponse = {
         success: true,
         data,
@@ -194,11 +188,6 @@ router.post('/content', async (req: Request, res: Response) => {
     }
 
     const data = await parseCSDL(content);
-
-    const sessionId = req.headers['x-session-id'] as string | undefined;
-    if (sessionId) {
-      createSession(sessionId, data);
-    }
 
     const response: ParseResponse = {
       success: true,

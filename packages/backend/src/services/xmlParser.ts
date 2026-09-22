@@ -6,6 +6,8 @@ import type {
   ODataRelationship,
   ODataAssociationEnd,
   ODataNavigationProperty,
+  ODataFunctionImport,
+  ODataParameter,
 } from '@odata-visualizer/shared';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -31,6 +33,7 @@ const XML_PARSER_OPTIONS: X2jOptions = {
       'PropertyRef',
       'EntityContainer',
       'EntitySet',
+      'Function',
       'FunctionImport',
       'ActionImport',
       'Parameter',
@@ -53,7 +56,9 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
   try {
     parsed = parser.parse(xmlContent) as XmlElement;
   } catch (error) {
-    throw new Error(`Failed to parse XML: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw new Error(
+      `Failed to parse XML: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    );
   }
 
   if (!parsed) {
@@ -71,13 +76,14 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
   }
 
   const schemas = ensureArray(dataServices['Schema'] || dataServices['edm:Schema'] || []);
-  
+
   const entities: ODataEntity[] = [];
   const relationships: ODataRelationship[] = [];
+  const functionImports: ODataFunctionImport[] = [];
 
   for (const schema of schemas) {
     const namespace = schema['@_Namespace'] || '';
-    
+
     // Parse entity types
     const entityTypes = ensureArray(schema['EntityType'] || schema['edm:EntityType'] || []);
     for (const entityType of entityTypes) {
@@ -98,13 +104,43 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
         relationships.push(rel);
       }
     }
+
+    // Parse Function definitions to get return types
+    const functionDefs = new Map<string, string>();
+    const functions = ensureArray(schema['Function'] || schema['edm:Function'] || []);
+    for (const func of functions) {
+      const funcName = func['@_Name'] || '';
+      const returnType = func['ReturnType'] || func['edm:ReturnType'];
+      if (funcName && returnType) {
+        const returnTypeStr = returnType['@_Type'] || '';
+        if (returnTypeStr) {
+          functionDefs.set(funcName, returnTypeStr);
+        }
+      }
+    }
+
+    // Parse function imports from EntityContainer
+    const containers = ensureArray(
+      schema['EntityContainer'] || schema['edm:EntityContainer'] || [],
+    );
+    for (const container of containers) {
+      const funcImports = ensureArray(
+        container['FunctionImport'] || container['edm:FunctionImport'] || [],
+      );
+      for (const funcImport of funcImports) {
+        const fi = parseFunctionImport(funcImport, namespace, functionDefs);
+        if (fi) {
+          functionImports.push(fi);
+        }
+      }
+    }
   }
 
   return {
     entities,
     relationships,
     entityContainers: [],
-    functionImports: [],
+    functionImports,
     actionImports: [],
   };
 }
@@ -142,7 +178,7 @@ function parseEntityType(entityType: XmlElement, namespace: string): ODataEntity
 
   // Parse Navigation Properties
   const navPropElements = ensureArray(
-    entityType['NavigationProperty'] || entityType['edm:NavigationProperty'] || []
+    entityType['NavigationProperty'] || entityType['edm:NavigationProperty'] || [],
   );
   for (const navProp of navPropElements) {
     navigationProperties.push(parseNavigationProperty(navProp));
@@ -169,10 +205,18 @@ function parseComplexType(complexType: XmlElement, namespace: string): ODataEnti
   const isOpenType = complexType['@_OpenType'] === 'true';
 
   const properties: ODataProperty[] = [];
+  const navigationProperties: ODataNavigationProperty[] = [];
 
   const propElements = ensureArray(complexType['Property'] || complexType['edm:Property'] || []);
   for (const prop of propElements) {
     properties.push(parseProperty(prop, []));
+  }
+
+  const navPropElements = ensureArray(
+    complexType['NavigationProperty'] || complexType['edm:NavigationProperty'] || [],
+  );
+  for (const navProp of navPropElements) {
+    navigationProperties.push(parseNavigationProperty(navProp));
   }
 
   return {
@@ -182,7 +226,7 @@ function parseComplexType(complexType: XmlElement, namespace: string): ODataEnti
     abstract: false,
     openType: isOpenType,
     properties,
-    navigationProperties: [],
+    navigationProperties,
     keys: [],
   };
 }
@@ -220,21 +264,38 @@ function parseNavigationProperty(navProp: XmlElement): ODataNavigationProperty {
   const fromRole = navProp['@_FromRole'] || '';
   const toRole = navProp['@_ToRole'] || '';
 
+  // OData V4: extract target entity type from Type attribute
+  // e.g., "Collection(NorthwindModel.Product)" -> "Product"
+  // e.g., "NorthwindModel.Order" -> "Order"
+  const rawType = navProp['@_Type'] || '';
+  let targetType: string | undefined;
+  if (rawType) {
+    let typeStr = rawType;
+    // Strip Collection() wrapper
+    if (typeStr.startsWith('Collection(') && typeStr.endsWith(')')) {
+      typeStr = typeStr.slice(11, -1);
+    }
+    // Extract entity name from namespace-qualified type
+    if (typeStr.includes('.')) {
+      targetType = typeStr.split('.').pop() || typeStr;
+    } else {
+      targetType = typeStr;
+    }
+  }
+
   return {
     name,
     relationship,
     fromRole,
     toRole,
+    targetType,
   };
 }
 
 /**
  * Parse an Association element
  */
-function parseAssociation(
-  association: XmlElement,
-  namespace: string
-): ODataRelationship | null {
+function parseAssociation(association: XmlElement, namespace: string): ODataRelationship | null {
   const name = association['@_Name'];
   if (!name) return null;
 
@@ -270,6 +331,57 @@ function parseAssociationEnd(end: XmlElement): ODataAssociationEnd | null {
     entity,
     role,
     multiplicity,
+  };
+}
+
+/**
+ * Parse a FunctionImport element
+ */
+function parseFunctionImport(
+  funcImport: XmlElement,
+  _namespace: string,
+  functionDefs: Map<string, string>,
+): ODataFunctionImport | null {
+  const name = funcImport['@_Name'];
+  if (!name) return null;
+
+  const functionName = funcImport['@_Function'] || '';
+  const entitySet = funcImport['@_EntitySet'] || undefined;
+
+  // Look up return type from function definitions
+  let returnType: string | undefined;
+  if (functionName) {
+    // Extract function name from full path (e.g., "Namespace.FunctionName" -> "FunctionName")
+    const shortFuncName = functionName.includes('.')
+      ? functionName.split('.').pop() || functionName
+      : functionName;
+    returnType = functionDefs.get(shortFuncName);
+  }
+
+  const parameters: ODataParameter[] = [];
+  const paramElements = ensureArray(funcImport['Parameter'] || funcImport['edm:Parameter'] || []);
+  for (const param of paramElements) {
+    const paramName = param['@_Name'] || '';
+    const paramType = param['@_Type'] || 'Edm.String';
+    const nullable = param['@_Nullable'] !== 'false';
+    const maxLength = param['@_MaxLength'] ? parseInt(param['@_MaxLength'], 10) : undefined;
+
+    if (paramName) {
+      parameters.push({
+        name: paramName,
+        type: paramType,
+        nullable,
+        maxLength,
+      });
+    }
+  }
+
+  return {
+    name,
+    functionName,
+    entitySet,
+    parameter: parameters.length > 0 ? parameters : undefined,
+    returnType,
   };
 }
 
