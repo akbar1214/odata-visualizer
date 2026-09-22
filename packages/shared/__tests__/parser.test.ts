@@ -208,10 +208,10 @@ describe('XML Parser', () => {
         <Property Name="Id" Type="Edm.Int32" Nullable="false" />
       </EntityType>
       <Action Name="ResetData" />
-      <ActionImport Name="Reset" Action="Demo.Models.ResetData" EntitySet="Products" />
       <EntityContainer Name="DemoContainer">
         <EntitySet Name="Products" EntityType="Demo.Models.Product" />
         <EntitySet Name="Categories" EntityType="Demo.Models.Category" />
+        <ActionImport Name="Reset" Action="Demo.Models.ResetData" EntitySet="Products" />
       </EntityContainer>
     </Schema>
   </edmx:DataServices>

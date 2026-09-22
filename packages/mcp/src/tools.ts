@@ -1,4 +1,5 @@
 import type { ODataEntity, ODataMetadata, ODataRelationship } from '@odata-visualizer/shared';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { loadMetadataFromSource, type MetadataSource } from './metadata-loader.js';
 
 let currentMetadata: ODataMetadata | null = null;
@@ -11,10 +12,7 @@ export function resetMetadata(): void {
   currentMetadata = null;
 }
 
-export interface ToolResult {
-  content: Array<{ type: 'text'; text: string }>;
-  isError?: boolean;
-}
+export type ToolResult = CallToolResult;
 
 function errorResult(text: string): ToolResult {
   return { content: [{ type: 'text', text }], isError: true };
