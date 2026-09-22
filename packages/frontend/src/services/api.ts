@@ -63,6 +63,13 @@ export async function parseContent(content: string): Promise<ParseResponse> {
 }
 
 /**
+ * Clear the metadata currently held by the backend (and shared with MCP).
+ */
+export async function clearMetadata(): Promise<void> {
+  await fetch(`${API_BASE}/metadata/current`, { method: 'DELETE' });
+}
+
+/**
  * Check backend health
  */
 export async function checkHealth(): Promise<boolean> {

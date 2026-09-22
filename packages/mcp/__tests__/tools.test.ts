@@ -1,6 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { fileURLToPath } from 'node:url';
-import { handleToolCall, getMetadata, resetMetadata } from '../src/tools.js';
+import {
+  createToolHandler,
+  handleToolCall,
+  getMetadata,
+  resetMetadata,
+} from '../src/tools.js';
+import { createMetadataStore } from '../src/store.js';
 
 const minimalCSDL = `<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
@@ -290,6 +296,106 @@ describe('Windchill-like model tools', () => {
     expect(result.content[0].text).toContain(
       "GET <serviceRoot>/Parts('OR:wt.part.WTPart:123')/PTC.ProdMgmt.GetPartEstimate(Quantity=12.5)",
     );
+  });
+});
+
+describe('createToolHandler', () => {
+  it('errors with no metadata when the injected store is empty', async () => {
+    const handler = createToolHandler(createMetadataStore());
+    const result = await handler('list_entities', {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('No metadata loaded');
+  });
+
+  it('reads metadata injected into the store without load_metadata', async () => {
+    const { parseCSDL } = await import('@odata-visualizer/shared');
+    const { readFileSync } = await import('node:fs');
+    const xml = readFileSync(windchillFixture, 'utf-8');
+
+    const store = createMetadataStore();
+    store.set(await parseCSDL(xml), { sourceName: 'upload.xml', sourceType: 'file' });
+    const handler = createToolHandler(store);
+
+    const result = await handler('list_entity_sets', {});
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain('Parts -> PTC.ProdMgmt.Part');
+  });
+
+  it('reports the loaded source via get_metadata_status', async () => {
+    const { parseCSDL } = await import('@odata-visualizer/shared');
+    const { readFileSync } = await import('node:fs');
+    const xml = readFileSync(windchillFixture, 'utf-8');
+
+    const store = createMetadataStore();
+    store.set(await parseCSDL(xml), { sourceName: 'windchill.xml', sourceType: 'file' });
+    const result = await createToolHandler(store)('get_metadata_status', {});
+
+    const text = result.content[0].text;
+    expect(text).toContain('windchill.xml');
+    expect(text).toContain('Entities: 9');
+    expect(text).toContain('Entity sets: 4');
+  });
+});
+
+describe('load_metadata from backend server', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('fetches the current metadata from the backend API', async () => {
+    const { parseCSDL } = await import('@odata-visualizer/shared');
+    const { readFileSync } = await import('node:fs');
+    const metadata = await parseCSDL(readFileSync(windchillFixture, 'utf-8'));
+
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ success: true, metadata }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    resetMetadata();
+    const result = await handleToolCall('load_metadata', {
+      source: 'http://backend.test:3001',
+      type: 'server',
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('http://backend.test:3001/api/metadata/current');
+    expect(getMetadata()?.entityContainers.length).toBeGreaterThan(0);
+
+    const list = await handleToolCall('list_entity_sets', {});
+    expect(list.content[0].text).toContain('Parts');
+  });
+
+  it('errors clearly when the backend has no metadata', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ success: true, metadata: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    );
+
+    resetMetadata();
+    const result = await handleToolCall('load_metadata', { type: 'server' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('No metadata');
+  });
+
+  it('errors when the backend is unreachable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('nope', { status: 500 })),
+    );
+
+    resetMetadata();
+    const result = await handleToolCall('load_metadata', { type: 'server' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Error loading metadata');
   });
 });
 

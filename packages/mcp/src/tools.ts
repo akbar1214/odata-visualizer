@@ -24,18 +24,26 @@ import {
 } from '@odata-visualizer/shared';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { loadMetadataFromSource, type MetadataSource } from './metadata-loader.js';
+import { createMetadataStore, type MetadataAccessors } from './store.js';
 
-let currentMetadata: ODataMetadata | null = null;
+const defaultStore = createMetadataStore();
 
 export function getMetadata(): ODataMetadata | null {
-  return currentMetadata;
+  return defaultStore.get()?.metadata ?? null;
 }
 
 export function resetMetadata(): void {
-  currentMetadata = null;
+  defaultStore.clear();
 }
 
 export type ToolResult = CallToolResult;
+
+export type ToolHandler = (name: string, args: Record<string, unknown>) => Promise<ToolResult>;
+
+export interface ToolHandlerOptions {
+  /** When false, the load_metadata tool is rejected (e.g. the HTTP server). */
+  allowLoadMetadata?: boolean;
+}
 
 const DEFAULT_LIMIT = 50;
 
@@ -361,348 +369,391 @@ function formatFunctionParamLiteral(type: string, value: unknown): string {
   return formatV4Literal(String(value), type);
 }
 
-export async function handleToolCall(
-  name: string,
-  args: Record<string, unknown>,
-): Promise<ToolResult> {
-  switch (name) {
-    case 'load_metadata': {
-      const source = args['source'] as string;
-      const type = args['type'] as 'file' | 'url';
+export function createToolHandler(
+  accessors: MetadataAccessors,
+  options: ToolHandlerOptions = {},
+): ToolHandler {
+  const allowLoadMetadata = options.allowLoadMetadata ?? true;
 
-      if (!source) {
-        return errorResult('Error: source is required');
-      }
+  return async (name, args) => {
+    const currentMetadata = accessors.get()?.metadata ?? null;
 
-      try {
-        const metadataSource: MetadataSource = { type, path: source };
-        currentMetadata = await loadMetadataFromSource(metadataSource);
+    switch (name) {
+      case 'load_metadata': {
+        if (!allowLoadMetadata) {
+          return errorResult(
+            'load_metadata is disabled on this server. Metadata is supplied by the backend: upload a file in the OData Visualizer UI.',
+          );
+        }
 
-        const preview = currentMetadata.entities.slice(0, 10);
-        const summary = [
-          `Successfully loaded OData metadata from ${source}`,
-          '',
-          `Version: ${currentMetadata.version ?? 'unknown'}`,
-          `Entities: ${currentMetadata.entities.length} (${currentMetadata.entities.filter((e) => e.kind === 'complex').length} complex types)`,
-          `Entity sets: ${getAllEntitySets(currentMetadata).length}`,
-          `Actions: ${currentMetadata.actions.length}`,
-          `Functions: ${currentMetadata.functions.length}`,
-          `Enums: ${currentMetadata.enumTypes.length}`,
-          `Relationships: ${currentMetadata.relationships.length}`,
-          '',
-          'First entities:',
-          ...preview.map((e) => `  - ${formatEntitySummary(e, currentMetadata!)}`),
-          currentMetadata.entities.length > preview.length
-            ? `  ... and ${currentMetadata.entities.length - preview.length} more (use list_entities or search_entities)`
-            : '',
-        ]
-          .filter((line) => line !== '')
-          .join('\n');
+        const source = asString(args['source']);
+        const type = (args['type'] as MetadataSource['type']) ?? 'file';
 
-        return textResult(summary);
-      } catch (error) {
-        return errorResult(
-          `Error loading metadata: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        );
-      }
-    }
+        if (!source && type !== 'server') {
+          return errorResult('Error: source is required');
+        }
 
-    case 'search_entities': {
-      if (!currentMetadata) return noMetadata();
-      const metadata = currentMetadata;
-      const query = (asString(args['query']) ?? '').toLowerCase();
-      if (!query) return errorResult('Error: query is required');
-      const limit = asNumber(args['limit']) ?? 20;
+        try {
+          const metadataSource: MetadataSource = { type, path: source };
+          const metadata = await loadMetadataFromSource(metadataSource);
+          accessors.set(metadata, {
+            sourceName: source ?? 'backend',
+            sourceType: type,
+          });
 
-      const scored = metadata.entities
-        .map((entity) => {
-          const names = [
-            entity.name.toLowerCase(),
-            (entity.qualifiedName ?? '').toLowerCase(),
-            (entity.label ?? '').toLowerCase(),
-          ];
-          let score = -1;
-          if (names.some((n) => n === query)) score = 0;
-          else if (names.some((n) => n.startsWith(query))) score = 1;
-          else if (names.some((n) => n.includes(query))) score = 2;
-          else if (entity.properties.some((p) => p.name.toLowerCase().includes(query))) score = 3;
-          else if (
-            Object.values(entity.annotations ?? {}).some((v) => v.toLowerCase().includes(query))
-          )
-            score = 4;
-          return { entity, score };
-        })
-        .filter((s) => s.score >= 0)
-        .sort((a, b) => a.score - b.score)
-        .slice(0, limit);
+          const preview = metadata.entities.slice(0, 10);
+          const summary = [
+            `Successfully loaded OData metadata from ${source ?? 'the backend'}`,
+            '',
+            `Version: ${metadata.version ?? 'unknown'}`,
+            `Entities: ${metadata.entities.length} (${metadata.entities.filter((e) => e.kind === 'complex').length} complex types)`,
+            `Entity sets: ${getAllEntitySets(metadata).length}`,
+            `Actions: ${metadata.actions.length}`,
+            `Functions: ${metadata.functions.length}`,
+            `Enums: ${metadata.enumTypes.length}`,
+            `Relationships: ${metadata.relationships.length}`,
+            '',
+            'First entities:',
+            ...preview.map((e) => `  - ${formatEntitySummary(e, metadata)}`),
+            metadata.entities.length > preview.length
+              ? `  ... and ${metadata.entities.length - preview.length} more (use list_entities or search_entities)`
+              : '',
+          ]
+            .filter((line) => line !== '')
+            .join('\n');
 
-      if (scored.length === 0) {
-        const suggestions = suggestNames(
-          query,
-          metadata.entities.map((e) => e.name),
-        );
-        return textResult(
-          `No entities matching "${args['query']}".${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
-        );
-      }
-
-      const lines = scored.map((s) => formatEntitySummary(s.entity, metadata));
-      return textResult(`Found ${scored.length} matching entities:\n\n${lines.join('\n')}`);
-    }
-
-    case 'list_entities': {
-      if (!currentMetadata) return noMetadata();
-      const metadata = currentMetadata;
-      const kind = asString(args['kind']) ?? 'all';
-      let entities = metadata.entities;
-      if (kind === 'complex') entities = entities.filter((e) => e.kind === 'complex');
-      if (kind === 'entity') entities = entities.filter((e) => e.kind !== 'complex');
-
-      if (entities.length === 0) {
-        return textResult('No entities found in the metadata.');
-      }
-
-      const { slice, note } = paginate(entities, args);
-      const list = slice.map((e) => formatEntitySummary(e, metadata)).join('\n');
-      return textResult(`Entities:\n\n${list}${note}`);
-    }
-
-    case 'get_entity_details': {
-      if (!currentMetadata) return noMetadata();
-      const metadata = currentMetadata;
-      const entityName = asString(args['entityName']);
-      if (!entityName) return errorResult('Error: entityName is required');
-
-      const resolved = resolveEntityArg(metadata, entityName);
-      if ('error' in resolved) return resolved.error;
-
-      return textResult(formatEntityDetails(resolved.entity, metadata));
-    }
-
-    case 'list_entity_sets': {
-      if (!currentMetadata) return noMetadata();
-      const metadata = currentMetadata;
-      const sets = getAllEntitySets(metadata);
-      if (sets.length === 0) return textResult('No entity sets found in the metadata.');
-
-      const { slice, note } = paginate(sets, args);
-      const list = slice.map((s) => formatEntitySet(s)).join('\n');
-      return textResult(`Entity sets:\n\n${list}${note}`);
-    }
-
-    case 'get_relationships': {
-      if (!currentMetadata) return noMetadata();
-      const metadata = currentMetadata;
-      const entityName = asString(args['entityName']);
-      let rels = metadata.relationships;
-      if (entityName) {
-        const needle = entityName.toLowerCase();
-        rels = rels.filter(
-          (r) => r.from.entity.toLowerCase() === needle || r.to.entity.toLowerCase() === needle,
-        );
-      }
-
-      if (rels.length === 0) {
-        return textResult(
-          entityName
-            ? `No relationships found for "${entityName}".`
-            : 'No relationships found in the metadata.',
-        );
-      }
-
-      const { slice, note } = paginate(rels, args);
-      return textResult(`Relationships:\n\n${slice.map(formatRelationship).join('\n')}${note}`);
-    }
-
-    case 'list_actions': {
-      if (!currentMetadata) return noMetadata();
-      const metadata = currentMetadata;
-      const boundArg = args['bound'];
-      let actions = metadata.actions;
-      if (typeof boundArg === 'boolean') actions = actions.filter((a) => a.isBound === boundArg);
-      if (actions.length === 0) return textResult('No actions found in the metadata.');
-
-      const { slice, note } = paginate(actions, args);
-      const list = slice.map((a) => describeCallable(a)).join('\n');
-      return textResult(`Actions:\n\n${list}${note}`);
-    }
-
-    case 'list_functions': {
-      if (!currentMetadata) return noMetadata();
-      const metadata = currentMetadata;
-      const boundArg = args['bound'];
-      let functions = metadata.functions;
-      if (typeof boundArg === 'boolean')
-        functions = functions.filter((f) => f.isBound === boundArg);
-      if (functions.length === 0) return textResult('No functions found in the metadata.');
-
-      const { slice, note } = paginate(functions, args);
-      const list = slice.map((f) => describeCallable(f)).join('\n');
-      return textResult(`Functions:\n\n${list}${note}`);
-    }
-
-    case 'get_action_details': {
-      if (!currentMetadata) return noMetadata();
-      const metadata = currentMetadata;
-      const actionName = asString(args['name']);
-      if (!actionName) return errorResult('Error: name is required');
-
-      const action = findCallable(metadata.actions, actionName);
-      if (!action) {
-        const suggestions = suggestNames(
-          actionName,
-          metadata.actions.map((a) => a.name),
-        );
-        return errorResult(
-          `Action "${actionName}" not found.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
-        );
-      }
-      const importName = metadata.actionImports.find(
-        (i) => i.qualifiedActionName === action.qualifiedName || i.actionName === action.name,
-      )?.name;
-      return textResult(
-        formatCallableDetails(action, metadata, importName, asString(args['baseUrl']), false),
-      );
-    }
-
-    case 'get_function_details': {
-      if (!currentMetadata) return noMetadata();
-      const metadata = currentMetadata;
-      const functionName = asString(args['name']);
-      if (!functionName) return errorResult('Error: name is required');
-
-      const func = findCallable(metadata.functions, functionName);
-      if (!func) {
-        const suggestions = suggestNames(
-          functionName,
-          metadata.functions.map((f) => f.name),
-        );
-        return errorResult(
-          `Function "${functionName}" not found.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
-        );
-      }
-      const importName = metadata.functionImports.find(
-        (i) => i.qualifiedFunctionName === func.qualifiedName || i.functionName === func.name,
-      )?.name;
-      return textResult(
-        formatCallableDetails(func, metadata, importName, asString(args['baseUrl']), true),
-      );
-    }
-
-    case 'list_enums': {
-      if (!currentMetadata) return noMetadata();
-      const metadata = currentMetadata;
-      const lines: string[] = [];
-
-      if (metadata.enumTypes.length > 0) {
-        lines.push('Enum Types:');
-        for (const e of metadata.enumTypes) {
-          lines.push(
-            `  - ${e.qualifiedName ?? e.name} (${e.underlyingType}): ${e.members
-              .map((m) => (m.value ? `${m.name}=${m.value}` : m.name))
-              .join(', ')}`,
+          return textResult(summary);
+        } catch (error) {
+          return errorResult(
+            `Error loading metadata: ${error instanceof Error ? error.message : 'Unknown error'}`,
           );
         }
       }
 
-      if (metadata.typeDefinitions.length > 0) {
-        lines.push('\nType Definitions:');
-        for (const t of metadata.typeDefinitions) {
-          lines.push(`  - ${t.qualifiedName ?? t.name}: ${t.underlyingType}`);
+      case 'get_metadata_status': {
+        const stored = accessors.get();
+        if (!stored) {
+          return textResult(
+            'No metadata loaded. Upload a file in the OData Visualizer UI or call load_metadata.',
+          );
         }
+        const { metadata, info } = stored;
+        return textResult(
+          [
+            'Metadata loaded:',
+            `  Source: ${info.sourceName ?? 'unknown'} (${info.sourceType ?? 'unknown'})`,
+            `  Loaded: ${info.loadedAt}`,
+            `  Entities: ${metadata.entities.length}`,
+            `  Entity sets: ${getAllEntitySets(metadata).length}`,
+            `  Actions: ${metadata.actions.length}`,
+            `  Functions: ${metadata.functions.length}`,
+            `  Enums: ${metadata.enumTypes.length}`,
+            `  Relationships: ${metadata.relationships.length}`,
+          ].join('\n'),
+        );
       }
 
-      if (lines.length === 0) return textResult('No enum types or type definitions found.');
-      return textResult(lines.join('\n'));
-    }
+      case 'search_entities': {
+        if (!currentMetadata) return noMetadata();
+        const metadata = currentMetadata;
+        const query = (asString(args['query']) ?? '').toLowerCase();
+        if (!query) return errorResult('Error: query is required');
+        const limit = asNumber(args['limit']) ?? 20;
 
-    case 'build_query': {
-      if (!currentMetadata) return noMetadata();
-      const metadata = currentMetadata;
-      const entitySet = asString(args['entitySet']);
-      if (!entitySet) return errorResult('Error: entitySet is required');
+        const scored = metadata.entities
+          .map((entity) => {
+            const names = [
+              entity.name.toLowerCase(),
+              (entity.qualifiedName ?? '').toLowerCase(),
+              (entity.label ?? '').toLowerCase(),
+            ];
+            let score = -1;
+            if (names.some((n) => n === query)) score = 0;
+            else if (names.some((n) => n.startsWith(query))) score = 1;
+            else if (names.some((n) => n.includes(query))) score = 2;
+            else if (entity.properties.some((p) => p.name.toLowerCase().includes(query))) score = 3;
+            else if (
+              Object.values(entity.annotations ?? {}).some((v) => v.toLowerCase().includes(query))
+            )
+              score = 4;
+            return { entity, score };
+          })
+          .filter((s) => s.score >= 0)
+          .sort((a, b) => a.score - b.score)
+          .slice(0, limit);
 
-      try {
-        const url = buildQueryUrl({
-          entitySet,
-          baseUrl: asString(args['baseUrl']),
-          filters: args['filters'] as FilterClause[] | undefined,
-          filterLogic: args['filterLogic'] as 'and' | 'or' | undefined,
-          select: args['select'] as string[] | undefined,
-          expand: args['expand'] as ExpandNode[] | undefined,
-          orderBy: asString(args['orderBy']),
-          top: asNumber(args['top']),
-          skip: asNumber(args['skip']),
-          count: typeof args['count'] === 'boolean' ? (args['count'] as boolean) : undefined,
-          search: asString(args['search']),
-          metadata,
-        });
-
-        const warnings: string[] = [];
-        if (!findEntitySet(metadata, entitySet)) {
+        if (scored.length === 0) {
           const suggestions = suggestNames(
-            entitySet,
-            getAllEntitySets(metadata).map((s) => s.name),
+            query,
+            metadata.entities.map((e) => e.name),
           );
-          warnings.push(
-            `Note: "${entitySet}" is not a known entity set.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
+          return textResult(
+            `No entities matching "${args['query']}".${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
           );
         }
 
-        const lines = [`GET ${url}`];
-        if (warnings.length > 0) lines.push('', ...warnings);
+        const lines = scored.map((s) => formatEntitySummary(s.entity, metadata));
+        return textResult(`Found ${scored.length} matching entities:\n\n${lines.join('\n')}`);
+      }
+
+      case 'list_entities': {
+        if (!currentMetadata) return noMetadata();
+        const metadata = currentMetadata;
+        const kind = asString(args['kind']) ?? 'all';
+        let entities = metadata.entities;
+        if (kind === 'complex') entities = entities.filter((e) => e.kind === 'complex');
+        if (kind === 'entity') entities = entities.filter((e) => e.kind !== 'complex');
+
+        if (entities.length === 0) {
+          return textResult('No entities found in the metadata.');
+        }
+
+        const { slice, note } = paginate(entities, args);
+        const list = slice.map((e) => formatEntitySummary(e, metadata)).join('\n');
+        return textResult(`Entities:\n\n${list}${note}`);
+      }
+
+      case 'get_entity_details': {
+        if (!currentMetadata) return noMetadata();
+        const metadata = currentMetadata;
+        const entityName = asString(args['entityName']);
+        if (!entityName) return errorResult('Error: entityName is required');
+
+        const resolved = resolveEntityArg(metadata, entityName);
+        if ('error' in resolved) return resolved.error;
+
+        return textResult(formatEntityDetails(resolved.entity, metadata));
+      }
+
+      case 'list_entity_sets': {
+        if (!currentMetadata) return noMetadata();
+        const metadata = currentMetadata;
+        const sets = getAllEntitySets(metadata);
+        if (sets.length === 0) return textResult('No entity sets found in the metadata.');
+
+        const { slice, note } = paginate(sets, args);
+        const list = slice.map((s) => formatEntitySet(s)).join('\n');
+        return textResult(`Entity sets:\n\n${list}${note}`);
+      }
+
+      case 'get_relationships': {
+        if (!currentMetadata) return noMetadata();
+        const metadata = currentMetadata;
+        const entityName = asString(args['entityName']);
+        let rels = metadata.relationships;
+        if (entityName) {
+          const needle = entityName.toLowerCase();
+          rels = rels.filter(
+            (r) => r.from.entity.toLowerCase() === needle || r.to.entity.toLowerCase() === needle,
+          );
+        }
+
+        if (rels.length === 0) {
+          return textResult(
+            entityName
+              ? `No relationships found for "${entityName}".`
+              : 'No relationships found in the metadata.',
+          );
+        }
+
+        const { slice, note } = paginate(rels, args);
+        return textResult(`Relationships:\n\n${slice.map(formatRelationship).join('\n')}${note}`);
+      }
+
+      case 'list_actions': {
+        if (!currentMetadata) return noMetadata();
+        const metadata = currentMetadata;
+        const boundArg = args['bound'];
+        let actions = metadata.actions;
+        if (typeof boundArg === 'boolean') actions = actions.filter((a) => a.isBound === boundArg);
+        if (actions.length === 0) return textResult('No actions found in the metadata.');
+
+        const { slice, note } = paginate(actions, args);
+        const list = slice.map((a) => describeCallable(a)).join('\n');
+        return textResult(`Actions:\n\n${list}${note}`);
+      }
+
+      case 'list_functions': {
+        if (!currentMetadata) return noMetadata();
+        const metadata = currentMetadata;
+        const boundArg = args['bound'];
+        let functions = metadata.functions;
+        if (typeof boundArg === 'boolean')
+          functions = functions.filter((f) => f.isBound === boundArg);
+        if (functions.length === 0) return textResult('No functions found in the metadata.');
+
+        const { slice, note } = paginate(functions, args);
+        const list = slice.map((f) => describeCallable(f)).join('\n');
+        return textResult(`Functions:\n\n${list}${note}`);
+      }
+
+      case 'get_action_details': {
+        if (!currentMetadata) return noMetadata();
+        const metadata = currentMetadata;
+        const actionName = asString(args['name']);
+        if (!actionName) return errorResult('Error: name is required');
+
+        const action = findCallable(metadata.actions, actionName);
+        if (!action) {
+          const suggestions = suggestNames(
+            actionName,
+            metadata.actions.map((a) => a.name),
+          );
+          return errorResult(
+            `Action "${actionName}" not found.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
+          );
+        }
+        const importName = metadata.actionImports.find(
+          (i) => i.qualifiedActionName === action.qualifiedName || i.actionName === action.name,
+        )?.name;
+        return textResult(
+          formatCallableDetails(action, metadata, importName, asString(args['baseUrl']), false),
+        );
+      }
+
+      case 'get_function_details': {
+        if (!currentMetadata) return noMetadata();
+        const metadata = currentMetadata;
+        const functionName = asString(args['name']);
+        if (!functionName) return errorResult('Error: name is required');
+
+        const func = findCallable(metadata.functions, functionName);
+        if (!func) {
+          const suggestions = suggestNames(
+            functionName,
+            metadata.functions.map((f) => f.name),
+          );
+          return errorResult(
+            `Function "${functionName}" not found.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
+          );
+        }
+        const importName = metadata.functionImports.find(
+          (i) => i.qualifiedFunctionName === func.qualifiedName || i.functionName === func.name,
+        )?.name;
+        return textResult(
+          formatCallableDetails(func, metadata, importName, asString(args['baseUrl']), true),
+        );
+      }
+
+      case 'list_enums': {
+        if (!currentMetadata) return noMetadata();
+        const metadata = currentMetadata;
+        const lines: string[] = [];
+
+        if (metadata.enumTypes.length > 0) {
+          lines.push('Enum Types:');
+          for (const e of metadata.enumTypes) {
+            lines.push(
+              `  - ${e.qualifiedName ?? e.name} (${e.underlyingType}): ${e.members
+                .map((m) => (m.value ? `${m.name}=${m.value}` : m.name))
+                .join(', ')}`,
+            );
+          }
+        }
+
+        if (metadata.typeDefinitions.length > 0) {
+          lines.push('\nType Definitions:');
+          for (const t of metadata.typeDefinitions) {
+            lines.push(`  - ${t.qualifiedName ?? t.name}: ${t.underlyingType}`);
+          }
+        }
+
+        if (lines.length === 0) return textResult('No enum types or type definitions found.');
         return textResult(lines.join('\n'));
-      } catch (error) {
-        return errorResult(
-          `Error building query: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        );
-      }
-    }
-
-    case 'build_action_invocation': {
-      if (!currentMetadata) return noMetadata();
-      const metadata = currentMetadata;
-      const actionName = asString(args['actionName']);
-      if (!actionName) return errorResult('Error: actionName is required');
-
-      const action = findCallable(metadata.actions, actionName);
-      if (!action) {
-        const suggestions = suggestNames(
-          actionName,
-          metadata.actions.map((a) => a.name),
-        );
-        return errorResult(
-          `Action "${actionName}" not found.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
-        );
       }
 
-      return buildInvocation('POST', action, metadata, args, false);
-    }
+      case 'build_query': {
+        if (!currentMetadata) return noMetadata();
+        const metadata = currentMetadata;
+        const entitySet = asString(args['entitySet']);
+        if (!entitySet) return errorResult('Error: entitySet is required');
 
-    case 'build_function_invocation': {
-      if (!currentMetadata) return noMetadata();
-      const metadata = currentMetadata;
-      const functionName = asString(args['functionName']);
-      if (!functionName) return errorResult('Error: functionName is required');
+        try {
+          const url = buildQueryUrl({
+            entitySet,
+            baseUrl: asString(args['baseUrl']),
+            filters: args['filters'] as FilterClause[] | undefined,
+            filterLogic: args['filterLogic'] as 'and' | 'or' | undefined,
+            select: args['select'] as string[] | undefined,
+            expand: args['expand'] as ExpandNode[] | undefined,
+            orderBy: asString(args['orderBy']),
+            top: asNumber(args['top']),
+            skip: asNumber(args['skip']),
+            count: typeof args['count'] === 'boolean' ? (args['count'] as boolean) : undefined,
+            search: asString(args['search']),
+            metadata,
+          });
 
-      const func = findCallable(metadata.functions, functionName);
-      if (!func) {
-        const suggestions = suggestNames(
-          functionName,
-          metadata.functions.map((f) => f.name),
-        );
-        return errorResult(
-          `Function "${functionName}" not found.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
-        );
+          const warnings: string[] = [];
+          if (!findEntitySet(metadata, entitySet)) {
+            const suggestions = suggestNames(
+              entitySet,
+              getAllEntitySets(metadata).map((s) => s.name),
+            );
+            warnings.push(
+              `Note: "${entitySet}" is not a known entity set.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
+            );
+          }
+
+          const lines = [`GET ${url}`];
+          if (warnings.length > 0) lines.push('', ...warnings);
+          return textResult(lines.join('\n'));
+        } catch (error) {
+          return errorResult(
+            `Error building query: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          );
+        }
       }
 
-      return buildInvocation('GET', func, metadata, args, true);
-    }
+      case 'build_action_invocation': {
+        if (!currentMetadata) return noMetadata();
+        const metadata = currentMetadata;
+        const actionName = asString(args['actionName']);
+        if (!actionName) return errorResult('Error: actionName is required');
 
-    default:
-      return errorResult(`Unknown tool: ${name}`);
-  }
+        const action = findCallable(metadata.actions, actionName);
+        if (!action) {
+          const suggestions = suggestNames(
+            actionName,
+            metadata.actions.map((a) => a.name),
+          );
+          return errorResult(
+            `Action "${actionName}" not found.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
+          );
+        }
+
+        return buildInvocation('POST', action, metadata, args, false);
+      }
+
+      case 'build_function_invocation': {
+        if (!currentMetadata) return noMetadata();
+        const metadata = currentMetadata;
+        const functionName = asString(args['functionName']);
+        if (!functionName) return errorResult('Error: functionName is required');
+
+        const func = findCallable(metadata.functions, functionName);
+        if (!func) {
+          const suggestions = suggestNames(
+            functionName,
+            metadata.functions.map((f) => f.name),
+          );
+          return errorResult(
+            `Function "${functionName}" not found.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
+          );
+        }
+
+        return buildInvocation('GET', func, metadata, args, true);
+      }
+
+      default:
+        return errorResult(`Unknown tool: ${name}`);
+    }
+  };
 }
+
+const defaultHandler = createToolHandler(defaultStore);
+
+export const handleToolCall: ToolHandler = (name, args) => defaultHandler(name, args);
 
 function findCallable<T extends ODataAction | ODataFunction>(
   items: T[],

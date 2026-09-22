@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import type { ODataMetadata, ParseResponse } from '@odata-visualizer/shared';
-import { parseFile, parseUrl } from '../services/api';
+import { parseFile, parseUrl, clearMetadata } from '../services/api';
 
 export interface MetadataState {
   metadata: ODataMetadata | null;
@@ -80,6 +80,9 @@ export function useMetadata() {
       error: null,
       parseTimeMs: null,
       fileSizeBytes: null,
+    });
+    void clearMetadata().catch(() => {
+      // Best-effort: don't block clearing the UI if the backend is unreachable.
     });
   }, []);
 
