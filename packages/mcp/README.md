@@ -1,6 +1,6 @@
 # OData Visualizer MCP Server
 
-An MCP (Model Context Protocol) server that allows LLMs to explore OData metadata schemas and generate OData queries from natural language questions.
+An MCP (Model Context Protocol) server that lets LLMs explore OData metadata schemas.
 
 ## How It Works
 
@@ -124,119 +124,17 @@ Once configured, ask your LLM:
 3. **Get entity details:**
    > "Show me the Product entity schema"
 
-4. **Generate a query:**
-   > "How do I get all products that cost more than $50?"
-
-The LLM will call the tools to understand the schema, then generate the appropriate OData query like:
-
-```
-GET /Products?$filter=Price gt 50
-```
-
-## Deployment with Docker
-
-The application can be deployed as a single Docker container that includes the web UI with an embedded AI chat panel.
-
-### Environment Variables
-
-Configure the LLM provider via environment variables. The application uses an OpenAI-compatible API, so you can use LiteLLM as a proxy to any LLM provider.
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OPENAI_BASE_URL` | Base URL for the LLM API (LiteLLM proxy) | `http://localhost:4000/v1` |
-| `OPENAI_API_KEY` | API key for authentication | `sk-placeholder` |
-| `OPENAI_MODEL` | Model name to use | `gpt-4o` |
-| `PORT` | Server port | `3001` |
-
-### LiteLLM Proxy Setup
-
-If you're using LiteLLM as a proxy, configure it to route to your preferred LLM provider:
-
-```yaml
-# litellm_config.yaml
-model_list:
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: claude-3-opus
-    litellm_params:
-      model: anthropic/claude-3-opus-20240229
-      api_key: os.environ/ANTHROPIC_API_KEY
-```
-
-Start LiteLLM:
-
-```bash
-litellm --config litellm_config.yaml --port 4000
-```
-
-### Running with Docker
-
-```bash
-# Build the image
-docker build -f docker/Containerfile -t odata-visualizer .
-
-# Run with LiteLLM proxy
-docker run -p 3001:3001 \
-  -e OPENAI_BASE_URL=http://host.docker.internal:4000/v1 \
-  -e OPENAI_API_KEY=your-api-key \
-  -e OPENAI_MODEL=gpt-4o \
-  odata-visualizer
-```
-
-Or use docker-compose:
-
-```yaml
-version: '3.8'
-services:
-  odata-visualizer:
-    build:
-      context: .
-      dockerfile: docker/Containerfile
-    ports:
-      - "3001:3001"
-    environment:
-      - OPENAI_BASE_URL=http://litellm:4000/v1
-      - OPENAI_API_KEY=your-api-key
-      - OPENAI_MODEL=gpt-4o
-    depends_on:
-      - litellm
-
-  litellm:
-    image: ghcr.io/berriai/litellm:main-latest
-    ports:
-      - "4000:4000"
-    volumes:
-      - ./litellm_config.yaml:/app/config.yaml
-    command: --config /app/config.yaml
-    environment:
-      - OPENAI_API_KEY=your-openai-key
-      - ANTHROPIC_API_KEY=your-anthropic-key
-```
-
-### Using the Web UI
-
-1. Open `http://localhost:3001` in your browser
-2. Upload an OData metadata XML file or enter a metadata URL
-3. View the interactive ER diagram
-4. Click "AI Chat" in the header to open the chat panel
-5. Ask questions like:
-   - "How do I get all products from Germany?"
-   - "What's the relationship between Orders and Customers?"
-   - "Show me the top 10 most expensive products"
-
-The AI will generate OData queries based on your uploaded metadata.
+4. **Inspect relationships:**
+   > "How are Orders and Customers related?"
 
 ## Development
 
 ```bash
-# Watch mode
-cd packages/mcp
-npx tsx watch src/index.ts
-
 # Type check
 pnpm mcp:typecheck
+
+# Run tests
+pnpm --filter @odata-visualizer/mcp test
 ```
 
 ## Project Structure
@@ -246,7 +144,9 @@ packages/mcp/
 ├── src/
 │   ├── index.ts           # MCP server entry point
 │   ├── tools.ts           # Tool definitions and handlers
-│   └── metadata-loader.ts # CSDL XML parser
+│   └── metadata-loader.ts # Metadata loading from file/URL
+├── __tests__/
+│   └── tools.test.ts      # Tool handler tests
 ├── package.json
 └── tsconfig.json
 ```

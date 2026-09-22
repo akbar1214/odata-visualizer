@@ -1,10 +1,21 @@
-import type { ODataEntity, ODataRelationship } from '@odata-visualizer/shared';
+import type { ODataEntity, ODataMetadata, ODataRelationship } from '@odata-visualizer/shared';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { loadMetadataFromSource, type MetadataSource } from './metadata-loader.js';
 
-let currentMetadata: import('@odata-visualizer/shared').ODataMetadata | null = null;
+let currentMetadata: ODataMetadata | null = null;
 
-export function getMetadata(): import('@odata-visualizer/shared').ODataMetadata | null {
+export function getMetadata(): ODataMetadata | null {
   return currentMetadata;
+}
+
+export function resetMetadata(): void {
+  currentMetadata = null;
+}
+
+export type ToolResult = CallToolResult;
+
+function errorResult(text: string): ToolResult {
+  return { content: [{ type: 'text', text }], isError: true };
 }
 
 function formatEntitySummary(entity: ODataEntity): string {
@@ -39,7 +50,11 @@ function formatEntityDetails(entity: ODataEntity): string {
   if (entity.navigationProperties.length > 0) {
     lines.push('\nNavigation Properties:');
     for (const nav of entity.navigationProperties) {
-      lines.push(`  - ${nav.name} -> ${nav.relationship} (${nav.fromRole} -> ${nav.toRole})`);
+      if (nav.targetType) {
+        lines.push(`  - ${nav.name} -> ${nav.targetType}`);
+      } else {
+        lines.push(`  - ${nav.name} -> ${nav.relationship} (${nav.fromRole} -> ${nav.toRole})`);
+      }
     }
   }
 
@@ -53,16 +68,14 @@ function formatRelationship(rel: ODataRelationship): string {
 export async function handleToolCall(
   name: string,
   args: Record<string, unknown>,
-): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+): Promise<ToolResult> {
   switch (name) {
     case 'load_metadata': {
       const source = args['source'] as string;
       const type = args['type'] as 'file' | 'url';
 
       if (!source) {
-        return {
-          content: [{ type: 'text', text: 'Error: source is required' }],
-        };
+        return errorResult('Error: source is required');
       }
 
       try {
@@ -80,33 +93,19 @@ export async function handleToolCall(
 
         return { content: [{ type: 'text', text: summary }] };
       } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Error loading metadata: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            },
-          ],
-        };
+        return errorResult(
+          `Error loading metadata: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        );
       }
     }
 
     case 'list_entities': {
       if (!currentMetadata) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: 'No metadata loaded. Call load_metadata first with a file path or URL.',
-            },
-          ],
-        };
+        return errorResult('No metadata loaded. Call load_metadata first with a file path or URL.');
       }
 
       if (currentMetadata.entities.length === 0) {
-        return {
-          content: [{ type: 'text', text: 'No entities found in the metadata.' }],
-        };
+        return { content: [{ type: 'text', text: 'No entities found in the metadata.' }] };
       }
 
       const list = currentMetadata.entities.map((e) => formatEntitySummary(e)).join('\n');
@@ -122,21 +121,12 @@ export async function handleToolCall(
 
     case 'get_entity_details': {
       if (!currentMetadata) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: 'No metadata loaded. Call load_metadata first with a file path or URL.',
-            },
-          ],
-        };
+        return errorResult('No metadata loaded. Call load_metadata first with a file path or URL.');
       }
 
       const entityName = args['entityName'] as string;
       if (!entityName) {
-        return {
-          content: [{ type: 'text', text: 'Error: entityName is required' }],
-        };
+        return errorResult('Error: entityName is required');
       }
 
       const entity = currentMetadata.entities.find(
@@ -145,14 +135,7 @@ export async function handleToolCall(
 
       if (!entity) {
         const available = currentMetadata.entities.map((e) => e.name).join(', ');
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Entity "${entityName}" not found. Available entities: ${available}`,
-            },
-          ],
-        };
+        return errorResult(`Entity "${entityName}" not found. Available entities: ${available}`);
       }
 
       return {
@@ -162,20 +145,11 @@ export async function handleToolCall(
 
     case 'get_relationships': {
       if (!currentMetadata) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: 'No metadata loaded. Call load_metadata first with a file path or URL.',
-            },
-          ],
-        };
+        return errorResult('No metadata loaded. Call load_metadata first with a file path or URL.');
       }
 
       if (currentMetadata.relationships.length === 0) {
-        return {
-          content: [{ type: 'text', text: 'No relationships found in the metadata.' }],
-        };
+        return { content: [{ type: 'text', text: 'No relationships found in the metadata.' }] };
       }
 
       const rels = currentMetadata.relationships.map((r) => formatRelationship(r)).join('\n');
@@ -190,8 +164,6 @@ export async function handleToolCall(
     }
 
     default:
-      return {
-        content: [{ type: 'text', text: `Unknown tool: ${name}` }],
-      };
+      return errorResult(`Unknown tool: ${name}`);
   }
 }

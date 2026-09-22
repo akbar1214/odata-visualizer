@@ -21,6 +21,7 @@ An interactive web application for visualizing OData metadata as entity-relation
 | Styling | Tailwind CSS |
 | Backend | Node.js 20 + Express |
 | XML Parser | fast-xml-parser |
+| MCP Server | Model Context Protocol SDK |
 | Package Manager | pnpm |
 | Testing | Vitest + Playwright Browser Mode |
 | Deployment | Docker |
@@ -83,11 +84,11 @@ pnpm --filter @odata-visualizer/backend preview
 ### Docker
 
 ```bash
-# Build Docker image
-pnpm docker:build
+# Build container image
+pnpm container:build
 
-# Run Docker container
-pnpm docker:run
+# Run container
+pnpm container:run
 ```
 
 The application will be available at http://localhost:3001
@@ -97,18 +98,22 @@ The application will be available at http://localhost:3001
 ```
 odata-visualizer/
 ├── packages/
-│   ├── shared/                    # Shared TypeScript types
+│   ├── shared/                    # Shared types + CSDL parser
 │   │   └── src/
-│   │       └── types.ts          # OData model interfaces
+│   │       ├── types.ts          # OData model interfaces
+│   │       └── parser.ts         # CSDL parser (used by backend + MCP)
 │   ├── backend/                   # Express API server
 │   │   ├── src/
 │   │   │   ├── index.ts          # Server entry
 │   │   │   ├── routes/
 │   │   │   │   └── parse.ts      # Parse endpoints
 │   │   │   └── services/
-│   │   │       ├── xmlParser.ts  # CSDL parser
-│   │   │       └── urlFetcher.ts # URL proxy
-│   │   └── __tests__/
+│   │   │       └── xmlParser.ts  # Re-export of shared parser
+│   ├── mcp/                       # MCP server for LLM clients
+│   │   └── src/
+│   │       ├── index.ts          # MCP server entry
+│   │       ├── tools.ts          # Tool handlers
+│   │       └── metadata-loader.ts
 │   └── frontend/                  # React app
 │       ├── src/
 │       │   ├── main.tsx
@@ -123,8 +128,8 @@ odata-visualizer/
 │       │   ├── services/
 │       │   └── utils/
 │       └── __tests__/
-├── docker/
-│   └── Dockerfile
+├── container/
+│   └── Containerfile
 ├── package.json
 ├── pnpm-workspace.yaml
 └── tsconfig.base.json
