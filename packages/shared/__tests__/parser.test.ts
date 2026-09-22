@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseCSDL } from '../src/services/xmlParser.js';
+import { parseCSDL } from '../src/parser.js';
 
 describe('XML Parser', () => {
   const minimalCSDL = `<?xml version="1.0" encoding="utf-8"?>
@@ -180,5 +180,78 @@ describe('XML Parser', () => {
     expect(result.entities).toHaveLength(2);
     expect(result.entities[0].namespace).toBe('ServiceA.Models');
     expect(result.entities[1].namespace).toBe('ServiceB.Models');
+  });
+
+  const csdlV4Only = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="TestService.Models" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Order">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.Int32" Nullable="false" />
+        <NavigationProperty Name="Customer" Type="TestService.Models.Customer" />
+        <NavigationProperty Name="Lines" Type="Collection(TestService.Models.OrderLine)" />
+      </EntityType>
+      <EntityType Name="Customer">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.Int32" Nullable="false" />
+      </EntityType>
+      <EntityType Name="OrderLine">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.Int32" Nullable="false" />
+      </EntityType>
+      <EntityContainer Name="DefaultContainer">
+        <EntitySet Name="Orders" EntityType="TestService.Models.Order" />
+        <EntitySet Name="Customers" EntityType="TestService.Models.Customer" />
+        <ActionImport Name="Reset" Action="TestService.Models.Reset" EntitySet="Orders" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('should derive relationships from V4 navigation properties', async () => {
+    const result = await parseCSDL(csdlV4Only);
+
+    expect(result.relationships).toHaveLength(2);
+    const orderCustomer = result.relationships.find((r) => r.to.entity === 'Customer');
+    expect(orderCustomer?.from.entity).toBe('Order');
+    expect(orderCustomer?.to.multiplicity).toBe('1');
+    const orderLines = result.relationships.find((r) => r.to.entity === 'OrderLine');
+    expect(orderLines?.to.multiplicity).toBe('*');
+  });
+
+  it('should not duplicate Association relationships from navigation properties', async () => {
+    const result = await parseCSDL(csdlWithRelationships);
+    expect(result.relationships).toHaveLength(1);
+    expect(result.relationships[0].name).toBe('Order_Customer');
+  });
+
+  it('should parse entity containers and entity sets', async () => {
+    const result = await parseCSDL(csdlV4Only);
+
+    expect(result.entityContainers).toHaveLength(1);
+    expect(result.entityContainers[0].name).toBe('DefaultContainer');
+    expect(result.entityContainers[0].entitySets).toHaveLength(2);
+    expect(result.entityContainers[0].entitySets[0]).toMatchObject({
+      name: 'Orders',
+      entityType: 'Order',
+    });
+  });
+
+  it('should parse action imports', async () => {
+    const result = await parseCSDL(csdlV4Only);
+
+    expect(result.actionImports).toHaveLength(1);
+    expect(result.actionImports[0]).toMatchObject({
+      name: 'Reset',
+      actionName: 'Reset',
+      entitySet: 'Orders',
+    });
   });
 });

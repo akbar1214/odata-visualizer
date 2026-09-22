@@ -11,16 +11,17 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src"
+    "test": "vitest run",
+    "test:watch": "vitest watch"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.11.0",
     "@odata-visualizer/shared": "workspace:*",
-    "fast-xml-parser": "^4.3.6",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/node": "^20.12.7",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "vitest": "^1.5.0"
   }
 }
