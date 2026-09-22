@@ -24,6 +24,8 @@ export interface ODataNavigationProperty {
   fromRole: string;
   toRole: string;
   targetType?: string;
+  /** Fully qualified target type name when available */
+  targetTypeQualified?: string;
   label?: string;
   annotations?: Record<string, string>;
 }
@@ -31,6 +33,10 @@ export interface ODataNavigationProperty {
 /** Entity type definition */
 export interface ODataEntity {
   name: string;
+  /** Fully qualified name (namespace.Name) when a namespace is present */
+  qualifiedName?: string;
+  /** Whether this entry came from an EntityType or ComplexType element */
+  kind?: 'entity' | 'complex';
   label?: string;
   namespace?: string;
   baseType?: string;
@@ -63,33 +69,24 @@ export interface ODataEntityContainer {
   entitySets: ODataEntitySet[];
 }
 
+/** Navigation property binding on an entity set (V4) */
+export interface ODataNavigationPropertyBinding {
+  path: string;
+  target: string;
+}
+
 /** Entity set definition */
 export interface ODataEntitySet {
   name: string;
   entityType: string;
+  /** Fully qualified entity type name when available */
+  entityTypeQualified?: string;
   label?: string;
   creatable?: boolean;
   updatable?: boolean;
   deletable?: boolean;
   navigable?: boolean;
-  annotations?: Record<string, string>;
-}
-
-/** Function import */
-export interface ODataFunctionImport {
-  name: string;
-  functionName: string;
-  entitySet?: string;
-  parameter?: ODataParameter[];
-  returnType?: string;
-  annotations?: Record<string, string>;
-}
-
-/** Action import */
-export interface ODataActionImport {
-  name: string;
-  actionName: string;
-  entitySet?: string;
+  navigationPropertyBindings?: ODataNavigationPropertyBinding[];
   annotations?: Record<string, string>;
 }
 
@@ -99,6 +96,81 @@ export interface ODataParameter {
   type: string;
   nullable?: boolean;
   maxLength?: number;
+  /** True for the binding parameter of a bound action/function */
+  isBinding?: boolean;
+}
+
+/** Schema-level action definition */
+export interface ODataAction {
+  name: string;
+  qualifiedName?: string;
+  namespace?: string;
+  isBound: boolean;
+  parameters: ODataParameter[];
+  returnType?: string;
+  label?: string;
+  annotations?: Record<string, string>;
+}
+
+/** Schema-level function definition */
+export interface ODataFunction {
+  name: string;
+  qualifiedName?: string;
+  namespace?: string;
+  isBound: boolean;
+  parameters: ODataParameter[];
+  returnType?: string;
+  label?: string;
+  annotations?: Record<string, string>;
+}
+
+/** Enum type member */
+export interface ODataEnumMember {
+  name: string;
+  value?: string;
+}
+
+/** Enum type definition */
+export interface ODataEnumType {
+  name: string;
+  qualifiedName?: string;
+  namespace?: string;
+  underlyingType?: string;
+  members: ODataEnumMember[];
+  annotations?: Record<string, string>;
+}
+
+/** Type definition (custom EDM type) */
+export interface ODataTypeDefinition {
+  name: string;
+  qualifiedName?: string;
+  namespace?: string;
+  underlyingType: string;
+  annotations?: Record<string, string>;
+}
+
+/** Function import */
+export interface ODataFunctionImport {
+  name: string;
+  functionName: string;
+  qualifiedFunctionName?: string;
+  entitySet?: string;
+  parameter?: ODataParameter[];
+  returnType?: string;
+  isBound?: boolean;
+  annotations?: Record<string, string>;
+}
+
+/** Action import */
+export interface ODataActionImport {
+  name: string;
+  actionName: string;
+  qualifiedActionName?: string;
+  entitySet?: string;
+  isBound?: boolean;
+  parameter?: ODataParameter[];
+  returnType?: string;
+  annotations?: Record<string, string>;
 }
 
 /** Complete OData metadata */
@@ -110,6 +182,10 @@ export interface ODataMetadata {
   entityContainers: ODataEntityContainer[];
   functionImports: ODataFunctionImport[];
   actionImports: ODataActionImport[];
+  actions: ODataAction[];
+  functions: ODataFunction[];
+  enumTypes: ODataEnumType[];
+  typeDefinitions: ODataTypeDefinition[];
   annotations?: Record<string, unknown>;
 }
 

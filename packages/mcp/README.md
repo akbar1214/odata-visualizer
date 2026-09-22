@@ -4,14 +4,50 @@ An MCP (Model Context Protocol) server that lets LLMs explore OData metadata sch
 
 ## How It Works
 
-The MCP server exposes 4 tools that let an LLM understand your OData data model:
+The MCP server exposes 15 tools that let an LLM understand an OData V4 model and construct requests against it — without executing them.
+
+### Explore metadata
 
 | Tool | Description |
 |------|-------------|
-| `load_metadata` | Load OData metadata from a file path or URL |
-| `list_entities` | List all entities with their key properties |
-| `get_entity_details` | Get full schema for a specific entity |
-| `get_relationships` | List all entity relationships/associations |
+| `load_metadata` | Load OData metadata from a file path or URL; returns a summary |
+| `search_entities` | Search types by name, label, property, or annotation text |
+| `list_entities` | List entities / complex types (paged, filter by kind) |
+| `get_entity_details` | Full schema for a type: inheritance, effective properties, enums, entity sets |
+| `list_entity_sets` | List entity sets with CRUD capabilities and navigation bindings |
+| `get_relationships` | List relationships (optionally for one entity) |
+| `list_actions` / `get_action_details` | List/describe schema-level actions |
+| `list_functions` / `get_function_details` | List/describe schema-level functions |
+| `list_enums` | List enum types and type definitions |
+
+### Build requests (offline — no HTTP is performed)
+
+| Tool | Description |
+|------|-------------|
+| `build_query` | Build a V4 GET URL from `$filter`, `$select`, `$expand`, `$orderby`, paging, `$count`, `$search` |
+| `build_action_invocation` | Build a POST URL + JSON body + curl example for an action |
+| `build_function_invocation` | Build a GET URL with inline parameters for a function |
+
+Literals are typed from the loaded model: strings are quoted with `''` escaping, numbers/booleans are bare, enums use `NS.Enum'VALUE'`, and TypeDefinitions are unwrapped to their underlying EDM type. Bound operations require an `entitySet` plus `keys`.
+
+## Windchill
+
+Windchill exposes one OData V4 service per domain, e.g.:
+
+```
+https://<host>/Windchill/servlet/odata/ProdMgmt/$metadata
+```
+
+`load_metadata` parses these models directly (deep `BaseType` inheritance, bound/unbound actions and functions, enums, type definitions, and `PTC.*` / `Capabilities.*` annotations). A synthetic Windchill-like model is used by the test suite at `packages/shared/__tests__/fixtures/windchill-prodmgmt.xml`.
+
+Typical offline workflow:
+
+1. `load_metadata` with the `$metadata` URL (or a saved copy).
+2. `search_entities` → `get_entity_details` to learn the shapes.
+3. `list_entity_sets` to find the set name.
+4. `build_query` / `build_action_invocation` / `build_function_invocation` to produce the request.
+
+Authentication (basic, bearer, or SSO) and execution are intentionally out of scope — the server never calls the service.
 
 ## Prerequisites
 
@@ -126,6 +162,12 @@ Once configured, ask your LLM:
 
 4. **Inspect relationships:**
    > "How are Orders and Customers related?"
+
+5. **Build a query:**
+   > "Give me released parts over 10, with their documents, ordered by number"
+
+6. **Build an operation call:**
+   > "Show me how to call GetPartStructure for part 123"
 
 ## Development
 
