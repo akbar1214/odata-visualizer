@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Synthetic Windchill-like OData V4 $metadata fixture (ProdMgmt domain style).
+  Not an actual Windchill export — exercises inheritance, enums, type
+  definitions, complex types, bound/unbound actions and functions,
+  annotations, navigation property bindings, and multi-namespace names.
+-->
+<edmx:Edmx Version="4.01"
+           xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx"
+           xmlns:m="http://docs.oasis-open.org/odata/ns/metadata">
+  <edmx:DataServices m:DataServiceVersion="4.0">
+    <Schema Namespace="PTC.ProdMgmt" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EnumType Name="LifeCycleState" UnderlyingType="Edm.String">
+        <Member Name="INWORK" Value="0" />
+        <Member Name="RELEASED" Value="1" />
+        <Member Name="OBSOLETE" Value="2" />
+      </EnumType>
+
+      <TypeDefinition Name="PartNumber" UnderlyingType="Edm.String" />
+
+      <ComplexType Name="Quantity">
+        <Property Name="Value" Type="Edm.Double" />
+        <Property Name="Unit" Type="Edm.String" Nullable="false" />
+        <Annotation Term="Core.Description" String="Measure with unit of measure" />
+      </ComplexType>
+
+      <ComplexType Name="NavigationCriteria">
+        <Property Name="Depth" Type="Edm.Int32" />
+        <Property Name="ViewName" Type="Edm.String" />
+      </ComplexType>
+
+      <ComplexType Name="EntityMetaInfo">
+        <Property Name="EntityType" Type="Edm.String" />
+        <Property Name="DisplayName" Type="Edm.String" />
+        <Property Name="InternalName" Type="Edm.String" />
+      </ComplexType>
+
+      <EntityType Name="WindchillEntity" Abstract="true">
+        <Key>
+          <PropertyRef Name="ID" />
+        </Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false" />
+        <Property Name="name" Type="Edm.String" MaxLength="Max" />
+        <Property Name="description" Type="Edm.String" MaxLength="1024">
+          <Annotation Term="Core.Description" String="User-visible description" />
+        </Property>
+        <Annotation Term="Core.Description" String="Abstract base of all Windchill entities" />
+        <Annotation Term="PTC.Operations" EnumMember="PTC.Operations/READ" />
+      </EntityType>
+
+      <EntityType Name="Part" BaseType="PTC.ProdMgmt.WindchillEntity">
+        <Property Name="number" Type="PTC.ProdMgmt.PartNumber" Nullable="false">
+          <Annotation Term="PTC.ReadOnly" Bool="false" />
+        </Property>
+        <Property Name="versionID" Type="Edm.String" />
+        <Property Name="state" Type="PTC.ProdMgmt.LifeCycleState" />
+        <Property Name="weight" Type="PTC.ProdMgmt.Quantity" />
+        <Property Name="unitPrice" Type="Edm.Decimal" Precision="10" Scale="2" />
+        <Property Name="releaseDate" Type="Edm.DateTimeOffset" />
+        <Property Name="hasCAD" Type="Edm.Boolean" />
+        <NavigationProperty Name="Documents" Type="Collection(PTC.ProdMgmt.CADDocument)" />
+        <NavigationProperty Name="SourcePart" Type="PTC.ProdMgmt.Part" />
+        <Annotation Term="Core.Description" String="A product structure part" />
+        <Annotation Term="PTC.Operations" EnumMember="PTC.Operations/READ, PTC.Operations/CREATE, PTC.Operations/UPDATE, PTC.Operations/DELETE" />
+      </EntityType>
+
+      <EntityType Name="ElectricalPart" BaseType="PTC.ProdMgmt.Part">
+        <Property Name="voltageRating" Type="Edm.Double" />
+        <Annotation Term="Core.Description" String="Electrical variant of Part" />
+      </EntityType>
+
+      <EntityType Name="CADDocument">
+        <Key>
+          <PropertyRef Name="ID" />
+        </Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false" />
+        <Property Name="number" Type="Edm.String" />
+        <Property Name="name" Type="Edm.String" />
+        <Property Name="checkedOutBy" Type="Edm.String">
+          <Annotation Term="PTC.UpdateableViaAction" String="CheckInOut" />
+        </Property>
+        <NavigationProperty Name="Describes" Type="PTC.ProdMgmt.Part" />
+      </EntityType>
+
+      <EntityType Name="PartStructureItem">
+        <Key>
+          <PropertyRef Name="ID" />
+        </Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false" />
+        <Property Name="quantity" Type="PTC.ProdMgmt.Quantity" />
+        <NavigationProperty Name="Component" Type="PTC.ProdMgmt.Part" />
+      </EntityType>
+
+      <Action Name="GetPartStructure" IsBound="true">
+        <Parameter Name="Part" Type="PTC.ProdMgmt.Part" />
+        <Parameter Name="NavigationCriteria" Type="PTC.ProdMgmt.NavigationCriteria" Nullable="true" />
+        <Parameter Name="ShowSingleLevelReport" Type="Edm.Boolean" Nullable="true" />
+        <ReturnType Type="PTC.ProdMgmt.PartStructureItem" IsCollection="true" />
+        <Annotation Term="Core.Description" String="Returns the part structure report for a part" />
+      </Action>
+
+      <Action Name="ReleasePart" IsBound="true">
+        <Parameter Name="Part" Type="PTC.ProdMgmt.Part" />
+        <Parameter Name="Identity" Type="Edm.String" Nullable="true" />
+        <ReturnType Type="PTC.ProdMgmt.Part" />
+        <Annotation Term="PTC.ReadOnly" Bool="false" />
+      </Action>
+
+      <Action Name="CreateParts">
+        <Parameter Name="PartNames" Type="Collection(Edm.String)" />
+        <Parameter Name="View" Type="Edm.String" Nullable="true" />
+        <ReturnType Type="PTC.ProdMgmt.Part" IsCollection="true" />
+        <Annotation Term="Core.Description" String="Creates one or more parts" />
+      </Action>
+
+      <Action Name="ResetFilters">
+        <Parameter Name="IncludeChildren" Type="Edm.Boolean" Nullable="true" />
+      </Action>
+
+      <Function Name="GetWindchillMetaInfo">
+        <Parameter Name="EntityName" Type="Edm.String" Nullable="true" />
+        <Parameter Name="IncludeAncestorProperty" Type="Edm.Boolean" Nullable="true" />
+        <ReturnType Type="PTC.ProdMgmt.EntityMetaInfo" IsCollection="true" />
+        <Annotation Term="Core.Description" String="Returns localized metadata display names" />
+      </Function>
+
+      <Function Name="GetPartEstimate" IsBound="true">
+        <Parameter Name="Part" Type="PTC.ProdMgmt.Part" />
+        <Parameter Name="Quantity" Type="Edm.Double" />
+        <ReturnType Type="Edm.Decimal" />
+      </Function>
+
+      <EntityContainer Name="ProdMgmtContainer">
+        <EntitySet Name="Parts" EntityType="PTC.ProdMgmt.Part" Creatable="true" Updatable="true" Deletable="true" Navigable="true">
+          <NavigationPropertyBinding Path="Documents" Target="CADDocuments" />
+          <NavigationPropertyBinding Path="SourcePart" Target="Parts" />
+          <Annotation Term="Core.Description" String="All Windchill parts" />
+          <Annotation Term="Org.OData.Capabilities.V1.SortRestrictions" Bool="false" />
+        </EntitySet>
+        <EntitySet Name="CADDocuments" EntityType="PTC.ProdMgmt.CADDocument" Creatable="true" Updatable="true" Deletable="false" Navigable="true">
+          <NavigationPropertyBinding Path="Describes" Target="Parts" />
+        </EntitySet>
+        <EntitySet Name="ElectricalParts" EntityType="PTC.ProdMgmt.ElectricalPart" Creatable="true" Updatable="true" Deletable="false" Navigable="true" />
+        <ActionImport Name="CreateParts" Action="PTC.ProdMgmt.CreateParts" EntitySet="Parts" />
+        <ActionImport Name="ResetFilters" Action="PTC.ProdMgmt.ResetFilters" />
+        <FunctionImport Name="GetWindchillMetaInfo" Function="PTC.ProdMgmt.GetWindchillMetaInfo" />
+      </EntityContainer>
+    </Schema>
+
+    <Schema Namespace="net.example.common" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Part">
+        <Key>
+          <PropertyRef Name="id" />
+        </Key>
+        <Property Name="id" Type="Edm.Int32" Nullable="false" />
+        <Property Name="title" Type="Edm.String" />
+      </EntityType>
+      <EntityContainer Name="CommonContainer">
+        <EntitySet Name="CommonParts" EntityType="net.example.common.Part" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>

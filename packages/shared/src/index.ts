@@ -6,3 +6,5 @@
 
 export * from './types.js';
 export * from './parser.js';
+export * from './resolve.js';
+export * from './query.js';

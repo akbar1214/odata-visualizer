@@ -1,6 +1,7 @@
 import { Router, type Request, type Response, type Router as ExpressRouter } from 'express';
 import multer from 'multer';
 import { parseCSDL } from '../services/xmlParser.js';
+import { metadataStore } from '../services/metadataStore.js';
 import type { ParseRequest, ParseResponse } from '@odata-visualizer/shared';
 
 const router: ExpressRouter = Router();
@@ -45,6 +46,12 @@ router.post('/file', upload.single('metadata'), async (req: Request, res: Respon
 
     const xmlContent = req.file.buffer.toString('utf-8');
     const data = await parseCSDL(xmlContent);
+
+    metadataStore.set(data, {
+      sourceName: req.file.originalname,
+      sourceType: 'file',
+      fileSizeBytes: req.file.size,
+    });
 
     const response: ParseResponse = {
       success: true,
@@ -133,6 +140,12 @@ router.post('/url', async (req: Request, res: Response) => {
 
       const data = await parseCSDL(xmlContent);
 
+      metadataStore.set(data, {
+        sourceName: parsedUrl.toString(),
+        sourceType: 'url',
+        fileSizeBytes,
+      });
+
       const result: ParseResponse = {
         success: true,
         data,
@@ -188,6 +201,12 @@ router.post('/content', async (req: Request, res: Response) => {
     }
 
     const data = await parseCSDL(content);
+
+    metadataStore.set(data, {
+      sourceName: 'inline content',
+      sourceType: 'content',
+      fileSizeBytes: content.length,
+    });
 
     const response: ParseResponse = {
       success: true,

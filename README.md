@@ -9,6 +9,7 @@ An interactive web application for visualizing OData metadata as entity-relation
 - **Metadata Explorer** - Browse entities, properties, and relationships in detail
 - **Auto-Layout** - Automatic diagram layout using ELK.js
 - **Multiple Input Methods** - Upload files or fetch from URL
+- **MCP Server** - Let LLM clients explore metadata and build OData V4 queries and operation calls (Windchill-friendly)
 
 ## Tech Stack
 
@@ -43,8 +44,9 @@ cd odata-visualizer
 # Install dependencies
 pnpm install
 
-# Build shared package
+# Build shared package and MCP server
 pnpm --filter @odata-visualizer/shared build
+pnpm --filter @odata-visualizer/mcp build
 ```
 
 ### Development
@@ -101,17 +103,25 @@ odata-visualizer/
 │   ├── shared/                    # Shared types + CSDL parser
 │   │   └── src/
 │   │       ├── types.ts          # OData model interfaces
-│   │       └── parser.ts         # CSDL parser (used by backend + MCP)
+│   │       ├── parser.ts         # CSDL parser (used by backend + MCP)
+│   │       ├── resolve.ts        # Inheritance/lookup helpers
+│   │       └── query.ts          # OData V4 query builder
 │   ├── backend/                   # Express API server
 │   │   ├── src/
 │   │   │   ├── index.ts          # Server entry
+│   │   │   ├── app.ts            # createApp() (routes + MCP mount)
+│   │   │   ├── mcp.ts            # Streamable HTTP MCP mount at /mcp
 │   │   │   ├── routes/
-│   │   │   │   └── parse.ts      # Parse endpoints
+│   │   │   │   ├── parse.ts      # Parse endpoints
+│   │   │   │   └── metadata.ts   # Current (shared) metadata endpoints
 │   │   │   └── services/
-│   │   │       └── xmlParser.ts  # Re-export of shared parser
+│   │   │       ├── xmlParser.ts  # Re-export of shared parser
+│   │   │       └── metadataStore.ts # In-memory store shared with MCP
 │   ├── mcp/                       # MCP server for LLM clients
 │   │   └── src/
-│   │       ├── index.ts          # MCP server entry
+│   │       ├── index.ts          # stdio entry point
+│   │       ├── server.ts         # createMcpServer(accessors)
+│   │       ├── store.ts          # Shared metadata store
 │   │       ├── tools.ts          # Tool handlers
 │   │       └── metadata-loader.ts
 │   └── frontend/                  # React app
@@ -148,6 +158,14 @@ Parse raw XML content directly.
 
 ### GET /api/health
 Health check endpoint.
+
+## MCP Server
+
+The backend hosts an MCP server over Streamable HTTP at `http://localhost:3001/mcp`, so `pnpm dev` brings it up alongside the app. It shares the backend's metadata store: **whatever file you upload in the UI is immediately usable by MCP tools** (no `load_metadata` call). It understands Windchill-style models — deep inheritance, bound/unbound actions and functions, enums, type definitions, and annotations.
+
+A standalone stdio server is also available (`packages/mcp`), and can preload the UI's upload via `ODATA_BACKEND_URL` or the `load_metadata` tool with `type: "server"`.
+
+See [packages/mcp/README.md](packages/mcp/README.md) for the tool list and client configuration (remote HTTP and local stdio).
 
 ## Usage
 

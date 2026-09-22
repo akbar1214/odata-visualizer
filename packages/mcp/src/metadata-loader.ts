@@ -1,30 +1,63 @@
 import { readFile } from 'fs/promises';
 import { parseCSDL, type ODataMetadata } from '@odata-visualizer/shared';
+import type { MetadataSourceType } from './store.js';
 
 export interface MetadataSource {
-  type: 'file' | 'url';
-  path: string;
+  type: MetadataSourceType;
+  /** File path, URL, or backend base URL. Omitted for a default backend. */
+  path?: string;
 }
 
+export const DEFAULT_BACKEND_URL = 'http://localhost:3001';
+
 export async function loadMetadataFromSource(source: MetadataSource): Promise<ODataMetadata> {
-  let xmlContent: string;
-
-  if (source.type === 'file') {
-    xmlContent = await readFile(source.path, 'utf-8');
-  } else {
-    const response = await fetch(source.path, {
-      headers: { Accept: 'application/xml, text/xml, application/atomsvc+xml' },
-      signal: AbortSignal.timeout(30000),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch metadata: HTTP ${response.status} ${response.statusText}`);
-    }
-
-    xmlContent = await response.text();
+  if (source.type === 'server') {
+    return loadFromBackend(source.path);
   }
 
+  if (source.type === 'file') {
+    if (!source.path) throw new Error('File path is required');
+    const xmlContent = await readFile(source.path, 'utf-8');
+    return parseCSDL(xmlContent);
+  }
+
+  if (!source.path) throw new Error('URL is required');
+  const response = await fetch(source.path, {
+    headers: { Accept: 'application/xml, text/xml, application/atomsvc+xml' },
+    signal: AbortSignal.timeout(30000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch metadata: HTTP ${response.status} ${response.statusText}`);
+  }
+
+  const xmlContent = await response.text();
   return parseCSDL(xmlContent);
+}
+
+/** Fetch the metadata the backend currently holds for the uploaded file. */
+async function loadFromBackend(baseUrl?: string): Promise<ODataMetadata> {
+  const base = (baseUrl || process.env['ODATA_BACKEND_URL'] || DEFAULT_BACKEND_URL).replace(
+    /\/+$/,
+    '',
+  );
+
+  const response = await fetch(`${base}/api/metadata/current`, {
+    headers: { Accept: 'application/json' },
+    signal: AbortSignal.timeout(30000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch metadata: HTTP ${response.status} ${response.statusText}`);
+  }
+
+  const body = (await response.json()) as { metadata?: ODataMetadata | null };
+  if (!body.metadata) {
+    throw new Error(
+      'No metadata available from the backend. Upload a file in the OData Visualizer UI first.',
+    );
+  }
+  return body.metadata;
 }
 
 export { parseCSDL };
