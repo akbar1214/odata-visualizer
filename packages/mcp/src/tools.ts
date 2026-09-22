@@ -67,10 +67,6 @@ function formatRelationship(rel: ODataRelationship): string {
   return `${rel.name}: ${rel.from.entity} (${rel.from.multiplicity}) <-> ${rel.to.entity} (${rel.to.multiplicity})`;
 }
 
-function noMetadataResult(): ToolResult {
-  return errorResult('No metadata loaded. Call load_metadata first with a file path or URL.');
-}
-
 export async function handleToolCall(
   name: string,
   args: Record<string, unknown>,
@@ -107,13 +103,11 @@ export async function handleToolCall(
 
     case 'list_entities': {
       if (!currentMetadata) {
-        return noMetadataResult();
+        return errorResult('No metadata loaded. Call load_metadata first with a file path or URL.');
       }
 
       if (currentMetadata.entities.length === 0) {
-        return {
-          content: [{ type: 'text', text: 'No entities found in the metadata.' }],
-        };
+        return { content: [{ type: 'text', text: 'No entities found in the metadata.' }] };
       }
 
       const list = currentMetadata.entities.map((e) => formatEntitySummary(e)).join('\n');
@@ -129,7 +123,7 @@ export async function handleToolCall(
 
     case 'get_entity_details': {
       if (!currentMetadata) {
-        return noMetadataResult();
+        return errorResult('No metadata loaded. Call load_metadata first with a file path or URL.');
       }
 
       const entityName = args['entityName'] as string;
@@ -155,13 +149,11 @@ export async function handleToolCall(
 
     case 'get_relationships': {
       if (!currentMetadata) {
-        return noMetadataResult();
+        return errorResult('No metadata loaded. Call load_metadata first with a file path or URL.');
       }
 
       if (currentMetadata.relationships.length === 0) {
-        return {
-          content: [{ type: 'text', text: 'No relationships found in the metadata.' }],
-        };
+        return { content: [{ type: 'text', text: 'No relationships found in the metadata.' }] };
       }
 
       const rels = currentMetadata.relationships.map((r) => formatRelationship(r)).join('\n');

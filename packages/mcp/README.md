@@ -1,6 +1,6 @@
 # OData Visualizer MCP Server
 
-An MCP (Model Context Protocol) server that lets LLMs explore OData metadata schemas through structured tools.
+An MCP (Model Context Protocol) server that lets LLMs explore OData metadata schemas.
 
 ## How It Works
 
@@ -62,7 +62,7 @@ pnpm mcp:start
 node packages/mcp/dist/index.js
 ```
 
-The server communicates over stdio — do not run it interactively. Configure your MCP client to launch it.
+The server communicates over stdio — do not run it directly. Instead, configure your MCP client to launch it.
 
 ## MCP Client Configuration
 
@@ -124,8 +124,8 @@ Once configured, ask your LLM:
 3. **Get entity details:**
    > "Show me the Product entity schema"
 
-4. **Understand relationships:**
-   > "How are Orders and Customers connected?"
+4. **Inspect relationships:**
+   > "How are Orders and Customers related?"
 
 ## Development
 
@@ -135,9 +135,6 @@ pnpm mcp:typecheck
 
 # Run tests
 pnpm --filter @odata-visualizer/mcp test
-
-# Rebuild after changes
-pnpm mcp:build
 ```
 
 ## Project Structure
@@ -145,12 +142,11 @@ pnpm mcp:build
 ```
 packages/mcp/
 ├── src/
-│   ├── index.ts           # MCP server entry point (registerTool wiring)
-│   ├── tools.ts           # Tool handlers and formatters
-│   └── metadata-loader.ts # File/URL loading + shared CSDL parser import
-├── __tests__/             # Vitest tests + fixtures
+│   ├── index.ts           # MCP server entry point
+│   ├── tools.ts           # Tool definitions and handlers
+│   └── metadata-loader.ts # Metadata loading from file/URL
+├── __tests__/
+│   └── tools.test.ts      # Tool handler tests
 ├── package.json
 └── tsconfig.json
 ```
-
-The CSDL parser itself lives in `@odata-visualizer/shared` (`packages/shared/src/parser.ts`) and is shared with the backend API.

@@ -54,9 +54,9 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
     throw new Error('XML content is empty');
   }
 
-  let parsed: Record<string, unknown>;
+  let parsed: XmlElement;
   try {
-    parsed = parser.parse(xmlContent) as Record<string, unknown>;
+    parsed = parser.parse(xmlContent) as XmlElement;
   } catch (error) {
     throw new Error(
       `Failed to parse XML: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -79,29 +79,32 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
     throw new Error('Invalid OData CSDL: Missing DataServices element');
   }
 
-  const schemas = ensureArray(dataServices, 'Schema', 'edm:Schema');
+  const schemas = ensureArray(dataServices['Schema'] || dataServices['edm:Schema'] || []);
 
+  const version = str(edmx['@_Version']) || undefined;
   const entities: ODataEntity[] = [];
   const relationships: ODataRelationship[] = [];
   const functionImports: ODataFunctionImport[] = [];
   const actionImports: ODataActionImport[] = [];
   const entityContainers: ODataEntityContainer[] = [];
-  const collectionNavProps = new Map<string, boolean>();
 
   for (const schema of schemas) {
-    const namespace = ensureStr(schema, '@_Namespace');
+    const namespace = str(schema['@_Namespace']) || '';
+    const entityTypeNames = new Set<string>();
 
-    const entityTypes = ensureArray(schema, 'EntityType', 'edm:EntityType');
+    const entityTypes = ensureArray(schema['EntityType'] || schema['edm:EntityType'] || []);
     for (const entityType of entityTypes) {
-      entities.push(parseEntityType(entityType, namespace, collectionNavProps));
+      const entity = parseEntityType(entityType, namespace);
+      entityTypeNames.add(entity.name);
+      entities.push(entity);
     }
 
-    const complexTypes = ensureArray(schema, 'ComplexType', 'edm:ComplexType');
+    const complexTypes = ensureArray(schema['ComplexType'] || schema['edm:ComplexType'] || []);
     for (const complexType of complexTypes) {
       entities.push(parseComplexType(complexType, namespace));
     }
 
-    const associations = ensureArray(schema, 'Association', 'edm:Association');
+    const associations = ensureArray(schema['Association'] || schema['edm:Association'] || []);
     for (const association of associations) {
       const rel = parseAssociation(association, namespace);
       if (rel) {
@@ -110,42 +113,49 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
     }
 
     const functionDefs = new Map<string, string>();
-    const functions = ensureArray(schema, 'Function', 'edm:Function');
+    const functions = ensureArray(schema['Function'] || schema['edm:Function'] || []);
     for (const func of functions) {
-      const funcName = ensureStr(func, '@_Name');
-      const returnType = ensureGet(func, 'ReturnType', 'edm:ReturnType') as XmlElement | undefined;
+      const funcName = str(func['@_Name']) || '';
+      const returnType = (func['ReturnType'] || func['edm:ReturnType']) as XmlElement | undefined;
       if (funcName && returnType) {
-        const returnTypeStr = ensureStr(returnType, '@_Type');
+        const returnTypeStr = str(returnType['@_Type']) || '';
         if (returnTypeStr) {
           functionDefs.set(funcName, returnTypeStr);
         }
       }
     }
 
-    const containers = ensureArray(schema, 'EntityContainer', 'edm:EntityContainer');
+    const containers = ensureArray(
+      schema['EntityContainer'] || schema['edm:EntityContainer'] || [],
+    );
     for (const container of containers) {
-      const containerName = ensureStr(container, '@_Name');
-      const entitySets: ODataEntitySet[] = [];
-
-      for (const entitySet of ensureArray(container, 'EntitySet', 'edm:EntitySet')) {
+      const containerName = str(container['@_Name']) || '';
+      const entitySets = ensureArray(container['EntitySet'] || container['edm:EntitySet'] || []);
+      const parsedEntitySets: ODataEntitySet[] = [];
+      for (const entitySet of entitySets) {
         const es = parseEntitySet(entitySet);
         if (es) {
-          entitySets.push(es);
+          parsedEntitySets.push(es);
         }
       }
-
-      if (containerName || entitySets.length > 0) {
-        entityContainers.push({ name: containerName, entitySets });
+      if (containerName || parsedEntitySets.length > 0) {
+        entityContainers.push({ name: containerName, entitySets: parsedEntitySets });
       }
 
-      for (const funcImport of ensureArray(container, 'FunctionImport', 'edm:FunctionImport')) {
+      const funcImports = ensureArray(
+        container['FunctionImport'] || container['edm:FunctionImport'] || [],
+      );
+      for (const funcImport of funcImports) {
         const fi = parseFunctionImport(funcImport, functionDefs);
         if (fi) {
           functionImports.push(fi);
         }
       }
 
-      for (const actionImport of ensureArray(container, 'ActionImport', 'edm:ActionImport')) {
+      const actImports = ensureArray(
+        container['ActionImport'] || container['edm:ActionImport'] || [],
+      );
+      for (const actionImport of actImports) {
         const ai = parseActionImport(actionImport);
         if (ai) {
           actionImports.push(ai);
@@ -153,35 +163,30 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
       }
     }
 
-    // Derive V4 relationships from navigation property target types
+    // V4 metadata has no Association elements; derive relationships from
+    // navigation properties with a Type (targetType) attribute.
     for (const entity of entities) {
-      if (entity.namespace !== namespace) continue;
+      if (entity.namespace !== namespace || !entityTypeNames.has(entity.name)) {
+        continue;
+      }
       for (const nav of entity.navigationProperties) {
         if (!nav.targetType) continue;
-        const alreadyExists = relationships.some(
-          (rel) =>
-            (rel.from.entity === entity.name && rel.to.entity === nav.targetType) ||
-            (rel.from.entity === nav.targetType && rel.to.entity === entity.name),
+        const rel = relationshipFromNavigationProperty(entity, nav, namespace);
+        if (!rel) continue;
+        const exists = relationships.some(
+          (r) =>
+            (r.from.entity === rel.from.entity && r.to.entity === rel.to.entity) ||
+            (r.from.entity === rel.to.entity && r.to.entity === rel.from.entity),
         );
-        if (alreadyExists) continue;
-
-        const collection = collectionNavProps.get(`${entity.name}.${nav.name}`) === true;
-        relationships.push({
-          name: nav.relationship || `${entity.name}.${nav.name}`,
-          namespace,
-          from: { entity: entity.name, role: entity.name, multiplicity: '*' },
-          to: {
-            entity: nav.targetType,
-            role: nav.targetType,
-            multiplicity: collection ? '*' : '1',
-          },
-        });
+        if (!exists) {
+          relationships.push(rel);
+        }
       }
     }
   }
 
   return {
-    version: ensureStr(edmx, '@_Version') || undefined,
+    version,
     entities,
     relationships,
     entityContainers,
@@ -190,39 +195,88 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
   };
 }
 
-function parseEntityType(
-  entityType: XmlElement,
+function relationshipFromNavigationProperty(
+  entity: ODataEntity,
+  nav: ODataNavigationProperty,
   namespace: string,
-  collectionNavProps: Map<string, boolean>,
-): ODataEntity {
-  const name = ensureStr(entityType, '@_Name');
-  const baseType = ensureStr(entityType, '@_BaseType') || undefined;
-  const isAbstract = ensureStr(entityType, '@_Abstract') === 'true';
-  const isOpenType = ensureStr(entityType, '@_OpenType') === 'true';
+): ODataRelationship | null {
+  if (!nav.targetType) return null;
+  const isCollection = nav.relationship === 'Collection';
+  return {
+    name: nav.relationship || `${entity.name}_${nav.name}`,
+    namespace,
+    from: {
+      entity: entity.name,
+      role: nav.fromRole || entity.name,
+      multiplicity: isCollection ? '*' : '1',
+    },
+    to: {
+      entity: nav.targetType,
+      role: nav.toRole || nav.targetType,
+      multiplicity: isCollection ? '1' : '*',
+    },
+  };
+}
+
+function parseEntitySet(entitySet: XmlElement): ODataEntitySet | null {
+  const name = str(entitySet['@_Name']);
+  const rawType = str(entitySet['@_EntityType']);
+  if (!name || !rawType) return null;
+
+  const entityType = rawType.includes('.') ? rawType.split('.').pop() || rawType : rawType;
+
+  return {
+    name,
+    entityType,
+    creatable: boolAttr(entitySet['@_Creatable']),
+    updatable: boolAttr(entitySet['@_Updatable']),
+    deletable: boolAttr(entitySet['@_Deletable']),
+    navigable: boolAttr(entitySet['@_Navigable']),
+  };
+}
+
+function parseActionImport(actionImport: XmlElement): ODataActionImport | null {
+  const name = str(actionImport['@_Name']);
+  if (!name) return null;
+
+  const rawAction = str(actionImport['@_Action']) || '';
+  const actionName = rawAction.includes('.') ? rawAction.split('.').pop() || rawAction : rawAction;
+  const entitySet = str(actionImport['@_EntitySet']) || undefined;
+
+  return { name, actionName, entitySet };
+}
+
+function parseEntityType(entityType: XmlElement, namespace: string): ODataEntity {
+  const name = str(entityType['@_Name']) || '';
+  const baseType = str(entityType['@_BaseType']) || undefined;
+  const isAbstract = str(entityType['@_Abstract']) === 'true';
+  const isOpenType = str(entityType['@_OpenType']) === 'true';
 
   const keys: string[] = [];
   const properties: ODataProperty[] = [];
   const navigationProperties: ODataNavigationProperty[] = [];
 
-  for (const key of ensureArray(entityType, 'Key', 'edm:Key')) {
-    for (const propRef of ensureArray(key, 'PropertyRef', 'edm:PropertyRef')) {
-      const keyName = ensureStr(propRef, '@_Name');
+  const keyElements = ensureArray(entityType['Key'] || entityType['edm:Key'] || []);
+  for (const key of keyElements) {
+    const propertyRefs = ensureArray(key['PropertyRef'] || key['edm:PropertyRef'] || []);
+    for (const propRef of propertyRefs) {
+      const keyName = str(propRef['@_Name']);
       if (keyName) {
         keys.push(keyName);
       }
     }
   }
 
-  for (const prop of ensureArray(entityType, 'Property', 'edm:Property')) {
+  const propElements = ensureArray(entityType['Property'] || entityType['edm:Property'] || []);
+  for (const prop of propElements) {
     properties.push(parseProperty(prop, keys));
   }
 
-  for (const navProp of ensureArray(entityType, 'NavigationProperty', 'edm:NavigationProperty')) {
+  const navPropElements = ensureArray(
+    entityType['NavigationProperty'] || entityType['edm:NavigationProperty'] || [],
+  );
+  for (const navProp of navPropElements) {
     navigationProperties.push(parseNavigationProperty(navProp));
-    collectionNavProps.set(
-      `${name}.${ensureStr(navProp, '@_Name')}`,
-      ensureStr(navProp, '@_Type').startsWith('Collection('),
-    );
   }
 
   return {
@@ -238,22 +292,22 @@ function parseEntityType(
 }
 
 function parseComplexType(complexType: XmlElement, namespace: string): ODataEntity {
-  const name = ensureStr(complexType, '@_Name');
-  const baseType = ensureStr(complexType, '@_BaseType') || undefined;
-  const isOpenType = ensureStr(complexType, '@_OpenType') === 'true';
+  const name = str(complexType['@_Name']) || '';
+  const baseType = str(complexType['@_BaseType']) || undefined;
+  const isOpenType = str(complexType['@_OpenType']) === 'true';
 
   const properties: ODataProperty[] = [];
   const navigationProperties: ODataNavigationProperty[] = [];
 
-  for (const prop of ensureArray(complexType, 'Property', 'edm:Property')) {
+  const propElements = ensureArray(complexType['Property'] || complexType['edm:Property'] || []);
+  for (const prop of propElements) {
     properties.push(parseProperty(prop, []));
   }
 
-  for (const navProp of ensureArray(
-    complexType,
-    'NavigationProperty',
-    'edm:NavigationProperty',
-  )) {
+  const navPropElements = ensureArray(
+    complexType['NavigationProperty'] || complexType['edm:NavigationProperty'] || [],
+  );
+  for (const navProp of navPropElements) {
     navigationProperties.push(parseNavigationProperty(navProp));
   }
 
@@ -270,16 +324,13 @@ function parseComplexType(complexType: XmlElement, namespace: string): ODataEnti
 }
 
 function parseProperty(prop: XmlElement, keys: string[]): ODataProperty {
-  const name = ensureStr(prop, '@_Name');
-  const type = ensureStr(prop, '@_Type') || 'Edm.String';
-  const rawNullable = ensureGet(prop, '@_Nullable');
-  const nullable = rawNullable !== false && rawNullable !== 'false';
-  const rawMaxLength = ensureGet(prop, '@_MaxLength');
-  const rawPrecision = ensureGet(prop, '@_Precision');
-  const rawScale = ensureGet(prop, '@_Scale');
-  const maxLength = rawMaxLength !== undefined ? parseInt(String(rawMaxLength), 10) : undefined;
-  const precision = rawPrecision !== undefined ? parseInt(String(rawPrecision), 10) : undefined;
-  const scale = rawScale !== undefined ? parseInt(String(rawScale), 10) : undefined;
+  const name = str(prop['@_Name']) || '';
+  const type = str(prop['@_Type']) || 'Edm.String';
+  const nullableValue = prop['@_Nullable'];
+  const nullable = nullableValue !== false && nullableValue !== 'false';
+  const maxLength = prop['@_MaxLength'] ? parseInt(String(prop['@_MaxLength']), 10) : undefined;
+  const precision = prop['@_Precision'] ? parseInt(String(prop['@_Precision']), 10) : undefined;
+  const scale = prop['@_Scale'] ? parseInt(String(prop['@_Scale']), 10) : undefined;
 
   return {
     name,
@@ -293,30 +344,33 @@ function parseProperty(prop: XmlElement, keys: string[]): ODataProperty {
 }
 
 function parseNavigationProperty(navProp: XmlElement): ODataNavigationProperty {
-  const name = ensureStr(navProp, '@_Name');
-  const relationship = ensureStr(navProp, '@_Relationship');
-  const fromRole = ensureStr(navProp, '@_FromRole');
-  const toRole = ensureStr(navProp, '@_ToRole');
+  const name = str(navProp['@_Name']) || '';
+  const relationship = str(navProp['@_Relationship']) || '';
+  const fromRole = str(navProp['@_FromRole']) || '';
+  const toRole = str(navProp['@_ToRole']) || '';
 
-  // OData V4: extract target entity type from Type attribute
-  // e.g., "Collection(NorthwindModel.Product)" -> "Product"
-  const rawType = ensureStr(navProp, '@_Type');
+  // OData V4: Type attribute holds the target entity type (possibly Collection(...)).
+  // Store the collection flag in `relationship` so V4 relationship derivation
+  // can compute multiplicity (V2 keeps the Association name there).
+  const rawType = str(navProp['@_Type']) || '';
   let targetType: string | undefined;
+  let isCollection = false;
+  let derivedRelationship = relationship;
   if (rawType) {
     let typeStr = rawType;
     if (typeStr.startsWith('Collection(') && typeStr.endsWith(')')) {
       typeStr = typeStr.slice(11, -1);
+      isCollection = true;
     }
-    if (typeStr.includes('.')) {
-      targetType = typeStr.split('.').pop() || typeStr;
-    } else {
-      targetType = typeStr;
+    targetType = typeStr.includes('.') ? typeStr.split('.').pop() || typeStr : typeStr;
+    if (!relationship) {
+      derivedRelationship = isCollection ? 'Collection' : '';
     }
   }
 
   return {
     name,
-    relationship,
+    relationship: derivedRelationship,
     fromRole,
     toRole,
     targetType,
@@ -324,10 +378,10 @@ function parseNavigationProperty(navProp: XmlElement): ODataNavigationProperty {
 }
 
 function parseAssociation(association: XmlElement, namespace: string): ODataRelationship | null {
-  const name = ensureStr(association, '@_Name');
+  const name = str(association['@_Name']);
   if (!name) return null;
 
-  const ends = ensureArray(association, 'End', 'edm:End');
+  const ends = ensureArray(association['End'] || association['edm:End'] || []);
   if (ends.length < 2) return null;
 
   const fromEnd = parseAssociationEnd(ends[0]);
@@ -344,10 +398,9 @@ function parseAssociation(association: XmlElement, namespace: string): ODataRela
 }
 
 function parseAssociationEnd(end: XmlElement): ODataAssociationEnd | null {
-  const type = ensureStr(end, '@_Type');
-  const role = ensureStr(end, '@_Role');
-  const multiplicity = String(ensureStr(end, '@_Multiplicity') || '1');
-
+  const type = str(end['@_Type']) || '';
+  const role = str(end['@_Role']) || '';
+  const multiplicity = String(end['@_Multiplicity'] || '1');
   const entity = type.includes('.') ? type.split('.').pop() || '' : type;
 
   return {
@@ -357,37 +410,15 @@ function parseAssociationEnd(end: XmlElement): ODataAssociationEnd | null {
   };
 }
 
-function parseEntitySet(entitySet: XmlElement): ODataEntitySet | null {
-  const name = ensureStr(entitySet, '@_Name');
-  if (!name) return null;
-
-  const rawType = ensureStr(entitySet, '@_EntityType');
-  const entityType = rawType.includes('.') ? rawType.split('.').pop() || rawType : rawType;
-
-  const toBool = (value: unknown): boolean | undefined => {
-    if (value === undefined) return undefined;
-    return value !== false && value !== 'false';
-  };
-
-  return {
-    name,
-    entityType,
-    creatable: toBool(ensureGet(entitySet, '@_Creatable')),
-    updatable: toBool(ensureGet(entitySet, '@_Updatable')),
-    deletable: toBool(ensureGet(entitySet, '@_Deletable')),
-    navigable: toBool(ensureGet(entitySet, '@_Navigable')),
-  };
-}
-
 function parseFunctionImport(
   funcImport: XmlElement,
   functionDefs: Map<string, string>,
 ): ODataFunctionImport | null {
-  const name = ensureStr(funcImport, '@_Name');
+  const name = str(funcImport['@_Name']);
   if (!name) return null;
 
-  const functionName = ensureStr(funcImport, '@_Function');
-  const entitySet = ensureStr(funcImport, '@_EntitySet') || undefined;
+  const functionName = str(funcImport['@_Function']) || '';
+  const entitySet = str(funcImport['@_EntitySet']) || undefined;
 
   let returnType: string | undefined;
   if (functionName) {
@@ -398,13 +429,12 @@ function parseFunctionImport(
   }
 
   const parameters: ODataParameter[] = [];
-  for (const param of ensureArray(funcImport, 'Parameter', 'edm:Parameter')) {
-    const paramName = ensureStr(param, '@_Name');
-    const paramType = ensureStr(param, '@_Type') || 'Edm.String';
-    const nullable = ensureStr(param, '@_Nullable') !== 'false';
-    const rawMaxLength = ensureGet(param, '@_MaxLength');
-    const maxLength =
-      rawMaxLength !== undefined ? parseInt(String(rawMaxLength), 10) : undefined;
+  const paramElements = ensureArray(funcImport['Parameter'] || funcImport['edm:Parameter'] || []);
+  for (const param of paramElements) {
+    const paramName = str(param['@_Name']) || '';
+    const paramType = str(param['@_Type']) || 'Edm.String';
+    const nullable = str(param['@_Nullable']) !== 'false';
+    const maxLength = param['@_MaxLength'] ? parseInt(String(param['@_MaxLength']), 10) : undefined;
 
     if (paramName) {
       parameters.push({
@@ -425,42 +455,7 @@ function parseFunctionImport(
   };
 }
 
-function parseActionImport(actionImport: XmlElement): ODataActionImport | null {
-  const name = ensureStr(actionImport, '@_Name');
-  if (!name) return null;
-
-  const rawAction = ensureStr(actionImport, '@_Action');
-  const actionName = rawAction.includes('.') ? rawAction.split('.').pop() || rawAction : rawAction;
-  const entitySet = ensureStr(actionImport, '@_EntitySet') || undefined;
-
-  return {
-    name,
-    actionName,
-    entitySet,
-  };
-}
-
-function ensureGet(element: XmlElement, ...keys: string[]): unknown {
-  for (const key of keys) {
-    if (element[key] !== undefined) return element[key];
-  }
-  return undefined;
-}
-
-function ensureStr(element: XmlElement, ...keys: string[]): string {
-  const value = ensureGet(element, ...keys);
-  return value === undefined || value === null ? '' : String(value);
-}
-
-function ensureArray(element: XmlElement | undefined, ...keys: string[]): XmlElement[] {
-  if (!element) return [];
-  let value: unknown;
-  for (const key of keys) {
-    if (element[key] !== undefined) {
-      value = element[key];
-      break;
-    }
-  }
+function ensureArray(value: unknown): XmlElement[] {
   if (Array.isArray(value)) {
     return value as XmlElement[];
   }
@@ -468,4 +463,16 @@ function ensureArray(element: XmlElement | undefined, ...keys: string[]): XmlEle
     return [value as XmlElement];
   }
   return [];
+}
+
+function str(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  return String(value);
+}
+
+function boolAttr(value: unknown): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  return undefined;
 }

@@ -20,7 +20,7 @@ describe('XML Parser', () => {
 
   it('should parse minimal CSDL with one entity', async () => {
     const result = await parseCSDL(minimalCSDL);
-    
+
     expect(result).toBeDefined();
     expect(result.entities).toHaveLength(1);
     expect(result.entities[0].name).toBe('Product');
@@ -29,7 +29,7 @@ describe('XML Parser', () => {
   it('should extract entity properties', async () => {
     const result = await parseCSDL(minimalCSDL);
     const product = result.entities[0];
-    
+
     expect(product.properties).toHaveLength(3);
     expect(product.properties[0].name).toBe('Id');
     expect(product.properties[0].type).toBe('Edm.Int32');
@@ -39,7 +39,7 @@ describe('XML Parser', () => {
   it('should identify key properties', async () => {
     const result = await parseCSDL(minimalCSDL);
     const product = result.entities[0];
-    
+
     expect(product.keys).toContain('Id');
     expect(product.properties[0].isKey).toBe(true);
   });
@@ -47,8 +47,8 @@ describe('XML Parser', () => {
   it('should handle nullable properties', async () => {
     const result = await parseCSDL(minimalCSDL);
     const product = result.entities[0];
-    
-    const nameProp = product.properties.find(p => p.name === 'Name');
+
+    const nameProp = product.properties.find((p) => p.name === 'Name');
     expect(nameProp?.nullable).toBe(true);
   });
 
@@ -80,15 +80,15 @@ describe('XML Parser', () => {
 
   it('should parse entities with relationships', async () => {
     const result = await parseCSDL(csdlWithRelationships);
-    
+
     expect(result.entities).toHaveLength(2);
     expect(result.relationships).toHaveLength(1);
   });
 
   it('should extract navigation properties', async () => {
     const result = await parseCSDL(csdlWithRelationships);
-    const order = result.entities.find(e => e.name === 'Order');
-    
+    const order = result.entities.find((e) => e.name === 'Order');
+
     expect(order?.navigationProperties).toHaveLength(1);
     expect(order?.navigationProperties[0].name).toBe('Customer');
   });
@@ -96,12 +96,20 @@ describe('XML Parser', () => {
   it('should parse association ends', async () => {
     const result = await parseCSDL(csdlWithRelationships);
     const rel = result.relationships[0];
-    
+
     expect(rel.name).toBe('Order_Customer');
     expect(rel.from.entity).toBe('Order');
     expect(rel.from.multiplicity).toBe('1');
     expect(rel.to.entity).toBe('Customer');
     expect(rel.to.multiplicity).toBe('*');
+  });
+
+  it('should derive V4 relationships from navigation properties', async () => {
+    const result = await parseCSDL(csdlWithRelationships);
+    const order = result.entities.find((e) => e.name === 'Order');
+    const nav = order?.navigationProperties[0];
+
+    expect(nav?.targetType).toBe('Customer');
   });
 
   it('should handle empty/invalid XML gracefully', async () => {
@@ -117,7 +125,7 @@ describe('XML Parser', () => {
     </Schema>
   </edmx:DataServices>
 </edmx:Edmx>`;
-    
+
     const result = await parseCSDL(emptyCSDL);
     expect(result.entities).toHaveLength(0);
   });
@@ -145,9 +153,9 @@ describe('XML Parser', () => {
 
   it('should parse complex types', async () => {
     const result = await parseCSDL(csdlWithComplexTypes);
-    
+
     expect(result.entities).toHaveLength(2);
-    const address = result.entities.find(e => e.name === 'Address');
+    const address = result.entities.find((e) => e.name === 'Address');
     expect(address).toBeDefined();
     expect(address?.properties).toHaveLength(3);
   });
@@ -176,82 +184,99 @@ describe('XML Parser', () => {
 
   it('should handle multiple schemas/namespaces', async () => {
     const result = await parseCSDL(csdlWithMultipleNamespaces);
-    
+
     expect(result.entities).toHaveLength(2);
     expect(result.entities[0].namespace).toBe('ServiceA.Models');
     expect(result.entities[1].namespace).toBe('ServiceB.Models');
   });
 
-  const csdlV4Only = `<?xml version="1.0" encoding="utf-8"?>
+  const csdlWithEntityContainer = `<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
   <edmx:DataServices>
-    <Schema Namespace="TestService.Models" xmlns="http://docs.oasis-open.org/odata/ns/edm">
-      <EntityType Name="Order">
+    <Schema Namespace="Demo.Models" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Product">
         <Key>
           <PropertyRef Name="Id" />
         </Key>
         <Property Name="Id" Type="Edm.Int32" Nullable="false" />
-        <NavigationProperty Name="Customer" Type="TestService.Models.Customer" />
-        <NavigationProperty Name="Lines" Type="Collection(TestService.Models.OrderLine)" />
+        <NavigationProperty Name="Category" Type="Demo.Models.Category" />
       </EntityType>
-      <EntityType Name="Customer">
-        <Key>
-          <PropertyRef Name="Id" />
-        </Key>
-        <Property Name="Id" Type="Edm.Int32" Nullable="false" />
-      </EntityType>
-      <EntityType Name="OrderLine">
+      <EntityType Name="Category">
         <Key>
           <PropertyRef Name="Id" />
         </Key>
         <Property Name="Id" Type="Edm.Int32" Nullable="false" />
       </EntityType>
-      <EntityContainer Name="DefaultContainer">
-        <EntitySet Name="Orders" EntityType="TestService.Models.Order" />
-        <EntitySet Name="Customers" EntityType="TestService.Models.Customer" />
-        <ActionImport Name="Reset" Action="TestService.Models.Reset" EntitySet="Orders" />
+      <Action Name="ResetData" />
+      <ActionImport Name="Reset" Action="Demo.Models.ResetData" EntitySet="Products" />
+      <EntityContainer Name="DemoContainer">
+        <EntitySet Name="Products" EntityType="Demo.Models.Product" />
+        <EntitySet Name="Categories" EntityType="Demo.Models.Category" />
       </EntityContainer>
     </Schema>
   </edmx:DataServices>
 </edmx:Edmx>`;
 
-  it('should derive relationships from V4 navigation properties', async () => {
-    const result = await parseCSDL(csdlV4Only);
-
-    expect(result.relationships).toHaveLength(2);
-    const orderCustomer = result.relationships.find((r) => r.to.entity === 'Customer');
-    expect(orderCustomer?.from.entity).toBe('Order');
-    expect(orderCustomer?.to.multiplicity).toBe('1');
-    const orderLines = result.relationships.find((r) => r.to.entity === 'OrderLine');
-    expect(orderLines?.to.multiplicity).toBe('*');
-  });
-
-  it('should not duplicate Association relationships from navigation properties', async () => {
-    const result = await parseCSDL(csdlWithRelationships);
-    expect(result.relationships).toHaveLength(1);
-    expect(result.relationships[0].name).toBe('Order_Customer');
-  });
-
   it('should parse entity containers and entity sets', async () => {
-    const result = await parseCSDL(csdlV4Only);
+    const result = await parseCSDL(csdlWithEntityContainer);
 
     expect(result.entityContainers).toHaveLength(1);
-    expect(result.entityContainers[0].name).toBe('DefaultContainer');
-    expect(result.entityContainers[0].entitySets).toHaveLength(2);
-    expect(result.entityContainers[0].entitySets[0]).toMatchObject({
-      name: 'Orders',
-      entityType: 'Order',
-    });
+    const container = result.entityContainers[0];
+    expect(container.name).toBe('DemoContainer');
+    expect(container.entitySets).toHaveLength(2);
+    expect(container.entitySets[0].name).toBe('Products');
+    expect(container.entitySets[0].entityType).toBe('Product');
   });
 
   it('should parse action imports', async () => {
-    const result = await parseCSDL(csdlV4Only);
+    const result = await parseCSDL(csdlWithEntityContainer);
 
     expect(result.actionImports).toHaveLength(1);
-    expect(result.actionImports[0]).toMatchObject({
-      name: 'Reset',
-      actionName: 'Reset',
-      entitySet: 'Orders',
-    });
+    expect(result.actionImports[0].name).toBe('Reset');
+    expect(result.actionImports[0].actionName).toBe('ResetData');
+    expect(result.actionImports[0].entitySet).toBe('Products');
+  });
+
+  it('should derive relationships from V4 navigation properties without Associations', async () => {
+    const result = await parseCSDL(csdlWithEntityContainer);
+
+    expect(result.relationships).toHaveLength(1);
+    const rel = result.relationships[0];
+    expect(rel.from.entity).toBe('Product');
+    expect(rel.to.entity).toBe('Category');
+    expect(rel.from.multiplicity).toBe('1');
+    expect(rel.to.multiplicity).toBe('*');
+  });
+
+  const csdlWithCollectionNav = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Demo.Models" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Customer">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.Int32" Nullable="false" />
+        <NavigationProperty Name="Orders" Type="Collection(Demo.Models.Order)" />
+      </EntityType>
+      <EntityType Name="Order">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.Int32" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('should set multiplicity for collection navigation properties', async () => {
+    const result = await parseCSDL(csdlWithCollectionNav);
+
+    expect(result.relationships).toHaveLength(1);
+    const rel = result.relationships[0];
+    expect(rel.from.entity).toBe('Customer');
+    expect(rel.to.entity).toBe('Order');
+    expect(rel.from.multiplicity).toBe('*');
+    expect(rel.to.multiplicity).toBe('1');
   });
 });

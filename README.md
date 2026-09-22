@@ -21,6 +21,7 @@ An interactive web application for visualizing OData metadata as entity-relation
 | Styling | Tailwind CSS |
 | Backend | Node.js 20 + Express |
 | XML Parser | fast-xml-parser |
+| MCP Server | Model Context Protocol SDK |
 | Package Manager | pnpm |
 | Testing | Vitest + Playwright Browser Mode |
 | Deployment | Docker |

@@ -26,3 +26,5 @@ export async function loadMetadataFromSource(source: MetadataSource): Promise<OD
 
   return parseCSDL(xmlContent);
 }
+
+export { parseCSDL };
