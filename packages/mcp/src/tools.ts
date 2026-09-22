@@ -137,9 +137,7 @@ export async function handleToolCall(
 
       if (!entity) {
         const available = currentMetadata.entities.map((e) => e.name).join(', ');
-        return errorResult(
-          `Entity "${entityName}" not found. Available entities: ${available}`,
-        );
+        return errorResult(`Entity "${entityName}" not found. Available entities: ${available}`);
       }
 
       return {

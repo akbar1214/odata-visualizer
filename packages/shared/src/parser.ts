@@ -73,8 +73,7 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
   }
 
   const dataServices = (edmx['edmx:DataServices'] || edmx['DataServices']) as
-    | XmlElement
-    | undefined;
+    XmlElement | undefined;
   if (!dataServices) {
     throw new Error('Invalid OData CSDL: Missing DataServices element');
   }
