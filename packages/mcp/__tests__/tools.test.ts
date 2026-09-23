@@ -337,6 +337,268 @@ describe('createToolHandler', () => {
   });
 });
 
+const edgeCaseCSDL = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Edge" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EnumType Name="Color" UnderlyingType="Edm.String">
+        <Member Name="RED" Value="0" />
+        <Member Name="BLUE" Value="1" />
+      </EnumType>
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Tags" Type="Collection(Edge.Color)" />
+        <Property Name="Labels" Type="Collection(Edge.Code)" />
+        <NavigationProperty Name="Owner" Type="Edge.Thing" />
+      </EntityType>
+      <TypeDefinition Name="Code" UnderlyingType="Edm.String" />
+      <Action Name="Touch" IsBound="true">
+        <Parameter Name="bindingParameter" Type="Edge.Ghost" />
+      </Action>
+      <EntityContainer Name="Container">
+        <EntitySet Name="Things" EntityType="Edge.Thing" />
+        <EntitySet Name="Ghosts" EntityType="Edge.Ghost" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+async function windchillHandler() {
+  const { parseCSDL } = await import('@odata-visualizer/shared');
+  const { readFileSync } = await import('node:fs');
+  const store = createMetadataStore();
+  store.set(await parseCSDL(readFileSync(windchillFixture, 'utf-8')), {
+    sourceName: 'windchill.xml',
+    sourceType: 'file',
+  });
+  return createToolHandler(store);
+}
+
+async function edgeCaseHandler() {
+  const { parseCSDL } = await import('@odata-visualizer/shared');
+  const store = createMetadataStore();
+  store.set(await parseCSDL(edgeCaseCSDL), { sourceName: 'edge.xml', sourceType: 'file' });
+  return createToolHandler(store);
+}
+
+describe('invocation builders', () => {
+  it('excludes the binding parameter from an action request body', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_action_invocation', {
+      actionName: 'GetPartStructure',
+      entitySet: 'Parts',
+      keys: { ID: 'OR:wt.part.WTPart:1' },
+      parameters: { Part: 'should-not-appear', ShowSingleLevelReport: 'true' },
+    });
+
+    const text = result.content[0].text;
+    expect(text).toContain('"ShowSingleLevelReport": true');
+    expect(text).not.toContain('should-not-appear');
+  });
+
+  it('excludes the binding parameter from function inline parameters', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'GetPartEstimate',
+      entitySet: 'Parts',
+      keys: { ID: 'OR:wt.part.WTPart:1' },
+      parameters: { Part: 'should-not-appear', Quantity: '3' },
+    });
+
+    const text = result.content[0].text;
+    expect(text).toContain(
+      "GET <serviceRoot>/Parts('OR:wt.part.WTPart:1')/PTC.ProdMgmt.GetPartEstimate(Quantity=3)",
+    );
+    expect(text).not.toContain('should-not-appear');
+  });
+
+  it('maps differently-cased parameter names onto the declared parameter', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_action_invocation', {
+      actionName: 'GetPartStructure',
+      entitySet: 'Parts',
+      keys: { ID: 'OR:wt.part.WTPart:1' },
+      parameters: { showsinglelevelreport: 'true' },
+    });
+
+    const text = result.content[0].text;
+    expect(text).toContain('"ShowSingleLevelReport": true');
+  });
+
+  it('rejects parameters that are not declared by the operation', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_action_invocation', {
+      actionName: 'GetPartStructure',
+      entitySet: 'Parts',
+      keys: { ID: 'OR:wt.part.WTPart:1' },
+      parameters: { Bogus: 1 },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Unknown parameter "Bogus"');
+    expect(result.content[0].text).toContain('ShowSingleLevelReport');
+  });
+
+  it('rejects a non-boolean value for a boolean parameter', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_action_invocation', {
+      actionName: 'GetPartStructure',
+      entitySet: 'Parts',
+      keys: { ID: 'OR:wt.part.WTPart:1' },
+      parameters: { ShowSingleLevelReport: 'yes' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Invalid Edm.Boolean');
+  });
+
+  it('rejects a non-numeric value for a numeric function parameter', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'GetPartEstimate',
+      entitySet: 'Parts',
+      keys: { ID: 'OR:wt.part.WTPart:1' },
+      parameters: { Quantity: 'abc' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Invalid Edm.Double');
+  });
+
+  it('emits a null literal for null function parameters', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      parameters: { EntityName: null, IncludeAncestorProperty: 'true' },
+    });
+
+    expect(result.content[0].text).toContain(
+      "GET <serviceRoot>/GetWindchillMetaInfo(EntityName=null,IncludeAncestorProperty=true)",
+    );
+  });
+
+  it('shell-escapes single quotes in the generated curl example', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_action_invocation', {
+      actionName: 'CreateParts',
+      parameters: { PartNames: ["O'Brien"] },
+    });
+
+    const text = result.content[0].text;
+    expect(text).toContain("O'\\''Brien");
+  });
+
+  it('does not emit a Content-Type header for GET function invocations', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      parameters: { EntityName: 'Part' },
+    });
+
+    expect(result.content[0].text).not.toContain('Content-Type');
+  });
+});
+
+describe('lookup helpers', () => {
+  it('matches relationships by qualified entity name', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('get_relationships', {
+      entityName: 'PTC.ProdMgmt.ElectricalPart',
+    });
+
+    // ElectricalPart inherits Part navs, so it has relationships via its base type.
+    const inherited = await handler('get_relationships', { entityName: 'Part' });
+    expect(inherited.content[0].text).toContain('Part_Documents');
+
+    const qualifiedBase = await handler('get_relationships', {
+      entityName: 'PTC.ProdMgmt.Part',
+    });
+    expect(qualifiedBase.content[0].text).toContain('Part_Documents');
+    expect(result.isError).toBeFalsy();
+  });
+
+  it('searches inherited properties and navigation properties', async () => {
+    const handler = await windchillHandler();
+
+    const inherited = await handler('search_entities', { query: 'description' });
+    expect(inherited.content[0].text).toContain('PTC.ProdMgmt.Part');
+
+    const nav = await handler('search_entities', { query: 'SourcePart' });
+    expect(nav.content[0].text).toContain('PTC.ProdMgmt.Part');
+  });
+
+  it('resolves enum members and type definitions behind Collection(...)', async () => {
+    const handler = await edgeCaseHandler();
+    const details = await handler('get_entity_details', { entityName: 'Thing' });
+    const text = details.content[0].text;
+    expect(text).toContain('Collection(Edge.Color (enum: RED | BLUE))');
+    expect(text).toContain('Collection(Edge.Code (type definition of Edm.String))');
+  });
+
+  it('reports effective property counts in entity summaries', async () => {
+    const handler = await windchillHandler();
+    const list = await handler('list_entities', { limit: 50 });
+    // ElectricalPart declares 1 property but inherits 10.
+    expect(list.content[0].text).toContain('PTC.ProdMgmt.ElectricalPart');
+    expect(list.content[0].text).toMatch(/ElectricalPart[^-\n]*- 11 props, 2 navs/);
+  });
+});
+
+describe('error handling and pagination', () => {
+  it('does not crash when an entity set references an unresolved entity type', async () => {
+    const handler = await edgeCaseHandler();
+    const result = await handler('get_action_details', { name: 'Touch' });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0].text).toContain('Edge.Touch');
+    expect(result.content[0].text).toContain('is not defined in the loaded metadata');
+  });
+
+  it('reports a clear range when offset is beyond the end', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('list_entities', { offset: 500 });
+    expect(result.content[0].text).toContain('No results at offset 500 (9 total)');
+  });
+
+  it('reports the shown range when offset is non-zero', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('list_entity_sets', { offset: 1, limit: 2 });
+    expect(result.content[0].text).toContain('Showing 2-3 of 4');
+  });
+
+  it('caps the page size so huge limits cannot flood the response', async () => {
+    const { parseCSDL } = await import('@odata-visualizer/shared');
+    const manyEntities = Array.from(
+      { length: 300 },
+      (_, i) => `<EntityType Name="E${i}"><Key><PropertyRef Name="Id"/></Key><Property Name="Id" Type="Edm.Int32"/></EntityType>`,
+    ).join('');
+    const csdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices><Schema Namespace="Big" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+    ${manyEntities}
+  </Schema></edmx:DataServices>
+</edmx:Edmx>`;
+
+    const store = createMetadataStore();
+    store.set(await parseCSDL(csdl), { sourceName: 'big.xml' });
+    const result = await createToolHandler(store)('list_entities', { limit: 100000 });
+
+    expect(result.content[0].text).toContain('Showing 1-200 of 300');
+  });
+
+  it('points at the UI upload when load_metadata is disabled', async () => {
+    const handler = createToolHandler(createMetadataStore(), { allowLoadMetadata: false });
+    const status = await handler('get_metadata_status', {});
+    expect(status.content[0].text).toContain('Upload a file in the OData Visualizer UI');
+    expect(status.content[0].text).not.toContain('call load_metadata');
+
+    const list = await handler('list_entities', {});
+    expect(list.isError).toBe(true);
+    expect(list.content[0].text).toContain('Upload a file in the OData Visualizer UI');
+  });
+});
+
 describe('load_metadata from backend server', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -396,6 +658,27 @@ describe('load_metadata from backend server', () => {
     const result = await handleToolCall('load_metadata', { type: 'server' });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('Error loading metadata');
+  });
+
+  it('explains when the backend URL returns something other than JSON', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response('<html>not the api</html>', {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          }),
+      ),
+    );
+
+    resetMetadata();
+    const result = await handleToolCall('load_metadata', {
+      type: 'server',
+      source: 'http://localhost:9999',
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('JSON');
   });
 });
 

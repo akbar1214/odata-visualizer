@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { metadataStore } from '../src/services/metadataStore.js';
@@ -77,5 +77,29 @@ describe('metadata sharing via the API', () => {
 
     const res = await request(app).get('/api/metadata/current');
     expect(res.body.metadata).toBeNull();
+  });
+
+  it('redacts credentials from the stored URL source', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(minimalCSDL, {
+            status: 200,
+            headers: { 'Content-Type': 'application/xml' },
+          }),
+      ),
+    );
+
+    const app = createApp();
+    const parse = await request(app)
+      .post('/api/parse/url')
+      .send({ url: 'https://user:hunter2@windchill.example.com/odata/$metadata' });
+    expect(parse.status).toBe(200);
+
+    const res = await request(app).get('/api/metadata/current');
+    expect(res.body.info.sourceName).toBe('https://user@windchill.example.com/odata/$metadata');
+    expect(res.body.info.sourceName).not.toContain('hunter2');
+    vi.unstubAllGlobals();
   });
 });

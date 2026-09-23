@@ -1,7 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Express, Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { localhostHostValidation } from '@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js';
+import {
+  hostHeaderValidation,
+  localhostHostValidation,
+} from '@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { createMcpServer, type MetadataAccessors } from '@odata-visualizer/mcp/server';
 
@@ -12,6 +15,33 @@ export interface MountMcpOptions {
   allowLoadMetadata?: boolean;
   /** Optional shared secret; when set, requires `Authorization: Bearer <token>`. */
   token?: string;
+  /**
+   * Hostnames accepted in the Host header. Defaults to localhost only
+   * (DNS-rebinding protection). Set to serve /mcp from another hostname.
+   */
+  allowedHosts?: string[];
+}
+
+const DEFAULT_ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
+const MAX_SESSIONS = 32;
+
+function tokensMatch(provided: string | undefined, expected: string): boolean {
+  if (!provided) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+function resolveGuard(options: MountMcpOptions) {
+  const allowedHosts =
+    options.allowedHosts && options.allowedHosts.length > 0
+      ? options.allowedHosts
+      : DEFAULT_ALLOWED_HOSTS;
+  const isDefault =
+    allowedHosts.length === DEFAULT_ALLOWED_HOSTS.length &&
+    allowedHosts.every((h) => DEFAULT_ALLOWED_HOSTS.includes(h));
+  return [isDefault ? localhostHostValidation() : hostHeaderValidation(allowedHosts)];
 }
 
 /**
@@ -25,11 +55,16 @@ export function mountMcp(
 ): void {
   const path = options.path ?? '/mcp';
   const transports: Record<string, StreamableHTTPServerTransport> = {};
-  const guards = [localhostHostValidation()];
+  const guards = resolveGuard(options);
 
   const authorized = (req: Request, res: Response): boolean => {
     if (!options.token) return true;
-    if (req.headers['authorization'] === `Bearer ${options.token}`) return true;
+    const header = req.headers['authorization'];
+    const provided =
+      typeof header === 'string' && header.startsWith('Bearer ')
+        ? header.slice('Bearer '.length)
+        : undefined;
+    if (tokensMatch(provided, options.token)) return true;
     res.status(401).json({
       jsonrpc: '2.0',
       error: { code: -32001, message: 'Unauthorized' },
@@ -38,21 +73,17 @@ export function mountMcp(
     return false;
   };
 
-  const badRequest = (res: Response, message: string): void => {
-    res.status(400).json({
+  const jsonRpcError = (res: Response, status: number, code: number, message: string): void => {
+    res.status(status).json({
       jsonrpc: '2.0',
-      error: { code: -32000, message },
+      error: { code, message },
       id: null,
     });
   };
 
   const serverError = (res: Response): void => {
     if (!res.headersSent) {
-      res.status(500).json({
-        jsonrpc: '2.0',
-        error: { code: -32603, message: 'Internal server error' },
-        id: null,
-      });
+      jsonRpcError(res, 500, -32603, 'Internal server error');
     }
   };
 
@@ -61,13 +92,23 @@ export function mountMcp(
     const sessionId = req.headers['mcp-session-id'];
 
     try {
-      if (typeof sessionId === 'string' && transports[sessionId]) {
-        await transports[sessionId].handleRequest(req, res, req.body);
+      if (typeof sessionId === 'string') {
+        const existing = transports[sessionId];
+        if (!existing) {
+          jsonRpcError(res, 404, -32001, 'Session not found');
+          return;
+        }
+        await existing.handleRequest(req, res, req.body);
         return;
       }
 
-      if (sessionId || !isInitializeRequest(req.body)) {
-        badRequest(res, 'Bad Request: No valid session ID provided');
+      if (!isInitializeRequest(req.body)) {
+        jsonRpcError(res, 400, -32000, 'Bad Request: No valid session ID provided');
+        return;
+      }
+
+      if (Object.keys(transports).length >= MAX_SESSIONS) {
+        jsonRpcError(res, 503, -32000, 'Too many MCP sessions; close an existing session first.');
         return;
       }
 
@@ -93,33 +134,21 @@ export function mountMcp(
     }
   });
 
-  app.get(path, ...guards, async (req: Request, res: Response) => {
+  const handleSessionRequest = async (req: Request, res: Response): Promise<void> => {
     if (!authorized(req, res)) return;
     const sessionId = req.headers['mcp-session-id'];
     if (typeof sessionId !== 'string' || !transports[sessionId]) {
-      res.status(400).send('Invalid or missing session ID');
+      res.status(404).send('Invalid or missing session ID');
       return;
     }
     try {
       await transports[sessionId].handleRequest(req, res);
     } catch (error) {
-      console.error('Error handling MCP SSE request:', error);
+      console.error('Error handling MCP session request:', error);
       serverError(res);
     }
-  });
+  };
 
-  app.delete(path, ...guards, async (req: Request, res: Response) => {
-    if (!authorized(req, res)) return;
-    const sessionId = req.headers['mcp-session-id'];
-    if (typeof sessionId !== 'string' || !transports[sessionId]) {
-      res.status(400).send('Invalid or missing session ID');
-      return;
-    }
-    try {
-      await transports[sessionId].handleRequest(req, res);
-    } catch (error) {
-      console.error('Error handling MCP session termination:', error);
-      serverError(res);
-    }
-  });
+  app.get(path, ...guards, handleSessionRequest);
+  app.delete(path, ...guards, handleSessionRequest);
 }

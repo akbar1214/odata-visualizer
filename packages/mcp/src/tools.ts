@@ -46,6 +46,7 @@ export interface ToolHandlerOptions {
 }
 
 const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 200;
 
 function errorResult(text: string): ToolResult {
   return { content: [{ type: 'text', text }], isError: true };
@@ -53,10 +54,6 @@ function errorResult(text: string): ToolResult {
 
 function textResult(text: string): ToolResult {
   return { content: [{ type: 'text', text }] };
-}
-
-function noMetadata(): ToolResult {
-  return errorResult('No metadata loaded. Call load_metadata first with a file path or URL.');
 }
 
 function asString(value: unknown): string | undefined {
@@ -68,14 +65,20 @@ function asNumber(value: unknown): number | undefined {
 }
 
 function paginate<T>(items: T[], args: Record<string, unknown>): { slice: T[]; note: string } {
-  const limit = asNumber(args['limit']) ?? DEFAULT_LIMIT;
-  const offset = asNumber(args['offset']) ?? 0;
+  const limit = Math.min(MAX_LIMIT, Math.max(0, asNumber(args['limit']) ?? DEFAULT_LIMIT));
+  const offset = Math.max(0, asNumber(args['offset']) ?? 0);
   const slice = items.slice(offset, offset + limit);
-  const shownEnd = Math.min(offset + limit, items.length);
+
+  if (slice.length === 0) {
+    return { slice, note: `\n\nNo results at offset ${offset} (${items.length} total).` };
+  }
+
+  const from = offset + 1;
+  const to = offset + slice.length;
   const note =
-    items.length > slice.length
-      ? `\n\nShowing ${offset + 1}-${shownEnd} of ${items.length}. Use limit/offset for more.`
-      : `\n\nShowing all ${items.length}.`;
+    items.length > to
+      ? `\n\nShowing ${from}-${to} of ${items.length}. Use limit/offset for more.`
+      : `\n\nShowing ${from}-${to} of ${items.length}.`;
   return { slice, note };
 }
 
@@ -85,11 +88,53 @@ function formatEntitySummary(entity: ODataEntity, metadata: ODataMetadata): stri
   const kind = entity.kind === 'complex' ? ' [complex]' : '';
   const abstract = entity.abstract ? ' [abstract]' : '';
   const base = entity.baseType ? ` : ${entity.baseType}` : '';
-  return `${entity.qualifiedName ?? entity.name}${kind}${abstract}${base}${keyStr} - ${entity.properties.length} props, ${entity.navigationProperties.length} navs`;
+  const propCount = getEffectiveProperties(entity, metadata.entities).length;
+  const navCount = getEffectiveNavigationProperties(entity, metadata.entities).length;
+  const inherited =
+    propCount !== entity.properties.length || navCount !== entity.navigationProperties.length
+      ? ' (incl. inherited)'
+      : '';
+  return `${entity.qualifiedName ?? entity.name}${kind}${abstract}${base}${keyStr} - ${propCount} props, ${navCount} navs${inherited}`;
 }
 
 function formatRelationship(rel: ODataRelationship): string {
   return `${rel.name}: ${rel.from.entity} (${rel.from.multiplicity}) <-> ${rel.to.entity} (${rel.to.multiplicity})`;
+}
+
+/**
+ * Scan a type's effective properties (including inherited ones) without
+ * allocating the merged list, so searching a large model stays cheap.
+ */
+function hasEffectiveProperty(
+  entity: ODataEntity,
+  entities: ODataEntity[],
+  predicate: (lowerName: string) => boolean,
+): boolean {
+  const seen = new Set<string>();
+  for (const type of resolveInheritanceChain(entity, entities)) {
+    for (const prop of type.properties) {
+      if (seen.has(prop.name)) continue;
+      seen.add(prop.name);
+      if (predicate(prop.name.toLowerCase())) return true;
+    }
+  }
+  return false;
+}
+
+function hasEffectiveNavigation(
+  entity: ODataEntity,
+  entities: ODataEntity[],
+  predicate: (lowerName: string) => boolean,
+): boolean {
+  const seen = new Set<string>();
+  for (const type of resolveInheritanceChain(entity, entities)) {
+    for (const nav of type.navigationProperties) {
+      if (seen.has(nav.name)) continue;
+      seen.add(nav.name);
+      if (predicate(nav.name.toLowerCase())) return true;
+    }
+  }
+  return false;
 }
 
 function resolveEntityArg(
@@ -123,6 +168,12 @@ function resolveEntityArg(
 
 function describeType(type: string, metadata: ODataMetadata): string {
   if (type.startsWith('Edm.')) return type;
+
+  const collection = /^Collection\((.*)\)$/.exec(type);
+  if (collection) {
+    return `Collection(${describeType(collection[1], metadata)})`;
+  }
+
   const enumType = metadata.enumTypes.find((e) => e.qualifiedName === type || e.name === type);
   if (enumType) {
     return `${type} (enum: ${enumType.members.map((m) => m.name).join(' | ')})`;
@@ -256,12 +307,23 @@ function formatCallableDetails(
         s.entityType === bindingType,
     );
     const setPath = set?.name ?? '<EntitySet>';
-    const keyProp = set
-      ? getEffectiveKeys(findEntityByName(metadata.entities, set.entityType)!, metadata.entities)[0]
-      : 'ID';
-    const keyLiteral = keyProp ? `${keyProp}=<${keyProp}>` : '<key>';
+    const setEntity = set
+      ? findEntityByName(metadata.entities, set.entityTypeQualified ?? set.entityType)
+      : undefined;
+    const keyNames = setEntity ? getEffectiveKeys(setEntity, metadata.entities) : [];
+    const keyLiteral =
+      keyNames.length > 0
+        ? keyNames.length === 1
+          ? `${keyNames[0]}=<${keyNames[0]}>`
+          : keyNames.map((k) => `${k}=<${k}>`).join(',')
+        : '<key>';
     const root = baseUrl ? baseUrl.replace(/\/+$/, '') : '<serviceRoot>';
     lines.push(`  ${root}/${setPath}(${keyLiteral})/${item.qualifiedName ?? item.name}`);
+    if (set && !setEntity) {
+      lines.push(
+        `  Note: entity set "${set.name}" references type "${set.entityTypeQualified ?? set.entityType}", which is not defined in the loaded metadata.`,
+      );
+    }
   } else {
     const root = baseUrl ? baseUrl.replace(/\/+$/, '') : '<serviceRoot>';
     lines.push(`  ${root}/${importName ?? item.name}`);
@@ -331,10 +393,19 @@ function coerceBodyValue(type: string, value: unknown, metadata: ODataMetadata):
 
 function coerceScalar(type: string, value: unknown, metadata: ODataMetadata): unknown {
   if (value === null || value === undefined) return value;
+
+  const typeDef = metadata.typeDefinitions.find((t) => t.qualifiedName === type || t.name === type);
+  if (typeDef) return coerceScalar(typeDef.underlyingType, value, metadata);
+
   if (type === 'Edm.Boolean') {
     if (typeof value === 'boolean') return value;
-    return String(value).toLowerCase() === 'true';
+    const lowered = String(value).toLowerCase();
+    if (lowered !== 'true' && lowered !== 'false') {
+      throw new Error(`Invalid Edm.Boolean value: ${String(value)} (expected true or false)`);
+    }
+    return lowered === 'true';
   }
+
   if (
     type === 'Edm.Int16' ||
     type === 'Edm.Int32' ||
@@ -346,10 +417,12 @@ function coerceScalar(type: string, value: unknown, metadata: ODataMetadata): un
     type === 'Edm.SByte'
   ) {
     const num = Number(value);
-    return Number.isNaN(num) ? value : num;
+    if (Number.isNaN(num)) {
+      throw new Error(`Invalid ${type} value: ${String(value)}`);
+    }
+    return num;
   }
-  const typeDef = metadata.typeDefinitions.find((t) => t.qualifiedName === type || t.name === type);
-  if (typeDef) return coerceScalar(typeDef.underlyingType, value, metadata);
+
   return value;
 }
 
@@ -361,6 +434,7 @@ function declaredParameterType(
 }
 
 function formatFunctionParamLiteral(type: string, value: unknown): string {
+  if (value === null || value === undefined) return 'null';
   const collection = /^Collection\((.*)\)$/.exec(type);
   if (collection) {
     const items = Array.isArray(value) ? value : [value];
@@ -369,14 +443,23 @@ function formatFunctionParamLiteral(type: string, value: unknown): string {
   return formatV4Literal(String(value), type);
 }
 
+/** Escape a value for safe inclusion inside single quotes in a shell command. */
+function shellEscape(value: string): string {
+  return value.replace(/'/g, `'\\''`);
+}
+
 export function createToolHandler(
   accessors: MetadataAccessors,
   options: ToolHandlerOptions = {},
 ): ToolHandler {
   const allowLoadMetadata = options.allowLoadMetadata ?? true;
+  const noMetadataMessage = allowLoadMetadata
+    ? 'No metadata loaded. Call load_metadata first with a file path, URL, or the backend.'
+    : 'No metadata loaded. Upload a file in the OData Visualizer UI first.';
 
   return async (name, args) => {
     const currentMetadata = accessors.get()?.metadata ?? null;
+    const noMetadata = (): ToolResult => errorResult(noMetadataMessage);
 
     switch (name) {
       case 'load_metadata': {
@@ -434,7 +517,9 @@ export function createToolHandler(
         const stored = accessors.get();
         if (!stored) {
           return textResult(
-            'No metadata loaded. Upload a file in the OData Visualizer UI or call load_metadata.',
+            allowLoadMetadata
+              ? 'No metadata loaded. Upload a file in the OData Visualizer UI or call load_metadata.'
+              : 'No metadata loaded. Upload a file in the OData Visualizer UI.',
           );
         }
         const { metadata, info } = stored;
@@ -471,11 +556,16 @@ export function createToolHandler(
             if (names.some((n) => n === query)) score = 0;
             else if (names.some((n) => n.startsWith(query))) score = 1;
             else if (names.some((n) => n.includes(query))) score = 2;
-            else if (entity.properties.some((p) => p.name.toLowerCase().includes(query))) score = 3;
+            else if (hasEffectiveProperty(entity, metadata.entities, (name) => name === query))
+              score = 3;
+            else if (
+              hasEffectiveNavigation(entity, metadata.entities, (name) => name.includes(query))
+            )
+              score = 4;
             else if (
               Object.values(entity.annotations ?? {}).some((v) => v.toLowerCase().includes(query))
             )
-              score = 4;
+              score = 5;
             return { entity, score };
           })
           .filter((s) => s.score >= 0)
@@ -488,7 +578,7 @@ export function createToolHandler(
             metadata.entities.map((e) => e.name),
           );
           return textResult(
-            `No entities matching "${args['query']}".${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
+            `No entities matching "${query}".${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
           );
         }
 
@@ -543,9 +633,15 @@ export function createToolHandler(
         let rels = metadata.relationships;
         if (entityName) {
           const needle = entityName.toLowerCase();
-          rels = rels.filter(
-            (r) => r.from.entity.toLowerCase() === needle || r.to.entity.toLowerCase() === needle,
-          );
+          rels = rels.filter((r) => {
+            const from = metadata.entities.find((e) => e.name === r.from.entity);
+            const to = metadata.entities.find((e) => e.name === r.to.entity);
+            const fromNames = [r.from.entity, from?.qualifiedName ?? ''].map((n) =>
+              n.toLowerCase(),
+            );
+            const toNames = [r.to.entity, to?.qualifiedName ?? ''].map((n) => n.toLowerCase());
+            return fromNames.includes(needle) || toNames.includes(needle);
+          });
         }
 
         if (rels.length === 0) {
@@ -679,7 +775,7 @@ export function createToolHandler(
             orderBy: asString(args['orderBy']),
             top: asNumber(args['top']),
             skip: asNumber(args['skip']),
-            count: typeof args['count'] === 'boolean' ? (args['count'] as boolean) : undefined,
+            count: typeof args['count'] === 'boolean' ? args['count'] : undefined,
             search: asString(args['search']),
             metadata,
           });
@@ -773,11 +869,71 @@ function buildInvocation(
   args: Record<string, unknown>,
   isFunction: boolean,
 ): ToolResult {
+  try {
+    return buildInvocationUnsafe(method, item, metadata, args, isFunction);
+  } catch (error) {
+    const label = isFunction ? 'function' : 'action';
+    return errorResult(
+      `Error building ${label} invocation: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    );
+  }
+}
+
+/**
+ * Binding parameters identify the target resource in the URL and must never be
+ * sent in the request body or repeated as inline function parameters.
+ */
+function invokableParameters(item: ODataAction | ODataFunction): ODataParameter[] {
+  return (item.parameters ?? []).filter((p) => !p.isBinding);
+}
+
+function assertKnownParameters(
+  item: ODataAction | ODataFunction,
+  parameters: Record<string, unknown>,
+): void {
+  const declared = new Map(
+    (item.parameters ?? []).map((p) => [p.name.toLowerCase(), p.name] as const),
+  );
+  const unknown = Object.keys(parameters).filter((name) => !declared.has(name.toLowerCase()));
+  if (unknown.length === 0) return;
+
+  const binding = (item.parameters ?? []).find((p) => p.isBinding);
+  const ignored = binding
+    ? ` The binding parameter "${binding.name}" is sent in the URL, not the body.`
+    : '';
+  throw new Error(
+    `Unknown parameter "${unknown.join('", "')}" for ${item.name}. Declared parameters: ${
+      (item.parameters ?? []).map((p) => p.name).join(', ') || '(none)'
+    }.${ignored}`,
+  );
+}
+
+function buildInvocationUnsafe(
+  method: 'GET' | 'POST',
+  item: ODataAction | ODataFunction,
+  metadata: ODataMetadata,
+  args: Record<string, unknown>,
+  isFunction: boolean,
+): ToolResult {
   const entitySetName = asString(args['entitySet']);
   const keys = (args['keys'] as Record<string, string> | undefined) ?? {};
-  const parameters = (args['parameters'] as Record<string, unknown> | undefined) ?? {};
+  const rawParameters = (args['parameters'] as Record<string, unknown> | undefined) ?? {};
   const baseUrl = asString(args['baseUrl']);
   const root = (baseUrl ?? '<serviceRoot>').replace(/\/+$/, '');
+
+  assertKnownParameters(item, rawParameters);
+
+  // Copy using the declared parameter names so a differently-cased input name
+  // still maps onto the right parameter.
+  const providedByLowerName = new Map(
+    Object.entries(rawParameters).map(([key, value]) => [key.toLowerCase(), value] as const),
+  );
+  const parameters: Record<string, unknown> = {};
+  for (const param of invokableParameters(item)) {
+    if (providedByLowerName.has(param.name.toLowerCase())) {
+      parameters[param.name] = providedByLowerName.get(param.name.toLowerCase());
+    }
+  }
 
   let path: string;
   if (item.isBound) {
@@ -823,13 +979,18 @@ function buildInvocation(
 
   const lines: string[] = [];
   lines.push(`${method} ${root}/${fullPath}`);
-  lines.push('Content-Type: application/json');
 
   if (isFunction) {
+    if (Object.keys(parameters).length > 0) {
+      lines.push('Parameters: inline in the URL (see above).');
+    }
     lines.push('');
-    lines.push('Parameters: inline in the URL (see above).');
+    lines.push('Example:');
+    lines.push(`curl '${shellEscape(`${root}/${fullPath}`)}'`);
     return textResult(lines.join('\n'));
   }
+
+  lines.push('Content-Type: application/json');
 
   const body = buildBody(item, parameters, metadata);
   lines.push('');
@@ -840,9 +1001,9 @@ function buildInvocation(
   lines.push(
     [
       `curl -X ${method}`,
-      `  '${root}/${fullPath}'`,
+      `  '${shellEscape(`${root}/${fullPath}`)}'`,
       "  -H 'Content-Type: application/json'",
-      `  -d '${JSON.stringify(body)}'`,
+      `  -d '${shellEscape(JSON.stringify(body))}'`,
     ].join(' \\\n'),
   );
 

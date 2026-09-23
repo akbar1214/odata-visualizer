@@ -124,6 +124,27 @@ export function formatV4Literal(value: string, edmType?: string): string {
 }
 
 /**
+ * Percent-encode only the characters that would corrupt a query string:
+ * `%` (existing escape), `&` (new parameter), `#` (fragment), and `+`
+ * (decoded as a space by many servers). Spaces, quotes, and `=` are legal in
+ * an OData system query option and are left readable.
+ */
+function encodeQueryValue(value: string): string {
+  return value.replace(/[%&#+]/g, (char) => {
+    switch (char) {
+      case '%':
+        return '%25';
+      case '&':
+        return '%26';
+      case '#':
+        return '%23';
+      default:
+        return '%2B';
+    }
+  });
+}
+
+/**
  * Build an OData V4 query URL (relative to the service root, or absolute
  * when baseUrl is given).
  */
@@ -133,21 +154,30 @@ export function buildQueryUrl(options: QueryOptions): string {
     throw new Error('entitySet is required');
   }
 
+  if (
+    options.search &&
+    (options.filters?.length || options.top !== undefined || options.skip !== undefined)
+  ) {
+    throw new Error(
+      'OData V4 does not allow $search together with $filter, $top, or $skip. Use $filter alone, or $search with $select/$orderby/$count.',
+    );
+  }
+
   const rootEntity = resolveRootEntity(options);
   const params: string[] = [];
 
   const filterStr = buildFilter(options.filters ?? [], options.filterLogic ?? 'and', (property) =>
     lookupPropertyType(rootEntity, property, options.metadata),
   );
-  if (filterStr) params.push(`$filter=${filterStr}`);
+  if (filterStr) params.push(`$filter=${encodeQueryValue(filterStr)}`);
 
   if (options.select && options.select.length > 0) {
-    params.push(`$select=${options.select.join(',')}`);
+    params.push(`$select=${options.select.map(encodeQueryValue).join(',')}`);
   }
 
   if (options.expand && options.expand.length > 0) {
     const expandStr = buildExpand(options.expand, rootEntity, options.metadata);
-    if (expandStr) params.push(`$expand=${expandStr}`);
+    if (expandStr) params.push(`$expand=${encodeQueryValue(expandStr)}`);
   }
 
   if (options.orderBy) {
@@ -157,7 +187,7 @@ export function buildQueryUrl(options: QueryOptions): string {
       if (dir && dir.toLowerCase() !== 'asc' && dir.toLowerCase() !== 'desc') {
         throw new Error(`Invalid sort direction: ${dir}`);
       }
-      params.push(`$orderby=${dir ? `${field} ${dir.toLowerCase()}` : field}`);
+      params.push(`$orderby=${encodeQueryValue(field)}${dir ? ` ${dir.toLowerCase()}` : ''}`);
     }
   }
 
@@ -180,7 +210,7 @@ export function buildQueryUrl(options: QueryOptions): string {
   }
 
   if (options.search) {
-    params.push(`$search=${options.search}`);
+    params.push(`$search=${encodeQueryValue(options.search)}`);
   }
 
   const path = `/${entitySet}${params.length > 0 ? `?${params.join('&')}` : ''}`;

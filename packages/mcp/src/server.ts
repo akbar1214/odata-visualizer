@@ -65,27 +65,31 @@ export function createMcpServer(
     offset: z.number().int().nonnegative().optional().describe('Results to skip (default 0)'),
   };
 
-  server.registerTool(
-    'load_metadata',
-    {
-      description:
-        'Load OData V4 metadata from a file path, a URL, or the OData Visualizer backend ("server", using the file uploaded in the UI). Call this only to override what the server already holds.',
-      inputSchema: {
-        source: z
-          .string()
-          .optional()
-          .describe(
-            'File path (e.g., "./metadata.xml"), URL (e.g., "https://host/Windchill/servlet/odata/ProdMgmt/$metadata"), or backend base URL. Omit for the default backend.',
-          ),
-        type: z
-          .enum(['file', 'url', 'server'])
-          .describe(
-            '"file" (local path), "url" (remote $metadata), or "server" (metadata uploaded in the UI)',
-          ),
+  // The HTTP server shares metadata with the backend, so it does not expose
+  // load_metadata (which would allow arbitrary file reads / SSRF).
+  if (options.allowLoadMetadata !== false) {
+    server.registerTool(
+      'load_metadata',
+      {
+        description:
+          'Load OData V4 metadata from a file path, a URL, or the OData Visualizer backend ("server", using the file uploaded in the UI). Call this only to override what the server already holds.',
+        inputSchema: {
+          source: z
+            .string()
+            .optional()
+            .describe(
+              'File path (e.g., "./metadata.xml"), URL (e.g., "https://host/Windchill/servlet/odata/ProdMgmt/$metadata"), or backend base URL. Omit for the default backend.',
+            ),
+          type: z
+            .enum(['file', 'url', 'server'])
+            .describe(
+              '"file" (local path), "url" (remote $metadata), or "server" (metadata uploaded in the UI)',
+            ),
+        },
       },
-    },
-    async (args) => handleToolCall('load_metadata', args),
-  );
+      async (args) => handleToolCall('load_metadata', args),
+    );
+  }
 
   server.registerTool(
     'get_metadata_status',

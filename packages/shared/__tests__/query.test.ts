@@ -179,4 +179,48 @@ describe('buildQueryUrl', () => {
     // Documents targets CADDocument whose `name` is Edm.String → quoted
     expect(url).toContain("$expand=Documents($filter=name eq 'x')");
   });
+
+  it('percent-encodes characters that would break the query string', () => {
+    const url = buildQueryUrl({
+      entitySet: 'Parts',
+      filters: [{ property: 'number', operator: 'eq', value: 'A&B#1+C' }],
+    });
+    // Only the characters that would corrupt parsing are encoded; the
+    // OData structure stays readable.
+    expect(url).toBe("/Parts?$filter=number eq 'A%26B%231%2BC'");
+  });
+
+  it('encodes $search values', () => {
+    const url = buildQueryUrl({ entitySet: 'Parts', search: 'red & blue' });
+    expect(url).toBe('/Parts?$search=red %26 blue');
+  });
+
+  it('encodes the sort field but keeps the direction readable', () => {
+    const url = buildQueryUrl({ entitySet: 'Parts', orderBy: 'name asc' });
+    expect(url).toBe('/Parts?$orderby=name asc');
+  });
+
+  it('rejects $search combined with $filter, $top, or $skip', () => {
+    expect(() =>
+      buildQueryUrl({
+        entitySet: 'Parts',
+        search: 'red',
+        filters: [{ property: 'name', operator: 'eq', value: 'x' }],
+      }),
+    ).toThrow('$search');
+
+    expect(() => buildQueryUrl({ entitySet: 'Parts', search: 'red', top: 5 })).toThrow('$search');
+    expect(() => buildQueryUrl({ entitySet: 'Parts', search: 'red', skip: 5 })).toThrow('$search');
+  });
+
+  it('allows $search together with $select, $orderby, and $count', () => {
+    const url = buildQueryUrl({
+      entitySet: 'Parts',
+      search: 'red',
+      select: ['ID'],
+      orderBy: 'number',
+      count: true,
+    });
+    expect(url).toBe('/Parts?$select=ID&$orderby=number&$count=true&$search=red');
+  });
 });
