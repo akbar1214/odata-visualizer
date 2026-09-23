@@ -335,6 +335,24 @@ describe('createToolHandler', () => {
     expect(text).toContain('Entities: 9');
     expect(text).toContain('Entity sets: 4');
   });
+
+  it('surfaces unresolved references in get_metadata_status', async () => {
+    const { parseCSDL } = await import('@odata-visualizer/shared');
+    const withReference = `<?xml version="1.0"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="M" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="A"><Key><PropertyRef Name="Id"/></Key><Property Name="Id" Type="Edm.String"/></EntityType>
+    </Schema>
+    <edmx:Reference Uri="missing.xml"><edmx:Include Namespace="X" Alias="x" /></edmx:Reference>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const store = createMetadataStore();
+    store.set(await parseCSDL(withReference), { sourceName: 'partial.xml' });
+    const result = await createToolHandler(store)('get_metadata_status', {});
+    expect(result.content[0].text).toContain('Unresolved references: missing.xml');
+  });
 });
 
 const edgeCaseCSDL = `<?xml version="1.0" encoding="utf-8"?>
@@ -356,6 +374,13 @@ const edgeCaseCSDL = `<?xml version="1.0" encoding="utf-8"?>
       <Action Name="Touch" IsBound="true">
         <Parameter Name="bindingParameter" Type="Edge.Ghost" />
       </Action>
+      <Action Name="Reset">
+        <Parameter Name="Scope" Type="Edm.String" Nullable="true" />
+      </Action>
+      <Function Name="Lookup">
+        <Parameter Name="Term" Type="Edm.String" />
+        <ReturnType Type="Edm.String" />
+      </Function>
       <EntityContainer Name="Container">
         <EntitySet Name="Things" EntityType="Edge.Thing" />
         <EntitySet Name="Ghosts" EntityType="Edge.Ghost" />
@@ -497,6 +522,118 @@ describe('invocation builders', () => {
     });
 
     expect(result.content[0].text).not.toContain('Content-Type');
+  });
+
+  it('addresses an unbound action with no import by its qualified name', async () => {
+    const handler = await edgeCaseHandler();
+    const result = await handler('build_action_invocation', {
+      actionName: 'Reset',
+      parameters: { Scope: 'all' },
+    });
+    expect(result.content[0].text).toContain('POST <serviceRoot>/Edge.Reset');
+  });
+
+  it('addresses an unbound function with no import by its qualified name', async () => {
+    const handler = await edgeCaseHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'Lookup',
+      parameters: { Term: 'x' },
+    });
+    expect(result.content[0].text).toContain("GET <serviceRoot>/Edge.Lookup(Term='x')");
+  });
+});
+
+describe('build_query diagnostics', () => {
+  it('warns about unknown $select properties', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_query', {
+      entitySet: 'Parts',
+      select: ['ID', 'Nmae'],
+    });
+    const text = result.content[0].text;
+    expect(text).toContain('GET /Parts?$select=ID,Nmae');
+    expect(text).toContain('"Nmae" is not a property of PTC.ProdMgmt.Part');
+  });
+
+  it('warns about unknown $orderby fields', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_query', {
+      entitySet: 'Parts',
+      orderBy: 'nmae desc',
+    });
+    expect(result.content[0].text).toContain('"nmae" is not a property of PTC.ProdMgmt.Part');
+  });
+
+  it('warns about unknown $filter properties', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_query', {
+      entitySet: 'Parts',
+      filters: [{ property: 'nope', operator: 'eq', value: '1' }],
+    });
+    expect(result.content[0].text).toContain('"nope" is not a property of PTC.ProdMgmt.Part');
+  });
+
+  it('warns about unknown $expand navigation properties', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_query', {
+      entitySet: 'Parts',
+      expand: [{ navProperty: 'NoSuchNav' }],
+    });
+    expect(result.content[0].text).toContain(
+      '"NoSuchNav" is not a navigation property of PTC.ProdMgmt.Part',
+    );
+  });
+
+  it('reports the path of a nested unknown expand', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_query', {
+      entitySet: 'Parts',
+      expand: [
+        {
+          navProperty: 'Documents',
+          expand: [{ navProperty: 'Missing' }],
+        },
+      ],
+    });
+    expect(result.content[0].text).toContain('Documents/Missing');
+  });
+
+  it('does not warn for valid properties', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_query', {
+      entitySet: 'Parts',
+      select: ['ID', 'number'],
+      orderBy: 'number desc',
+      filters: [{ property: 'state', operator: 'eq', value: 'RELEASED' }],
+      expand: [{ navProperty: 'Documents', select: ['ID'] }],
+    });
+    expect(result.content[0].text).not.toContain('not a property');
+    expect(result.content[0].text).not.toContain('not a navigation property');
+  });
+
+  it('builds a groupby/aggregate query', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_query', {
+      entitySet: 'Parts',
+      groupBy: [{ property: 'state' }],
+      aggregates: [
+        { method: 'count', alias: 'PartCount' },
+        { property: 'unitPrice', method: 'avg', alias: 'AvgPrice' },
+      ],
+    });
+    expect(result.content[0].text).toContain(
+      '$apply=groupby((state),aggregate($count as PartCount,avg(unitPrice) as AvgPrice))',
+    );
+  });
+
+  it('reports invalid aggregates as errors', async () => {
+    const handler = await windchillHandler();
+    const result = await handler('build_query', {
+      entitySet: 'Parts',
+      aggregates: [{ property: 'number', method: 'sum' }],
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('requires a numeric property');
   });
 });
 

@@ -1,21 +1,13 @@
 import { Router, type Request, type Response, type Router as ExpressRouter } from 'express';
 import multer from 'multer';
-import { parseCSDL } from '../services/xmlParser.js';
-import { metadataStore } from '../services/metadataStore.js';
+import { parseCSDL } from '@odata-visualizer/shared';
+import { parseCSDLUrl } from '@odata-visualizer/shared/load';
+import { metadataStore, sanitizeModelId } from '../services/metadataStore.js';
+import { createHttpReferenceLoader } from '../services/referenceLoader.js';
+import { validateMetadataUrl } from '../services/urlPolicy.js';
 import type { ParseRequest, ParseResponse } from '@odata-visualizer/shared';
 
 const router: ExpressRouter = Router();
-
-/**
- * Keep the URL safe to display and hand to an MCP client by stripping any
- * embedded password.
- */
-function redactUrlCredentials(url: URL): string {
-  if (!url.password) return url.toString();
-  const redacted = new URL(url.toString());
-  redacted.password = '';
-  return redacted.toString();
-}
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -35,6 +27,59 @@ const upload = multer({
     }
   },
 });
+
+/** Session id for per-browser isolation; falls back to the shared "current" model. */
+function sessionIdOf(req: Request, body?: { session?: string }): string {
+  const fromHeader = req.headers['x-metadata-session'];
+  const headerValue = typeof fromHeader === 'string' ? fromHeader : undefined;
+  const raw = headerValue ?? body?.session;
+  return raw ? sanitizeModelId(raw) : 'default';
+}
+
+/**
+ * Keep the URL safe to display and hand to an MCP client by stripping any
+ * embedded password.
+ */
+function redactUrlCredentials(url: URL): string {
+  if (!url.password) return url.toString();
+  const redacted = new URL(url.toString());
+  redacted.password = '';
+  return redacted.toString();
+}
+
+function allowlistFromEnv(): string[] | undefined {
+  const raw = process.env['METADATA_URL_ALLOWLIST'];
+  if (!raw) return undefined;
+  const hosts = raw
+    .split(',')
+    .map((host) => host.trim())
+    .filter((host) => host.length > 0);
+  return hosts.length > 0 ? hosts : undefined;
+}
+
+function blockPrivateFromEnv(): boolean {
+  return process.env['METADATA_URL_BLOCK_PRIVATE'] !== '0';
+}
+
+/**
+ * Parse an uploaded/POSTed document. When the caller supplies a `baseUrl`,
+ * `edmx:Reference/@Uri` values are fetched relative to it (browser uploads
+ * have no filesystem base of their own).
+ */
+async function parseUploadedDocument(
+  xmlContent: string,
+  baseUrl: string | undefined,
+): Promise<Awaited<ReturnType<typeof parseCSDL>>> {
+  if (!baseUrl) return parseCSDL(xmlContent);
+
+  const base = validateMetadataUrl(baseUrl, allowlistFromEnv(), {
+    blockPrivate: blockPrivateFromEnv(),
+  });
+  return parseCSDL(xmlContent, {
+    baseUri: base.toString(),
+    loadExternal: createHttpReferenceLoader(),
+  });
+}
 
 /**
  * POST /api/parse/file
@@ -56,9 +101,10 @@ router.post('/file', upload.single('metadata'), async (req: Request, res: Respon
     }
 
     const xmlContent = req.file.buffer.toString('utf-8');
-    const data = await parseCSDL(xmlContent);
+    const baseUrl = typeof req.body?.baseUrl === 'string' ? req.body.baseUrl : undefined;
+    const data = await parseUploadedDocument(xmlContent, baseUrl);
 
-    metadataStore.set(data, {
+    metadataStore.save(sessionIdOf(req), data, {
       sourceName: req.file.originalname,
       sourceType: 'file',
       fileSizeBytes: req.file.size,
@@ -105,14 +151,16 @@ router.post('/url', async (req: Request, res: Response) => {
       return;
     }
 
-    // Validate URL
+    // Restrict what the server will fetch (SSRF guard).
     let parsedUrl: URL;
     try {
-      parsedUrl = new URL(url);
-    } catch {
+      parsedUrl = validateMetadataUrl(url, allowlistFromEnv(), {
+        blockPrivate: blockPrivateFromEnv(),
+      });
+    } catch (error) {
       const response: ParseResponse = {
         success: false,
-        error: 'Invalid URL format',
+        error: error instanceof Error ? error.message : 'Invalid URL',
         parseTimeMs: Date.now() - startTime,
         fileSizeBytes: 0,
       };
@@ -120,12 +168,14 @@ router.post('/url', async (req: Request, res: Response) => {
       return;
     }
 
-    // Fetch metadata from URL
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+    // Credentials embedded in a URL are not a supported auth mechanism (and
+    // fetch rejects them), so they are stripped before the request.
+    const safeUrl = redactUrlCredentials(parsedUrl);
 
     try {
-      const response = await fetch(parsedUrl.toString(), {
+      const response = await fetch(safeUrl, {
         signal: controller.signal,
         headers: {
           Accept: 'application/xml, text/xml, application/atomsvc+xml',
@@ -149,10 +199,10 @@ router.post('/url', async (req: Request, res: Response) => {
       const contentLength = response.headers.get('content-length');
       const fileSizeBytes = contentLength ? parseInt(contentLength, 10) : xmlContent.length;
 
-      const data = await parseCSDL(xmlContent);
+      const data = await parseCSDLUrl(safeUrl);
 
-      metadataStore.set(data, {
-        sourceName: redactUrlCredentials(parsedUrl),
+      metadataStore.save(sessionIdOf(req), data, {
+        sourceName: safeUrl,
         sourceType: 'url',
         fileSizeBytes,
       });
@@ -198,7 +248,11 @@ router.post('/content', async (req: Request, res: Response) => {
   const startTime = Date.now();
 
   try {
-    const { content } = req.body as { content?: string };
+    const { content, session, baseUrl } = req.body as {
+      content?: string;
+      session?: string;
+      baseUrl?: string;
+    };
 
     if (!content) {
       const response: ParseResponse = {
@@ -211,9 +265,9 @@ router.post('/content', async (req: Request, res: Response) => {
       return;
     }
 
-    const data = await parseCSDL(content);
+    const data = await parseUploadedDocument(content, baseUrl);
 
-    metadataStore.set(data, {
+    metadataStore.save(sessionIdOf(req, { session }), data, {
       sourceName: 'inline content',
       sourceType: 'content',
       fileSizeBytes: content.length,

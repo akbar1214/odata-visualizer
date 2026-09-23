@@ -235,7 +235,7 @@ export function createMcpServer(
     'build_query',
     {
       description:
-        'Build an OData V4 GET query URL from filters, $select, $expand, $orderby, paging, $count, and $search. Literals are typed from the loaded model. Returns the URL only — it does not execute the request.',
+        'Build an OData V4 GET query URL from filters, $select, $expand, $apply (groupby/aggregate), $orderby, paging, $count, and $search. Literals are typed from the loaded model. Returns the URL only — it does not execute the request.',
       inputSchema: {
         entitySet: z.string().describe('Entity set name, e.g. "Parts"'),
         baseUrl: z
@@ -249,6 +249,25 @@ export function createMcpServer(
           .describe('How to join filters (default "and")'),
         select: z.array(z.string()).optional(),
         expand: z.array(expandNodeSchema).optional(),
+        groupBy: z
+          .array(
+            z.object({
+              property: z.string().describe('Property to group by'),
+              alias: z.string().optional(),
+            }),
+          )
+          .optional()
+          .describe('$apply=groupby properties'),
+        aggregates: z
+          .array(
+            z.object({
+              method: z.enum(['count', 'sum', 'avg', 'min', 'max']),
+              property: z.string().optional().describe('Omit for count()'),
+              alias: z.string().optional(),
+            }),
+          )
+          .optional()
+          .describe('$apply=aggregate expressions'),
         orderBy: z.string().optional().describe('e.g. "number desc"'),
         top: z.number().int().nonnegative().optional(),
         skip: z.number().int().nonnegative().optional(),

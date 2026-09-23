@@ -89,14 +89,23 @@ const ANNOTATION_SCALAR_CHILDREN = [
   'TimeOfDay',
 ] as const;
 
-/**
- * Parse OData CSDL XML content into structured metadata
- */
-export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
-  if (!xmlContent || xmlContent.trim().length === 0) {
-    throw new Error('XML content is empty');
-  }
+export interface ParseOptions {
+  /** Absolute base URI used to resolve relative `edmx:Reference/@Uri` values. */
+  baseUri?: string;
+  /** Loads an external document referenced by `edmx:Reference/@Uri`. */
+  loadExternal?: (uri: string) => Promise<string>;
+  /** Safety valve against pathological reference graphs (default 25). */
+  maxExternalDocuments?: number;
+}
 
+interface EdmxDocument {
+  schemas: XmlElement[];
+  references: XmlElement[];
+  version?: string;
+  dataServicesVersion?: string;
+}
+
+function parseEdmxDocument(xmlContent: string): EdmxDocument {
   let parsed: XmlElement;
   try {
     parsed = parser.parse(xmlContent) as XmlElement;
@@ -122,12 +131,116 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
   }
 
   const schemas = ensureArray(dataServices['Schema'] || dataServices['edm:Schema'] || []);
+  const references = [
+    ...ensureArray(dataServices['Reference'] || dataServices['edmx:Reference'] || []),
+    ...schemas.flatMap((s) => ensureArray(s['Reference'] || s['edmx:Reference'] || [])),
+  ];
 
-  const version = str(edmx['@_Version']) || undefined;
-  const dataServicesVersion =
-    str(dataServices['@_m:DataServiceVersion']) ||
-    str(dataServices['@_DataServiceVersion']) ||
-    undefined;
+  return {
+    schemas,
+    references,
+    version: str(edmx['@_Version']) || undefined,
+    dataServicesVersion:
+      str(dataServices['@_m:DataServiceVersion']) ||
+      str(dataServices['@_DataServiceVersion']) ||
+      undefined,
+  };
+}
+
+/** Resolve a possibly relative reference URI against the document's base URI. */
+function resolveReferenceUri(uri: string, baseUri: string | undefined): string {
+  try {
+    return baseUri ? new URL(uri, baseUri).toString() : new URL(uri).toString();
+  } catch {
+    return uri;
+  }
+}
+
+/**
+ * Replace an `Alias.Type` reference with `Namespace.Type` using the aliases
+ * declared by edmx:Include elements.
+ */
+function expandAlias(type: string, aliases: Map<string, string>): string {
+  const collection = /^Collection\((.*)\)$/.exec(type);
+  if (collection) return `Collection(${expandAlias(collection[1], aliases)})`;
+  if (type.startsWith('Edm.')) return type;
+
+  const dot = type.indexOf('.');
+  if (dot <= 0) return type;
+  const namespace = aliases.get(type.slice(0, dot));
+  return namespace ? `${namespace}${type.slice(dot)}` : type;
+}
+
+function expandAliasesInMetadata(metadata: ODataMetadata, aliases: Map<string, string>): void {
+  if (aliases.size === 0) return;
+
+  const expand = (value: string | undefined): string | undefined =>
+    value === undefined ? undefined : expandAlias(value, aliases);
+
+  for (const entity of metadata.entities) {
+    entity.baseType = expand(entity.baseType);
+    for (const prop of entity.properties) {
+      prop.type = expand(prop.type) ?? prop.type;
+    }
+    for (const nav of entity.navigationProperties) {
+      nav.targetTypeQualified = expand(nav.targetTypeQualified);
+      nav.targetType = nav.targetTypeQualified
+        ? shortName(nav.targetTypeQualified)
+        : expand(nav.targetType);
+    }
+  }
+  for (const container of metadata.entityContainers) {
+    for (const set of container.entitySets) {
+      set.entityTypeQualified = expand(set.entityTypeQualified);
+      set.entityType = set.entityTypeQualified
+        ? shortName(set.entityTypeQualified)
+        : set.entityType;
+    }
+  }
+  for (const item of [...metadata.actions, ...metadata.functions]) {
+    item.returnType = expand(item.returnType);
+    for (const param of item.parameters) {
+      param.type = expand(param.type) ?? param.type;
+    }
+  }
+  for (const importRecord of metadata.actionImports) {
+    if (importRecord.qualifiedActionName) {
+      importRecord.qualifiedActionName = expand(importRecord.qualifiedActionName);
+    }
+    for (const param of importRecord.parameter ?? []) {
+      param.type = expand(param.type) ?? param.type;
+    }
+  }
+  for (const importRecord of metadata.functionImports) {
+    if (importRecord.qualifiedFunctionName) {
+      importRecord.qualifiedFunctionName = expand(importRecord.qualifiedFunctionName);
+    }
+    for (const param of importRecord.parameter ?? []) {
+      param.type = expand(param.type) ?? param.type;
+    }
+  }
+}
+
+/**
+ * Parse OData CSDL XML content into structured metadata.
+ *
+ * Schemas pulled in through `edmx:Include` / `edmx:Reference` are merged in.
+ * External documents are only fetched when `loadExternal` is supplied; a
+ * reference that cannot be loaded is reported in `unresolvedReferences`
+ * instead of failing the whole parse.
+ */
+export async function parseCSDL(
+  xmlContent: string,
+  options: ParseOptions = {},
+): Promise<ODataMetadata> {
+  if (!xmlContent || xmlContent.trim().length === 0) {
+    throw new Error('XML content is empty');
+  }
+
+  const rootDocument = parseEdmxDocument(xmlContent);
+  const version = rootDocument.version;
+  const dataServicesVersion = rootDocument.dataServicesVersion;
+
   const entities: ODataEntity[] = [];
   const relationships: ODataRelationship[] = [];
   const functionImports: ODataFunctionImport[] = [];
@@ -137,8 +250,82 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
   const functions: ODataFunction[] = [];
   const enumTypes: ODataEnumType[] = [];
   const typeDefinitions: ODataTypeDefinition[] = [];
+  const unresolvedReferences: string[] = [];
 
-  for (const schema of schemas) {
+  const registry = new Map<string, XmlElement>();
+  const aliases = new Map<string, string>();
+  const queue: XmlElement[] = [];
+  const visitedUris = new Set<string>();
+  const maxExternalDocuments = options.maxExternalDocuments ?? 25;
+  let externalDocumentsLoaded = 0;
+
+  const includesOf = (owner: XmlElement): XmlElement[] =>
+    ensureArray(owner['Include'] || owner['edmx:Include'] || owner['edm:Include'] || []);
+
+  const registerSchema = (schema: XmlElement): void => {
+    const namespace = str(schema['@_Namespace']);
+    if (!namespace || registry.has(namespace)) return;
+    registry.set(namespace, schema);
+    queue.push(schema);
+  };
+
+  const registerAliases = (owner: XmlElement): void => {
+    for (const include of includesOf(owner)) {
+      const namespace = str(include['@_Namespace']);
+      const alias = str(include['@_Alias']);
+      if (namespace && alias && !aliases.has(alias)) {
+        aliases.set(alias, namespace);
+      }
+    }
+  };
+
+  for (const schema of rootDocument.schemas) {
+    registerSchema(schema);
+    registerAliases(schema);
+  }
+  for (const reference of rootDocument.references) {
+    registerAliases(reference);
+  }
+
+  const loadReferences = async (references: XmlElement[]): Promise<void> => {
+    for (const reference of references) {
+      const uri = str(reference['@_Uri']);
+      if (!uri) continue;
+
+      if (!options.loadExternal) {
+        if (!unresolvedReferences.includes(uri)) unresolvedReferences.push(uri);
+        continue;
+      }
+
+      const absoluteUri = resolveReferenceUri(uri, options.baseUri);
+      if (visitedUris.has(absoluteUri)) continue;
+
+      if (externalDocumentsLoaded >= maxExternalDocuments) {
+        if (!unresolvedReferences.includes(uri)) unresolvedReferences.push(uri);
+        continue;
+      }
+
+      visitedUris.add(absoluteUri);
+      externalDocumentsLoaded += 1;
+      try {
+        const externalDocument = parseEdmxDocument(await options.loadExternal(absoluteUri));
+        for (const schema of externalDocument.schemas) {
+          registerSchema(schema);
+          registerAliases(schema);
+        }
+        // Includes on the reference describe aliases the including document uses.
+        registerAliases(reference);
+        await loadReferences(externalDocument.references);
+      } catch {
+        if (!unresolvedReferences.includes(uri)) unresolvedReferences.push(uri);
+      }
+    }
+  };
+
+  await loadReferences(rootDocument.references);
+
+  while (queue.length > 0) {
+    const schema = queue.shift() as XmlElement;
     const namespace = str(schema['@_Namespace']) || '';
     const entityTypeNames = new Set<string>();
 
@@ -248,7 +435,7 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
     }
 
     // V4 metadata has no Association elements; derive relationships from
-    // navigation properties with a Type (targetType) attribute.
+    // navigation properties with a Type/Target (targetType) attribute.
     for (const entity of entities) {
       if (entity.namespace !== namespace || !entityTypeNames.has(entity.name)) {
         continue;
@@ -257,17 +444,28 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
         if (!nav.targetType) continue;
         const rel = relationshipFromNavigationProperty(entity, nav, namespace);
         if (!rel) continue;
-        const exists = relationships.some(
-          (r) =>
-            (r.from.entity === rel.from.entity && r.to.entity === rel.to.entity) ||
-            (r.from.entity === rel.to.entity && r.to.entity === rel.from.entity),
-        );
-        if (!exists) {
+        if (!relationships.some((r) => isSameDerivedRelationship(r, rel))) {
           relationships.push(rel);
         }
       }
     }
   }
+
+  const metadata: ODataMetadata = {
+    version,
+    dataServicesVersion,
+    entities,
+    relationships,
+    entityContainers,
+    functionImports,
+    actionImports,
+    actions,
+    functions,
+    enumTypes,
+    typeDefinitions,
+  };
+
+  expandAliasesInMetadata(metadata, aliases);
 
   // Derived types often omit <Key> (it is inherited). Backfill keys from
   // the base-type chain so consumers (and the complex-type heuristic) work.
@@ -286,19 +484,30 @@ export async function parseCSDL(xmlContent: string): Promise<ODataMetadata> {
     }
   }
 
-  return {
-    version,
-    dataServicesVersion,
-    entities,
-    relationships,
-    entityContainers,
-    functionImports,
-    actionImports,
-    actions,
-    functions,
-    enumTypes,
-    typeDefinitions,
-  };
+  if (unresolvedReferences.length > 0) {
+    metadata.unresolvedReferences = unresolvedReferences;
+  }
+
+  return metadata;
+}
+
+/**
+ * Two derived relationships are the same when they are either an exact
+ * duplicate, or the two halves of one bidirectional navigation property
+ * (`Order.Customer` and `Customer.Orders`). Distinct same-direction
+ * navigation properties between the same pair of types stay separate.
+ */
+function isSameDerivedRelationship(a: ODataRelationship, b: ODataRelationship): boolean {
+  const sameDirection =
+    a.from.entity === b.from.entity && a.to.entity === b.to.entity && a.name === b.name;
+  if (sameDirection) return true;
+
+  return (
+    a.from.entity === b.to.entity &&
+    a.to.entity === b.from.entity &&
+    a.from.multiplicity === b.to.multiplicity &&
+    a.to.multiplicity === b.from.multiplicity
+  );
 }
 
 function relationshipFromNavigationProperty(
@@ -641,10 +850,10 @@ function parseNavigationProperty(navProp: XmlElement): ODataNavigationProperty {
   const toRole = str(navProp['@_ToRole']) || '';
   const annotations = parseAnnotations(navProp);
 
-  // OData V4: Type attribute holds the target entity type (possibly Collection(...)).
+  // OData V4 uses Type; V4.01 may use Target instead (e.g. Windchill models).
   // Store the collection flag in `relationship` so V4 relationship derivation
   // can compute multiplicity (V2 keeps the Association name there).
-  const rawType = str(navProp['@_Type']) || '';
+  const rawType = str(navProp['@_Type']) || str(navProp['@_Target']) || '';
   let targetType: string | undefined;
   let targetTypeQualified: string | undefined;
   let isCollection = false;

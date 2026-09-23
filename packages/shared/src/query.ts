@@ -28,6 +28,20 @@ export interface ExpandNode {
   expand?: ExpandNode[];
 }
 
+/** A grouping property in a $apply/groupby transformation. */
+export interface GroupByNode {
+  property: string;
+  alias?: string;
+}
+
+/** An aggregate in a $apply/groupby transformation. */
+export interface AggregateNode {
+  method: 'count' | 'sum' | 'avg' | 'min' | 'max';
+  /** Omitted for count, which aggregates rows. */
+  property?: string;
+  alias?: string;
+}
+
 /** Options for building an OData V4 query URL. */
 export interface QueryOptions {
   entitySet: string;
@@ -35,6 +49,8 @@ export interface QueryOptions {
   filterLogic?: 'and' | 'or';
   select?: string[];
   expand?: ExpandNode[];
+  groupBy?: GroupByNode[];
+  aggregates?: AggregateNode[];
   orderBy?: string;
   top?: number;
   skip?: number;
@@ -44,6 +60,8 @@ export interface QueryOptions {
   baseUrl?: string;
   /** When provided, filter literals are typed from the model. */
   metadata?: ODataMetadata;
+  /** Receives non-fatal problems, e.g. properties that are not in the model. */
+  onWarning?: (message: string) => void;
 }
 
 const COMPARISON_OPERATORS = new Set(['eq', 'ne', 'gt', 'ge', 'lt', 'le']);
@@ -61,6 +79,44 @@ const NUMERIC_TYPES = new Set([
   'Edm.Single',
 ]);
 const DATE_TYPES = new Set(['Edm.Date', 'Edm.DateTimeOffset', 'Edm.DateTime']);
+
+/** Shape checks for the ISO 8601 forms OData V4 uses. */
+const DATE_PATTERNS: Record<string, RegExp> = {
+  'Edm.Date': /^\d{4}-\d{2}-\d{2}$/,
+  'Edm.DateTimeOffset': /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/,
+  'Edm.DateTime': /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$/,
+  'Edm.TimeOfDay': /^\d{2}:\d{2}:\d{2}(\.\d+)?$/,
+  'Edm.Duration': /^-?P(?!$)(\d+Y)?(\d+M)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+(\.\d+)?S)?)?$/,
+};
+
+/** Reject values like 2024-13-45 or "yesterday" that a service would refuse. */
+function isPlausibleDateTime(type: string, raw: string): boolean {
+  const pattern = DATE_PATTERNS[type];
+  if (!pattern) return true;
+  if (!pattern.test(raw.trim())) return false;
+
+  if (type === 'Edm.Duration') return true;
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw.trim());
+  if (match) {
+    const [, year, month, day] = match;
+    const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+    if (
+      date.getUTCFullYear() !== Number(year) ||
+      date.getUTCMonth() !== Number(month) - 1 ||
+      date.getUTCDate() !== Number(day)
+    ) {
+      return false;
+    }
+  }
+
+  const time = /T(\d{2}):(\d{2}):(\d{2})/.exec(raw.trim());
+  if (time) {
+    const [, hours, minutes, seconds] = time;
+    if (Number(hours) > 23 || Number(minutes) > 59 || Number(seconds) > 60) return false;
+  }
+  return true;
+}
 
 /**
  * Format a raw input value as an OData V4 literal for the given EDM type.
@@ -96,9 +152,13 @@ export function formatV4Literal(value: string, edmType?: string): string {
     return raw;
   }
 
-  if (DATE_TYPES.has(type)) {
-    if (!raw.trim()) throw new Error(`Empty ${type} value`);
-    return raw.trim();
+  if (DATE_TYPES.has(type) || type in DATE_PATTERNS) {
+    const value = raw.trim();
+    if (!value) throw new Error(`Empty ${type} value`);
+    if (!isPlausibleDateTime(type, value)) {
+      throw new Error(`Invalid ${type} value: ${raw} (expected an ISO 8601 ${type} literal)`);
+    }
+    return value;
   }
 
   if (type === 'Edm.Guid') {
@@ -163,8 +223,47 @@ export function buildQueryUrl(options: QueryOptions): string {
     );
   }
 
+  const hasApply = Boolean(
+    (options.groupBy && options.groupBy.length > 0) ||
+    (options.aggregates && options.aggregates.length > 0),
+  );
+
+  if (hasApply && options.expand && options.expand.length > 0) {
+    throw new Error('OData V4 does not allow $expand together with $apply.');
+  }
+  if (hasApply && options.search) {
+    throw new Error('OData V4 does not allow $search together with $apply.');
+  }
+
   const rootEntity = resolveRootEntity(options);
   const params: string[] = [];
+  const warn = options.onWarning;
+  const checkProperty = (property: string): void => {
+    if (!warn || !rootEntity || !options.metadata) return;
+    const entity = findEntityByName(options.metadata.entities, rootEntity);
+    if (!entity) return;
+    const known = getEffectiveProperties(entity, options.metadata.entities).some(
+      (p) => p.name === property,
+    );
+    if (!known) {
+      warn(`"${property}" is not a property of ${rootEntity}.`);
+    }
+  };
+
+  for (const filter of options.filters ?? []) {
+    checkProperty(filter.property);
+  }
+
+  if (hasApply) {
+    // $apply must be the first system query option.
+    params.push(
+      `$apply=${buildApply(options.groupBy, options.aggregates, rootEntity, options.metadata)}`,
+    );
+  }
+
+  for (const selected of options.select ?? []) {
+    checkProperty(selected);
+  }
 
   const filterStr = buildFilter(options.filters ?? [], options.filterLogic ?? 'and', (property) =>
     lookupPropertyType(rootEntity, property, options.metadata),
@@ -176,7 +275,7 @@ export function buildQueryUrl(options: QueryOptions): string {
   }
 
   if (options.expand && options.expand.length > 0) {
-    const expandStr = buildExpand(options.expand, rootEntity, options.metadata);
+    const expandStr = buildExpand(options.expand, rootEntity, options.metadata, warn, '');
     if (expandStr) params.push(`$expand=${encodeQueryValue(expandStr)}`);
   }
 
@@ -187,6 +286,7 @@ export function buildQueryUrl(options: QueryOptions): string {
       if (dir && dir.toLowerCase() !== 'asc' && dir.toLowerCase() !== 'desc') {
         throw new Error(`Invalid sort direction: ${dir}`);
       }
+      checkProperty(field);
       params.push(`$orderby=${encodeQueryValue(field)}${dir ? ` ${dir.toLowerCase()}` : ''}`);
     }
   }
@@ -222,6 +322,68 @@ export function buildQueryUrl(options: QueryOptions): string {
 }
 
 type TypeLookup = (property: string) => string | undefined;
+
+/**
+ * Build the `$apply` transformation: `groupby((A),aggregate(...))`, or a bare
+ * `aggregate(...)` when no grouping is requested.
+ */
+function buildApply(
+  groupBy: GroupByNode[] | undefined,
+  aggregates: AggregateNode[] | undefined,
+  rootEntity: string | undefined,
+  metadata: ODataMetadata | undefined,
+): string {
+  const typeOf: TypeLookup = (property) => lookupPropertyType(rootEntity, property, metadata);
+
+  const groupParts = (groupBy ?? []).map((group) => {
+    const type = typeOf(group.property);
+    if (!type && metadata && rootEntity) {
+      throw new Error(`"${group.property}" is not a property of ${rootEntity}.`);
+    }
+    const alias = group.alias ? ` as ${group.alias}` : '';
+    return `${group.property}${alias}`;
+  });
+
+  const aggregateParts = (aggregates ?? []).map((aggregate) => {
+    if (aggregate.method === 'count') {
+      const alias = aggregate.alias ?? 'count';
+      return `$count as ${alias}`;
+    }
+
+    const property = aggregate.property;
+    if (!property) {
+      throw new Error(`Aggregate "${aggregate.method}" requires a property.`);
+    }
+
+    const type = typeOf(property);
+    if (!type && metadata && rootEntity) {
+      throw new Error(`"${property}" is not a property of ${rootEntity}.`);
+    }
+    if ((aggregate.method === 'sum' || aggregate.method === 'avg') && !isNumericEdmType(type)) {
+      throw new Error(
+        `Cannot ${aggregate.method} "${property}": ${aggregate.method} requires a numeric property (got ${type ?? 'unknown type'}).`,
+      );
+    }
+
+    const alias = aggregate.alias ?? `${aggregate.method}_${property}`;
+    return `${aggregate.method}(${property}) as ${alias}`;
+  });
+
+  const aggregateClause = aggregateParts.length > 0 ? `aggregate(${aggregateParts.join(',')})` : '';
+
+  if (groupParts.length === 0) {
+    if (!aggregateClause) {
+      throw new Error('$apply requires at least one groupBy property or aggregate.');
+    }
+    return aggregateClause;
+  }
+
+  return `groupby((${groupParts.join(',')})${aggregateClause ? `,${aggregateClause}` : ''})`;
+}
+
+function isNumericEdmType(type: string | undefined): boolean {
+  return type !== undefined && NUMERIC_TYPES.has(type);
+}
 
 function buildFilter(
   filters: FilterClause[],
@@ -259,13 +421,17 @@ function buildExpand(
   expands: ExpandNode[],
   parentEntityName: string | undefined,
   metadata: ODataMetadata | undefined,
+  warn?: (message: string) => void,
+  pathPrefix = '',
 ): string {
   if (expands.length === 0) return '';
   if (!metadata) {
     // Without metadata we can only emit bare paths / user-provided options.
     return expands
       .map((item) => {
-        const nested = item.expand?.length ? buildExpand(item.expand, undefined, metadata) : '';
+        const nested = item.expand?.length
+          ? buildExpand(item.expand, undefined, metadata, warn, `${pathPrefix}${item.navProperty}/`)
+          : '';
         const parts: string[] = [];
         if (item.select?.length) parts.push(`$select=${item.select.join(',')}`);
         if (nested) parts.push(`$expand=${nested}`);
@@ -286,6 +452,20 @@ function buildExpand(
       const parts: string[] = [];
       const targetEntityName = resolveExpandTarget(parentEntityName, item.navProperty, metadata);
 
+      if (parentEntityName && !targetEntityName && warn) {
+        const parent = findEntityByName(metadata.entities, parentEntityName);
+        const known = parent
+          ? getEffectiveNavigationProperties(parent, metadata.entities).some(
+              (n) => n.name === item.navProperty,
+            )
+          : false;
+        if (!known) {
+          warn(
+            `"${pathPrefix}${item.navProperty}" is not a navigation property of ${parentEntityName}.`,
+          );
+        }
+      }
+
       if (item.select?.length) {
         parts.push(`$select=${item.select.join(',')}`);
       }
@@ -298,7 +478,13 @@ function buildExpand(
       }
 
       if (item.expand?.length) {
-        const nested = buildExpand(item.expand, targetEntityName, metadata);
+        const nested = buildExpand(
+          item.expand,
+          targetEntityName,
+          metadata,
+          warn,
+          `${pathPrefix}${item.navProperty}/`,
+        );
         if (nested) parts.push(`$expand=${nested}`);
       }
 

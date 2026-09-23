@@ -27,11 +27,11 @@ The MCP server exposes 15 tools that let an LLM understand an OData V4 model and
 
 | Tool | Description |
 |------|-------------|
-| `build_query` | Build a V4 GET URL from `$filter`, `$select`, `$expand`, `$orderby`, paging, `$count`, `$search` |
+| `build_query` | Build a V4 GET URL from `$filter`, `$select`, `$expand`, `$apply` (groupby/aggregate), `$orderby`, paging, `$count`, `$search` |
 | `build_action_invocation` | Build a POST URL + JSON body + curl example for an action |
 | `build_function_invocation` | Build a GET URL with inline parameters for a function |
 
-Literals are typed from the loaded model: strings are quoted with `''` escaping, numbers/booleans are bare, enums use `NS.Enum'VALUE'`, and TypeDefinitions are unwrapped to their underlying EDM type. Bound operations require an `entitySet` plus `keys`.
+Literals are typed from the loaded model: strings are quoted with `''` escaping, numbers/booleans are bare, enums use `NS.Enum'VALUE'`, and TypeDefinitions are unwrapped to their underlying EDM type. Bound operations require an `entitySet` plus `keys`. Unknown `$select`/`$filter`/`$orderby`/`$expand` names are reported as warnings rather than silently emitted.
 
 ## Windchill
 
@@ -41,7 +41,9 @@ Windchill exposes one OData V4 service per domain, e.g.:
 https://<host>/Windchill/servlet/odata/ProdMgmt/$metadata
 ```
 
-`load_metadata` parses these models directly (deep `BaseType` inheritance, bound/unbound actions and functions, enums, type definitions, and `PTC.*` / `Capabilities.*` annotations). A synthetic Windchill-like model is used by the test suite at `packages/shared/__tests__/fixtures/windchill-prodmgmt.xml`.
+`load_metadata` parses these models directly (deep `BaseType` inheritance, bound/unbound actions and functions, enums, type definitions, `edmx:Include`/`edmx:Reference` multi-file models, and `PTC.*` / `Capabilities.*` annotations). A synthetic Windchill-like model is used by the test suite at `packages/shared/__tests__/fixtures/windchill-prodmgmt.xml`.
+
+Multi-file models: when metadata is loaded from a file or URL, referenced documents are resolved relative to it automatically. References that cannot be loaded are listed by `get_metadata_status` instead of failing the parse.
 
 Typical offline workflow:
 
@@ -94,9 +96,12 @@ You can export metadata from SAP, Dynamics, or any OData service by navigating t
 
 When you run the backend (`pnpm dev` or `pnpm start`), it hosts the MCP server over Streamable HTTP at `http://localhost:3001/mcp` and **shares its metadata store with the upload UI**. Upload a file at the frontend and MCP tools can use it immediately — `load_metadata` is not required.
 
+Each browser tab keeps its own model (scoped by a session id), so concurrent uploads don't overwrite each other; MCP always sees the most recently uploaded one.
+
 ```bash
 pnpm dev            # backend + frontend; MCP comes up with the backend
 curl -s http://localhost:3001/api/metadata/current   # what MCP currently sees
+curl -s http://localhost:3001/api/metadata           # per-session model list
 ```
 
 Configuration:
@@ -107,6 +112,9 @@ Configuration:
 | `MCP_TOKEN` | unset | When set, `/mcp` requires `Authorization: Bearer <token>` |
 | `MCP_ALLOW_LOAD` | unset | Set to `1` to enable `load_metadata` over HTTP (arbitrary file reads / SSRF) |
 | `MCP_ALLOWED_HOSTS` | localhost only | Comma-separated Host header values accepted by `/mcp` (DNS-rebinding protection) |
+| `API_TOKEN` | unset | When set, the REST API (`/api/*`) requires `Authorization: Bearer <token>`; `/api/health` stays open |
+| `METADATA_URL_ALLOWLIST` | unset | Comma-separated hostnames `/api/parse/url` may fetch (`*.example.com` wildcards allowed) |
+| `METADATA_URL_BLOCK_PRIVATE` | `1` | Set to `0` to allow `/api/parse/url` to fetch private/loopback addresses |
 
 For safety, `load_metadata` is **not registered at all** on the HTTP endpoint: metadata comes from uploads, so the tool would only ever be a way to read arbitrary files or make the server fetch arbitrary URLs. A localhost host-header guard is applied to `/mcp`; set `MCP_ALLOWED_HOSTS` if you serve it from another hostname.
 

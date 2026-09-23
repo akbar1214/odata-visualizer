@@ -1,5 +1,5 @@
-import { readFile } from 'fs/promises';
 import { parseCSDL, type ODataMetadata } from '@odata-visualizer/shared';
+import { parseCSDLFile, parseCSDLUrl } from '@odata-visualizer/shared/load';
 import type { MetadataSourceType } from './store.js';
 
 export interface MetadataSource {
@@ -17,22 +17,13 @@ export async function loadMetadataFromSource(source: MetadataSource): Promise<OD
 
   if (source.type === 'file') {
     if (!source.path) throw new Error('File path is required');
-    const xmlContent = await readFile(source.path, 'utf-8');
-    return parseCSDL(xmlContent);
+    return parseCSDLFile(source.path);
   }
 
   if (!source.path) throw new Error('URL is required');
-  const response = await fetch(source.path, {
-    headers: { Accept: 'application/xml, text/xml, application/atomsvc+xml' },
-    signal: AbortSignal.timeout(30000),
+  return parseCSDLUrl(source.path, {
+    accept: 'application/xml, text/xml, application/atomsvc+xml',
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch metadata: HTTP ${response.status} ${response.statusText}`);
-  }
-
-  const xmlContent = await response.text();
-  return parseCSDL(xmlContent);
 }
 
 /** Fetch the metadata the backend currently holds for the uploaded file. */

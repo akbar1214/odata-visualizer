@@ -473,3 +473,195 @@ describe('Windchill-like CSDL', () => {
     expect(rel?.name).toBe('Part_Documents');
   });
 });
+
+describe('multi-namespace models', () => {
+  const collidingCSDL = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="A" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Part">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="AOnly" Type="Edm.String" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="B" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Part">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="BOnly" Type="Edm.String" />
+      </EntityType>
+      <EntityType Name="Derived" BaseType="Part">
+        <Property Name="Extra" Type="Edm.String" />
+      </EntityType>
+      <EntityType Name="Owner">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Things" Target="B.Part" />
+        <NavigationProperty Name="ManyThings" Target="Collection(B.Part)" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('resolves a short BaseType within the same namespace first', async () => {
+    const result = await parseCSDL(collidingCSDL);
+    const derived = result.entities.find((e) => e.name === 'Derived');
+    expect(derived).toBeDefined();
+
+    const chain = resolveInheritanceChain(derived!, result.entities);
+    expect(chain.map((e) => e.qualifiedName)).toEqual(['B.Derived', 'B.Part']);
+
+    const props = getEffectiveProperties(derived!, result.entities).map((p) => p.name);
+    expect(props).toContain('BOnly');
+    expect(props).not.toContain('AOnly');
+  });
+
+  it('parses V4.01 NavigationProperty Target attributes', async () => {
+    const result = await parseCSDL(collidingCSDL);
+    const owner = result.entities.find((e) => e.name === 'Owner');
+    const things = owner?.navigationProperties.find((n) => n.name === 'Things');
+    const many = owner?.navigationProperties.find((n) => n.name === 'ManyThings');
+
+    expect(things?.targetTypeQualified).toBe('B.Part');
+    expect(things?.targetType).toBe('Part');
+    expect(many?.targetTypeQualified).toBe('B.Part');
+  });
+
+  it('derives relationships and multiplicities from Target attributes', async () => {
+    const result = await parseCSDL(collidingCSDL);
+    const single = result.relationships.find(
+      (r) => r.from.entity === 'Owner' && r.to.entity === 'Part',
+    );
+    const collection = result.relationships.find(
+      (r) => r.from.entity === 'Owner' && r.name === 'Owner_ManyThings',
+    );
+
+    expect(single).toBeDefined();
+    expect(single?.from.multiplicity).toBe('1');
+    expect(collection).toBeDefined();
+    expect(collection?.from.multiplicity).toBe('*');
+  });
+});
+
+describe('edmx:Include and edmx:Reference', () => {
+  const mainWithInclude = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx"
+           xmlns="http://docs.oasis-open.org/odata/ns/edm">
+  <edmx:DataServices>
+    <Schema Namespace="Main" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <edmx:Include Namespace="Other" Alias="oth" />
+      <EntityType Name="Thing" BaseType="oth.Base">
+        <Property Name="Extra" Type="oth.Base" />
+      </EntityType>
+      <EntityContainer Name="MainContainer">
+        <EntitySet Name="Things" EntityType="Main.Thing" />
+      </EntityContainer>
+    </Schema>
+    <Schema Namespace="Other" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Things" Type="Collection(Main.Thing)" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('expands alias-qualified type references from a same-document include', async () => {
+    const result = await parseCSDL(mainWithInclude);
+    const thing = result.entities.find((e) => e.name === 'Thing');
+    const base = result.entities.find((e) => e.name === 'Base');
+
+    expect(base?.namespace).toBe('Other');
+    expect(thing?.baseType).toBe('Other.Base');
+    expect(thing?.properties[0].type).toBe('Other.Base');
+    expect(result.unresolvedReferences).toBeUndefined();
+  });
+
+  it('resolves inheritance across an included namespace', async () => {
+    const result = await parseCSDL(mainWithInclude);
+    const thing = result.entities.find((e) => e.name === 'Thing');
+    const chain = resolveInheritanceChain(thing!, result.entities);
+    expect(chain.map((e) => e.qualifiedName)).toEqual(['Main.Thing', 'Other.Base']);
+  });
+
+  const mainWithReference = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx"
+           xmlns="http://docs.oasis-open.org/odata/ns/edm">
+  <edmx:DataServices>
+    <Schema Namespace="Main" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Ref" Type="Ext.RefType" />
+      </EntityType>
+    </Schema>
+    <edmx:Reference Uri="ext.xml">
+      <edmx:Include Namespace="Ext" Alias="ext" />
+    </edmx:Reference>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  const externalDoc = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx"
+           xmlns="http://docs.oasis-open.org/odata/ns/edm">
+  <edmx:DataServices>
+    <Schema Namespace="Ext" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="RefType">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('loads an external document referenced by edmx:Reference', async () => {
+    const requested: string[] = [];
+    const result = await parseCSDL(mainWithReference, {
+      baseUri: 'https://host/odata/main.xml',
+      loadExternal: async (uri) => {
+        requested.push(uri);
+        return externalDoc;
+      },
+    });
+
+    expect(requested).toEqual(['https://host/odata/ext.xml']);
+    expect(result.entities.map((e) => e.qualifiedName)).toContain('Ext.RefType');
+    expect(result.unresolvedReferences).toBeUndefined();
+  });
+
+  it('records unresolved references when no loader is available', async () => {
+    const result = await parseCSDL(mainWithReference);
+    expect(result.unresolvedReferences).toEqual(['ext.xml']);
+    expect(result.entities.map((e) => e.qualifiedName)).not.toContain('Ext.RefType');
+  });
+
+  it('does not loop on circular references', async () => {
+    const circular = mainWithReference.replace(
+      '<Schema Namespace="Main"',
+      `<Schema Namespace="Main"`,
+    );
+    let calls = 0;
+    const result = await parseCSDL(circular, {
+      baseUri: 'https://host/odata/main.xml',
+      loadExternal: async () => {
+        calls += 1;
+        return mainWithReference;
+      },
+    });
+    expect(calls).toBe(1);
+    expect(result.entities.length).toBeGreaterThan(0);
+  });
+
+  it('reports a failing external document instead of throwing', async () => {
+    const result = await parseCSDL(mainWithReference, {
+      baseUri: 'https://host/odata/main.xml',
+      loadExternal: async () => {
+        throw new Error('404');
+      },
+    });
+    expect(result.unresolvedReferences).toEqual(['ext.xml']);
+    expect(result.entities.map((e) => e.name)).toContain('Thing');
+  });
+});

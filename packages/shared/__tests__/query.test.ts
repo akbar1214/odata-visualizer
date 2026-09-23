@@ -34,6 +34,15 @@ describe('formatV4Literal', () => {
     expect(formatV4Literal('2024-01-15', 'Edm.Date')).toBe('2024-01-15');
   });
 
+  it('rejects malformed date and time literals', () => {
+    expect(() => formatV4Literal('not-a-date', 'Edm.Date')).toThrow('Invalid Edm.Date');
+    expect(() => formatV4Literal('15/01/2024', 'Edm.Date')).toThrow('Invalid Edm.Date');
+    expect(() => formatV4Literal('yesterday', 'Edm.DateTimeOffset')).toThrow(
+      'Invalid Edm.DateTimeOffset',
+    );
+    expect(() => formatV4Literal('25:00', 'Edm.TimeOfDay')).toThrow('Invalid Edm.TimeOfDay');
+  });
+
   it('emits bare guids (no guid prefix)', () => {
     expect(formatV4Literal('01234567-89ab-cdef-0123-456789abcdef', 'Edm.Guid')).toBe(
       '01234567-89ab-cdef-0123-456789abcdef',
@@ -222,5 +231,93 @@ describe('buildQueryUrl', () => {
       count: true,
     });
     expect(url).toBe('/Parts?$select=ID&$orderby=number&$count=true&$search=red');
+  });
+});
+
+describe('$apply aggregation', () => {
+  const metadata = parseCSDL(windchillCSDL);
+
+  it('emits a groupby with aggregates', async () => {
+    const m = await metadata;
+    const url = buildQueryUrl({
+      entitySet: 'Parts',
+      metadata: m,
+      groupBy: [{ property: 'state' }],
+      aggregates: [
+        { method: 'count', alias: 'PartCount' },
+        { property: 'unitPrice', method: 'sum', alias: 'TotalPrice' },
+      ],
+    });
+    expect(url).toBe(
+      '/Parts?$apply=groupby((state),aggregate($count as PartCount,sum(unitPrice) as TotalPrice))',
+    );
+  });
+
+  it('emits a bare aggregate without groupby', async () => {
+    const m = await metadata;
+    const url = buildQueryUrl({
+      entitySet: 'Parts',
+      metadata: m,
+      aggregates: [{ method: 'count', alias: 'Total' }],
+    });
+    expect(url).toBe('/Parts?$apply=aggregate($count as Total)');
+  });
+
+  it('defaults aggregate aliases when none are given', async () => {
+    const m = await metadata;
+    const url = buildQueryUrl({
+      entitySet: 'Parts',
+      metadata: m,
+      groupBy: [{ property: 'state' }],
+      aggregates: [{ method: 'count' }],
+    });
+    expect(url).toContain('aggregate($count as count)');
+  });
+
+  it('puts $apply first, as OData requires', async () => {
+    const m = await metadata;
+    const url = buildQueryUrl({
+      entitySet: 'Parts',
+      metadata: m,
+      groupBy: [{ property: 'state' }],
+      filters: [{ property: 'hasCAD', operator: 'eq', value: 'true' }],
+      count: true,
+    });
+    expect(url.startsWith('/Parts?$apply=')).toBe(true);
+    expect(url).toContain('&$filter=hasCAD eq true');
+  });
+
+  it('rejects sum/avg on non-numeric properties', async () => {
+    const m = await metadata;
+    expect(() =>
+      buildQueryUrl({
+        entitySet: 'Parts',
+        metadata: m,
+        aggregates: [{ property: 'number', method: 'sum' }],
+      }),
+    ).toThrow('sum');
+  });
+
+  it('rejects unknown aggregate properties', async () => {
+    const m = await metadata;
+    expect(() =>
+      buildQueryUrl({
+        entitySet: 'Parts',
+        metadata: m,
+        aggregates: [{ property: 'nope', method: 'max' }],
+      }),
+    ).toThrow('not a property');
+  });
+
+  it('rejects $expand with $apply', async () => {
+    const m = await metadata;
+    expect(() =>
+      buildQueryUrl({
+        entitySet: 'Parts',
+        metadata: m,
+        aggregates: [{ method: 'count' }],
+        expand: [{ navProperty: 'Documents' }],
+      }),
+    ).toThrow('$expand');
   });
 });
