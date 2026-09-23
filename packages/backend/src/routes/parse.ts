@@ -5,6 +5,17 @@ import { metadataStore } from '../services/metadataStore.js';
 import type { ParseRequest, ParseResponse } from '@odata-visualizer/shared';
 
 const router: ExpressRouter = Router();
+
+/**
+ * Keep the URL safe to display and hand to an MCP client by stripping any
+ * embedded password.
+ */
+function redactUrlCredentials(url: URL): string {
+  if (!url.password) return url.toString();
+  const redacted = new URL(url.toString());
+  redacted.password = '';
+  return redacted.toString();
+}
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -141,7 +152,7 @@ router.post('/url', async (req: Request, res: Response) => {
       const data = await parseCSDL(xmlContent);
 
       metadataStore.set(data, {
-        sourceName: parsedUrl.toString(),
+        sourceName: redactUrlCredentials(parsedUrl),
         sourceType: 'url',
         fileSizeBytes,
       });

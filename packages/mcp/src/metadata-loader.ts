@@ -51,7 +51,15 @@ async function loadFromBackend(baseUrl?: string): Promise<ODataMetadata> {
     throw new Error(`Failed to fetch metadata: HTTP ${response.status} ${response.statusText}`);
   }
 
-  const body = (await response.json()) as { metadata?: ODataMetadata | null };
+  let body: { metadata?: ODataMetadata | null };
+  try {
+    body = (await response.json()) as { metadata?: ODataMetadata | null };
+  } catch {
+    throw new Error(
+      `The backend at ${base} did not return JSON. Is "${base}" the OData Visualizer backend?`,
+    );
+  }
+
   if (!body.metadata) {
     throw new Error(
       'No metadata available from the backend. Upload a file in the OData Visualizer UI first.',

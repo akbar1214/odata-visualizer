@@ -71,14 +71,28 @@ describe('createMcpServer', () => {
     expect(resultText(sets)).toContain('Parts -> PTC.ProdMgmt.Part');
   });
 
-  it('disables load_metadata when allowLoadMetadata is false', async () => {
+  it('does not expose load_metadata when it is disabled', async () => {
     const client = await connect(createMetadataStore(), { allowLoadMetadata: false });
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).not.toContain('load_metadata');
+
     const result = await client.callTool({
       name: 'load_metadata',
       arguments: { source: '/etc/hosts', type: 'file' },
     });
     expect(result.isError).toBe(true);
-    expect(resultText(result)).toContain('disabled');
+  });
+
+  it('does not advertise load_metadata when it is disabled', async () => {
+    const client = await connect(createMetadataStore(), { allowLoadMetadata: false });
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).not.toContain('load_metadata');
+  });
+
+  it('advertises load_metadata when it is enabled', async () => {
+    const client = await connect(createMetadataStore());
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toContain('load_metadata');
   });
 
   it('still exposes read-only tools when load_metadata is disabled', async () => {

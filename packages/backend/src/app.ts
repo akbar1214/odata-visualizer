@@ -18,6 +18,17 @@ export interface CreateAppOptions {
   mcpToken?: string;
   /** Allow load_metadata over HTTP. Defaults to MCP_ALLOW_LOAD === "1". */
   allowLoadMetadata?: boolean;
+  /** Hostnames allowed in the Host header for /mcp. Defaults to MCP_ALLOWED_HOSTS or localhost. */
+  allowedHosts?: string[];
+}
+
+function parseAllowedHosts(value: string | undefined): string[] | undefined {
+  if (!value) return undefined;
+  const hosts = value
+    .split(',')
+    .map((host) => host.trim())
+    .filter((host) => host.length > 0);
+  return hosts.length > 0 ? hosts : undefined;
 }
 
 export function createApp(options: CreateAppOptions = {}): Express {
@@ -37,6 +48,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     mountMcp(app, metadataStore, {
       token: options.mcpToken ?? process.env['MCP_TOKEN'],
       allowLoadMetadata: options.allowLoadMetadata ?? process.env['MCP_ALLOW_LOAD'] === '1',
+      allowedHosts: options.allowedHosts ?? parseAllowedHosts(process.env['MCP_ALLOWED_HOSTS']),
     });
   }
 

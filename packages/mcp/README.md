@@ -106,8 +106,9 @@ Configuration:
 | `PORT` | `3001` | Backend/MCP port |
 | `MCP_TOKEN` | unset | When set, `/mcp` requires `Authorization: Bearer <token>` |
 | `MCP_ALLOW_LOAD` | unset | Set to `1` to enable `load_metadata` over HTTP (arbitrary file reads / SSRF) |
+| `MCP_ALLOWED_HOSTS` | localhost only | Comma-separated Host header values accepted by `/mcp` (DNS-rebinding protection) |
 
-For safety, `load_metadata` is **disabled by default on the HTTP endpoint**: metadata comes from uploads. A localhost host-header guard is applied to `/mcp`.
+For safety, `load_metadata` is **not registered at all** on the HTTP endpoint: metadata comes from uploads, so the tool would only ever be a way to read arbitrary files or make the server fetch arbitrary URLs. A localhost host-header guard is applied to `/mcp`; set `MCP_ALLOWED_HOSTS` if you serve it from another hostname.
 
 ## stdio transport (standalone)
 
