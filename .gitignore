@@ -44,3 +44,6 @@ temp/
 # Vitest browser-mode failure artifacts (baseline screenshots for existing
 # tests are still tracked explicitly).
 packages/frontend/__tests__/__screenshots__/explorerChrome.test.tsx/
+packages/frontend/__tests__/__screenshots__/filterBuilder.test.tsx/
+packages/frontend/__tests__/__screenshots__/queryBuilderRegression.test.ts/
+packages/frontend/__tests__/__screenshots__/explorerChrome.test.tsx/
