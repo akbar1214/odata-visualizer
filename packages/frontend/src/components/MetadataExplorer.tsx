@@ -115,12 +115,15 @@ export function MetadataExplorer({
 
   const clearSearch = useCallback(() => setRawQuery(''), []);
 
-  // Track the diagram selection, but fall back to the first name match when a
-  // short name is ambiguous across namespaces.
+  // Track the diagram selection. The explorer keys cards by qualified name
+  // while the diagram identifies nodes by short name, so resolve the match.
   useEffect(() => {
     if (!selectedEntity) return;
-    setExpandedEntity(selectedEntity);
-  }, [selectedEntity]);
+    const match = metadata.entities.find(
+      (entity) => entity.name === selectedEntity || entity.qualifiedName === selectedEntity,
+    );
+    setExpandedEntity(match ? (match.qualifiedName ?? match.name) : selectedEntity);
+  }, [selectedEntity, metadata.entities]);
 
   const handleEntityToggle = useCallback(
     (entityKey: string, entityName: string) => {
@@ -161,16 +164,18 @@ export function MetadataExplorer({
             </button>
           )}
         </div>
-        {(query || kindFilter !== 'all' || allEntityMatches.length > MAX_RESULTS) && (
+        {activeTab !== 'stats' && (
           <div className="mt-2 flex items-center justify-between text-xs text-engineering-500">
             <span>
-              {activeTab === 'relationships'
-                ? `${relationshipMatches.length} of ${allRelationshipMatches.length} ${plural(
-                    allRelationshipMatches.length,
-                    'relationship',
-                    'relationships',
-                  )}`
-                : `${entityMatches.length} of ${kindTotal} ${plural(kindTotal, 'type')}`}
+              {query || kindFilter !== 'all' || allEntityMatches.length > MAX_RESULTS
+                ? activeTab === 'relationships'
+                  ? `${relationshipMatches.length} of ${allRelationshipMatches.length} ${plural(
+                      allRelationshipMatches.length,
+                      'relationship',
+                      'relationships',
+                    )}`
+                  : `${entityMatches.length} of ${kindTotal} ${plural(kindTotal, 'type')}`
+                : ''}
             </span>
             {activeTab !== 'relationships' && (
               <div className="flex gap-1">
@@ -183,6 +188,7 @@ export function MetadataExplorer({
                     key={option.id}
                     type="button"
                     onClick={() => setKindFilter(option.id)}
+                    aria-pressed={kindFilter === option.id}
                     className={`px-2 py-0.5 rounded ${
                       kindFilter === option.id
                         ? 'bg-primary-500 text-white'

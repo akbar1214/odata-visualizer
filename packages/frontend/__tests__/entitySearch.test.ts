@@ -167,9 +167,11 @@ describe('createEntitySearch', () => {
     expect(all.map((m) => m.entity.name)).toEqual(['Money']);
   });
 
-  it('returns every match so callers can report totals', async () => {
+  it('returns all matches, ranked best-first, so callers can cap and report totals', async () => {
     const search = await loadSearch();
-    expect(search('order').length).toBeGreaterThan(1);
+    const results = search('order', {});
+    expect(results.length).toBeGreaterThan(1);
+    expect(results[0].entity.qualifiedName).toBe('Shop.Order');
   });
 });
 
