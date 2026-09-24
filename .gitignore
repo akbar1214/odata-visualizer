@@ -40,3 +40,7 @@ container/data/
 # Temporary
 tmp/
 temp/
+
+# Vitest browser-mode failure artifacts (baseline screenshots for existing
+# tests are still tracked explicitly).
+packages/frontend/__tests__/__screenshots__/explorerChrome.test.tsx/
