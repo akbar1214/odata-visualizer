@@ -1,6 +1,7 @@
 import ELK from 'elkjs';
 import type { ODataMetadata } from '@odata-visualizer/shared';
 import type { Node, Edge } from '@xyflow/react';
+import { createEntitySearch } from './entitySearch';
 
 const elk = new ELK();
 
@@ -104,7 +105,11 @@ function applyGridLayout(nodes: Node[], edges: Edge[]): { nodes: Node[]; edges: 
 }
 
 /**
- * Filter metadata based on criteria
+ * Filter metadata based on criteria.
+ *
+ * A text search ranks matches by relevance and keeps one-hop neighbours of the
+ * matches, so searching for a type still shows the relationships around it
+ * instead of a set of disconnected nodes.
  */
 export function filterMetadata(
   metadata: ODataMetadata,
@@ -112,38 +117,56 @@ export function filterMetadata(
     search?: string;
     entityNames?: string[];
     maxEntities?: number;
+    includeComplexTypes?: boolean;
+    /** Keep entities directly related to a match (default true when searching). */
+    includeNeighbours?: boolean;
   },
 ): ODataMetadata {
-  let filteredEntities = [...metadata.entities];
+  const search = createEntitySearch(metadata);
+  const query = (filter.search ?? '').trim();
 
-  // Filter by search term
-  if (filter.search) {
-    const searchLower = filter.search.toLowerCase();
-    filteredEntities = filteredEntities.filter(
-      (entity) =>
-        entity.name.toLowerCase().includes(searchLower) ||
-        entity.label?.toLowerCase().includes(searchLower) ||
-        entity.namespace?.toLowerCase().includes(searchLower),
-    );
-  }
+  // No text search: behave like the unfiltered model (this is how the diagram
+  // loads a whole model), then apply the remaining criteria.
+  let filteredEntities = query
+    ? search(query, { includeComplexTypes: filter.includeComplexTypes ?? false }).map(
+        (match) => match.entity,
+      )
+    : [...metadata.entities];
 
-  // Filter by specific entity names
+  // Filter by specific entity names (short or namespace-qualified).
   if (filter.entityNames && filter.entityNames.length > 0) {
-    filteredEntities = filteredEntities.filter((entity) =>
-      filter.entityNames!.includes(entity.name),
+    const wanted = new Set(filter.entityNames);
+    filteredEntities = filteredEntities.filter(
+      (entity) => wanted.has(entity.name) || wanted.has(entity.qualifiedName ?? ''),
     );
   }
 
-  // Limit number of entities
+  if (query && (filter.includeNeighbours ?? true)) {
+    // Expand exactly one hop from the *original* matches. Mutating a single
+    // set while iterating would cascade and pull in the whole model.
+    const seeds = new Set(filteredEntities.map((entity) => entity.name));
+    const selected = new Set(seeds);
+    for (const rel of metadata.relationships) {
+      if (seeds.has(rel.from.entity) && !seeds.has(rel.to.entity)) {
+        selected.add(rel.to.entity);
+      }
+      if (seeds.has(rel.to.entity) && !seeds.has(rel.from.entity)) {
+        selected.add(rel.from.entity);
+      }
+    }
+    filteredEntities = metadata.entities.filter((entity) => selected.has(entity.name));
+  }
+
+  // Limit last, so relevance decides what survives.
   if (filter.maxEntities && filteredEntities.length > filter.maxEntities) {
     filteredEntities = filteredEntities.slice(0, filter.maxEntities);
   }
 
-  const filteredEntityNames = new Set(filteredEntities.map((e) => e.name));
+  const keptEntityNames = new Set(filteredEntities.map((entity) => entity.name));
 
-  // Filter relationships to only include filtered entities
+  // Keep relationships that still have both endpoints on the diagram.
   const filteredRelationships = metadata.relationships.filter(
-    (rel) => filteredEntityNames.has(rel.from.entity) && filteredEntityNames.has(rel.to.entity),
+    (rel) => keptEntityNames.has(rel.from.entity) && keptEntityNames.has(rel.to.entity),
   );
 
   return {
