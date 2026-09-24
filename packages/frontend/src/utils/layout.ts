@@ -144,6 +144,10 @@ export function filterMetadata(
   if (query && (filter.includeNeighbours ?? true)) {
     // Expand exactly one hop from the *original* matches. Mutating a single
     // set while iterating would cascade and pull in the whole model.
+    //
+    // Note: relationships and entity lookups here use short names, so types
+    // sharing a name across namespaces can pull in the wrong neighbour. This
+    // matches how diagram node ids are currently keyed.
     const seeds = new Set(filteredEntities.map((entity) => entity.name));
     const selected = new Set(seeds);
     for (const rel of metadata.relationships) {
@@ -154,7 +158,18 @@ export function filterMetadata(
         selected.add(rel.from.entity);
       }
     }
-    filteredEntities = metadata.entities.filter((entity) => selected.has(entity.name));
+
+    // Keep the ranked order: real matches stay in score order and neighbours
+    // follow, so maxEntities below keeps the best matches rather than whatever
+    // happens to come first in the original metadata.
+    const rank = new Map(filteredEntities.map((entity, index) => [entity.name, index]));
+    filteredEntities = metadata.entities
+      .filter((entity) => selected.has(entity.name))
+      .sort(
+        (a, b) =>
+          (rank.get(a.name) ?? Number.MAX_SAFE_INTEGER) -
+          (rank.get(b.name) ?? Number.MAX_SAFE_INTEGER),
+      );
   }
 
   // Limit last, so relevance decides what survives.

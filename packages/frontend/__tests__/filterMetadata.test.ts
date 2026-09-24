@@ -87,6 +87,20 @@ describe('filterMetadata', () => {
     expect(result.entities.map((e) => e.name)).toContain('Part');
   });
 
+  it('keeps the best match when maxEntities truncates with neighbours', async () => {
+    const metadata = await load();
+    // OrderLine appears after Order in the model, so a naive filter+slice
+    // would keep Order and drop the actual match.
+    const result = filterMetadata(metadata, { search: 'OrderLine', maxEntities: 1 });
+    expect(result.entities.map((e) => e.name)).toEqual(['OrderLine']);
+  });
+
+  it('orders matches before neighbours', async () => {
+    const metadata = await load();
+    const result = filterMetadata(metadata, { search: 'OrderLine' });
+    expect(result.entities.map((e) => e.name)).toEqual(['OrderLine', 'Order']);
+  });
+
   it('ranks the exact match first when capping', async () => {
     const metadata = await load();
     const result = filterMetadata(metadata, { search: 'Order', maxEntities: 1 });

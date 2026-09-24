@@ -15,6 +15,10 @@ type KindFilter = 'all' | 'entity' | 'complex';
 /** Cap the rendered list so huge models stay responsive. */
 const MAX_RESULTS = 200;
 
+function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
+  return count === 1 ? singular : pluralForm;
+}
+
 function useDebouncedValue<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value);
 
@@ -63,20 +67,25 @@ export function MetadataExplorer({
   const query = useDebouncedValue(rawQuery.trim(), 150);
   const search = useMemo(() => createEntitySearch(metadata), [metadata]);
 
-  const entityMatches = useMemo(() => {
-    const matches = search(query, {
-      includeComplexTypes: kindFilter !== 'entity',
-      limit: MAX_RESULTS,
-    });
-    if (kindFilter === 'all') return matches;
-    return matches.filter((match) =>
-      kindFilter === 'complex' ? match.entity.kind === 'complex' : match.entity.kind !== 'complex',
-    );
-  }, [search, query, kindFilter]);
+  // The kind filter is applied by the search (before any cap), so filtering to
+  // complex types is not starved by higher-ranked entity types.
+  const allEntityMatches = useMemo(
+    () => search(query, { kind: kindFilter }),
+    [search, query, kindFilter],
+  );
+  const entityMatches = useMemo(() => allEntityMatches.slice(0, MAX_RESULTS), [allEntityMatches]);
 
-  const relationshipMatches = useMemo(
-    () => searchRelationships(metadata.relationships, query, MAX_RESULTS),
+  // Denominator: how many types the current kind filter covers, so "3 of 4"
+  // means "3 matched out of 4 searchable types".
+  const kindTotal = useMemo(() => search('', { kind: kindFilter }).length, [search, kindFilter]);
+
+  const allRelationshipMatches = useMemo(
+    () => searchRelationships(metadata.relationships, query),
     [metadata.relationships, query],
+  );
+  const relationshipMatches = useMemo(
+    () => allRelationshipMatches.slice(0, MAX_RESULTS),
+    [allRelationshipMatches],
   );
 
   const stats = useMemo(() => {
@@ -152,12 +161,16 @@ export function MetadataExplorer({
             </button>
           )}
         </div>
-        {query && (
+        {(query || kindFilter !== 'all' || allEntityMatches.length > MAX_RESULTS) && (
           <div className="mt-2 flex items-center justify-between text-xs text-engineering-500">
             <span>
               {activeTab === 'relationships'
-                ? `${relationshipMatches.length} of ${metadata.relationships.length} relationships`
-                : `${entityMatches.length} of ${metadata.entities.length} types`}
+                ? `${relationshipMatches.length} of ${allRelationshipMatches.length} ${plural(
+                    allRelationshipMatches.length,
+                    'relationship',
+                    'relationships',
+                  )}`
+                : `${entityMatches.length} of ${kindTotal} ${plural(kindTotal, 'type')}`}
             </span>
             {activeTab !== 'relationships' && (
               <div className="flex gap-1">
@@ -183,6 +196,20 @@ export function MetadataExplorer({
             )}
           </div>
         )}
+        {activeTab === 'relationships'
+          ? allRelationshipMatches.length > MAX_RESULTS && (
+              <div className="mt-1 text-xs text-engineering-400">
+                {`Showing the first ${MAX_RESULTS} of ${allRelationshipMatches.length} relationships — refine your search.`}
+              </div>
+            )
+          : allEntityMatches.length > MAX_RESULTS && (
+              <div className="mt-1 text-xs text-engineering-400">
+                {`Showing the first ${MAX_RESULTS} of ${allEntityMatches.length} ${plural(
+                  allEntityMatches.length,
+                  'type',
+                )} — refine your search.`}
+              </div>
+            )}
       </div>
 
       {/* Tabs */}

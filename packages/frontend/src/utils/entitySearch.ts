@@ -12,8 +12,8 @@ export interface EntityMatch {
 export interface SearchOptions {
   /** Match complex types too (default true). */
   includeComplexTypes?: boolean;
-  /** Cap the number of results. */
-  limit?: number;
+  /** Restrict to a kind. Applied before any caller-side limit. */
+  kind?: 'all' | 'entity' | 'complex';
 }
 
 /** Field weights: lower means a stronger match. */
@@ -36,19 +36,15 @@ interface IndexedEntity {
   qualifiedName: string;
   namespace: string;
   label: string;
-  annotations: string;
-  properties: string;
-  navigations: string;
-  /** Property/nav names that contain a token, for the "matched on" hint. */
+  /** Property / navigation / annotation values, matched individually so a
+   *  token can never span the boundary between two entries. */
   propertyNames: string[];
   navigationNames: string[];
   annotationValues: string[];
 }
 
-function annotationText(entity: ODataEntity): string {
-  return Object.entries(entity.annotations ?? {})
-    .map(([term, value]) => `${term} ${value}`)
-    .join(' ');
+function toList(values: string[]): string[] {
+  return values.map((value) => value.toLowerCase());
 }
 
 /**
@@ -65,12 +61,12 @@ function indexEntity(entity: ODataEntity, entities: ODataEntity[]): IndexedEntit
     qualifiedName: (entity.qualifiedName ?? entity.name).toLowerCase(),
     namespace: (entity.namespace ?? '').toLowerCase(),
     label: (entity.label ?? '').toLowerCase(),
-    annotations: annotationText(entity).toLowerCase(),
-    properties: properties.map((p) => p.name.toLowerCase()).join(' '),
-    navigations: navigations.map((n) => n.name.toLowerCase()).join(' '),
-    propertyNames: properties.map((p) => p.name.toLowerCase()),
-    navigationNames: navigations.map((n) => n.name.toLowerCase()),
-    annotationValues: Object.values(entity.annotations ?? {}).map((v) => v.toLowerCase()),
+    propertyNames: toList(properties.map((p) => p.name)),
+    navigationNames: toList(navigations.map((n) => n.name)),
+    annotationValues: toList([
+      entity.label ?? '',
+      ...Object.entries(entity.annotations ?? {}).flatMap(([term, value]) => [term, value]),
+    ]),
   };
 }
 
@@ -97,19 +93,27 @@ function scoreToken(entry: IndexedEntity, token: string): { score: number; reaso
   if (entry.namespace.includes(token)) {
     return { score: SCORE.namespaceContains, reason: 'namespace' };
   }
-  if (entry.properties.includes(token)) {
-    const hit = entry.propertyNames.find((name) => name.includes(token));
-    return { score: SCORE.propertyContains, reason: `property: ${hit}` };
+
+  // Match each name individually: joining them would let a token span two
+  // property names (e.g. "bercu" across "number" + "currency").
+  const propertyHit = entry.propertyNames.find((name) => name.includes(token));
+  if (propertyHit) return { score: SCORE.propertyContains, reason: `property: ${propertyHit}` };
+
+  const navigationHit = entry.navigationNames.find((name) => name.includes(token));
+  if (navigationHit) {
+    return { score: SCORE.navigationContains, reason: `navigation: ${navigationHit}` };
   }
-  if (entry.navigations.includes(token)) {
-    const hit = entry.navigationNames.find((name) => name.includes(token));
-    return { score: SCORE.navigationContains, reason: `navigation: ${hit}` };
-  }
-  if (entry.annotations.includes(token)) {
-    const hit = entry.annotationValues.find((value) => value.includes(token));
-    return { score: SCORE.annotationContains, reason: `description: ${hit}` };
+
+  const annotationHit = entry.annotationValues.find((value) => value.includes(token));
+  if (annotationHit) {
+    return { score: SCORE.annotationContains, reason: `description: ${truncate(annotationHit)}` };
   }
   return { score: Number.POSITIVE_INFINITY };
+}
+
+function truncate(value: string, max = 40): string {
+  const clean = value.replace(/\s+/g, ' ').trim();
+  return clean.length > max ? `${clean.slice(0, max)}…` : clean;
 }
 
 function scoreEntity(entry: IndexedEntity, tokens: string[]): EntityMatch | null {
@@ -147,24 +151,29 @@ export function createEntitySearch(metadata: ODataMetadata) {
 
   return function search(query: string, options: SearchOptions = {}): EntityMatch[] {
     const tokens = tokenize(query);
+    const includeComplex = (options.includeComplexTypes ?? true) && options.kind !== 'entity';
+
+    const allowed = metadata.entities.filter((entity) => {
+      if (!includeComplex && entity.kind === 'complex') return false;
+      if (options.kind === 'complex') return entity.kind === 'complex';
+      if (options.kind === 'entity') return entity.kind !== 'complex';
+      return true;
+    });
+
     if (tokens.length === 0) {
-      return metadata.entities
-        .filter((entity) =>
-          options.includeComplexTypes === false ? entity.kind !== 'complex' : true,
-        )
-        .map((entity) => ({ entity, score: 0, reasons: [] as string[] }));
+      return allowed.map((entity) => ({ entity, score: 0, reasons: [] as string[] }));
     }
 
     const matches: EntityMatch[] = [];
-    for (const entity of metadata.entities) {
-      if (options.includeComplexTypes === false && entity.kind === 'complex') continue;
+    for (const entity of allowed) {
       const match = scoreEntity(entryFor(entity), tokens);
       if (match) matches.push(match);
     }
 
+    // Ranked, best first. Callers slice, so they can report a total and apply
+    // their own cap after filtering.
     matches.sort((a, b) => a.score - b.score || a.entity.name.localeCompare(b.entity.name));
-
-    return options.limit !== undefined ? matches.slice(0, options.limit) : matches;
+    return matches;
   };
 }
 

@@ -123,9 +123,12 @@ describe('createEntitySearch', () => {
     expect(withoutComplex).toHaveLength(0);
   });
 
-  it('respects a result limit', async () => {
+  it('returns all matches so callers can cap and report totals', async () => {
     const search = await loadSearch();
-    expect(search('order', { limit: 1 })).toHaveLength(1);
+    const results = search('order', {});
+    expect(results.length).toBeGreaterThan(1);
+    // The caller slices; the full list is still ranked best-first.
+    expect(results[0].entity.qualifiedName).toBe('Shop.Order');
   });
 
   it('reuses the index across queries', async () => {
@@ -134,6 +137,39 @@ describe('createEntitySearch', () => {
     const second = search('order');
     // Same entity objects prove the cache is reused rather than rebuilt.
     expect(first[0].entity).toBe(second[0].entity);
+  });
+  it('does not match a token spanning two property names', async () => {
+    const search = await loadSearch();
+    // "number" and "currency" are separate properties of Shop.Money, so the
+    // token "bercu" must not match even though it appears in their join.
+    expect(search('bercu')).toHaveLength(0);
+    expect(search('rcur')).toHaveLength(0);
+  });
+
+  it('still matches a token inside one property name', async () => {
+    const search = await loadSearch();
+    // "Amount" and "Currency" are single property names of Shop.Money.
+    expect(search('mount').map((m) => m.entity.qualifiedName)).toContain('Shop.Money');
+    expect(search('rrenc').map((m) => m.entity.qualifiedName)).toContain('Shop.Money');
+  });
+
+  it('restricts to a kind', async () => {
+    const search = await loadSearch();
+    expect(search('', { kind: 'complex' }).map((m) => m.entity.name)).toEqual(['Money']);
+    expect(search('', { kind: 'entity' }).map((m) => m.entity.kind)).not.toContain('complex');
+  });
+
+  it('applies the kind filter before the caller slices', async () => {
+    const search = await loadSearch();
+    // "o" matches every type; restricting to complex types must not be
+    // affected by how many entity types ranked ahead of them.
+    const all = search('o', { kind: 'complex' });
+    expect(all.map((m) => m.entity.name)).toEqual(['Money']);
+  });
+
+  it('returns every match so callers can report totals', async () => {
+    const search = await loadSearch();
+    expect(search('order').length).toBeGreaterThan(1);
   });
 });
 
