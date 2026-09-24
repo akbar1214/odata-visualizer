@@ -85,10 +85,10 @@ describe('entity resolution', () => {
     ]);
   });
 
-  it('resolves navigation targets to qualified types', async () => {
+  it('resolves navigation targets to the short name used by the graph', async () => {
     const model = await loadModel();
     const order = findEntity('Order', model.entities)!;
-    expect(getTargetEntityName('Lines', order, model)).toBe('Shop.OrderLine');
+    expect(getTargetEntityName('Lines', order, model)).toBe('OrderLine');
     expect(getTargetEntityName('Nope', order, model)).toBeUndefined();
   });
 });
