@@ -1,6 +1,7 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { ODataMetadata, ODataEntity, ODataProperty } from '@odata-visualizer/shared';
 import { getTargetEntityName } from '../utils/queryResolver';
+import { createEntitySearch, searchRelationships } from '../utils/entitySearch';
 
 interface MetadataExplorerProps {
   metadata: ODataMetadata;
@@ -9,6 +10,25 @@ interface MetadataExplorerProps {
 }
 
 type TabId = 'entities' | 'relationships' | 'stats';
+type KindFilter = 'all' | 'entity' | 'complex';
+
+/** Cap the rendered list so huge models stay responsive. */
+const MAX_RESULTS = 200;
+
+function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
+  return count === 1 ? singular : pluralForm;
+}
+
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+
+  return debounced;
+}
 
 const SORTABLE_TYPES = new Set([
   'Edm.String',
@@ -39,19 +59,34 @@ export function MetadataExplorer({
   onEntitySelect,
 }: MetadataExplorerProps) {
   const [activeTab, setActiveTab] = useState<TabId>('entities');
-  const [searchTerm, setSearchTerm] = useState('');
+  const [rawQuery, setRawQuery] = useState('');
+  const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [expandedEntity, setExpandedEntity] = useState<string | null>(selectedEntity || null);
 
-  const filteredEntities = useMemo(() => {
-    if (!searchTerm) return metadata.entities;
-    const lower = searchTerm.toLowerCase();
-    return metadata.entities.filter(
-      (e) =>
-        e.name.toLowerCase().includes(lower) ||
-        e.label?.toLowerCase().includes(lower) ||
-        e.namespace?.toLowerCase().includes(lower),
-    );
-  }, [metadata.entities, searchTerm]);
+  // Debounced so typing stays smooth on Windchill-sized models.
+  const query = useDebouncedValue(rawQuery.trim(), 150);
+  const search = useMemo(() => createEntitySearch(metadata), [metadata]);
+
+  // The kind filter is applied by the search (before any cap), so filtering to
+  // complex types is not starved by higher-ranked entity types.
+  const allEntityMatches = useMemo(
+    () => search(query, { kind: kindFilter }),
+    [search, query, kindFilter],
+  );
+  const entityMatches = useMemo(() => allEntityMatches.slice(0, MAX_RESULTS), [allEntityMatches]);
+
+  // Denominator: how many types the current kind filter covers, so "3 of 4"
+  // means "3 matched out of 4 searchable types".
+  const kindTotal = useMemo(() => search('', { kind: kindFilter }).length, [search, kindFilter]);
+
+  const allRelationshipMatches = useMemo(
+    () => searchRelationships(metadata.relationships, query),
+    [metadata.relationships, query],
+  );
+  const relationshipMatches = useMemo(
+    () => allRelationshipMatches.slice(0, MAX_RESULTS),
+    [allRelationshipMatches],
+  );
 
   const stats = useMemo(() => {
     const totalProperties = metadata.entities.reduce((acc, e) => acc + e.properties.length, 0);
@@ -75,15 +110,27 @@ export function MetadataExplorer({
   }, []);
 
   const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearchTerm(e.target.value);
+    setRawQuery(e.target.value);
   }, []);
 
+  const clearSearch = useCallback(() => setRawQuery(''), []);
+
+  // Track the diagram selection. The explorer keys cards by qualified name
+  // while the diagram identifies nodes by short name, so resolve the match.
+  useEffect(() => {
+    if (!selectedEntity) return;
+    const match = metadata.entities.find(
+      (entity) => entity.name === selectedEntity || entity.qualifiedName === selectedEntity,
+    );
+    setExpandedEntity(match ? (match.qualifiedName ?? match.name) : selectedEntity);
+  }, [selectedEntity, metadata.entities]);
+
   const handleEntityToggle = useCallback(
-    (entityName: string) => {
-      setExpandedEntity(expandedEntity === entityName ? null : entityName);
+    (entityKey: string, entityName: string) => {
+      setExpandedEntity((current) => (current === entityKey ? null : entityKey));
       onEntitySelect?.(entityName);
     },
-    [expandedEntity, onEntitySelect],
+    [onEntitySelect],
   );
 
   const handleRelationshipClick = useCallback(
@@ -95,6 +142,82 @@ export function MetadataExplorer({
 
   return (
     <div className="card h-full flex flex-col">
+      {/* Search — shared by the Entities and Relationships tabs */}
+      <div className="p-4 border-b border-engineering-200">
+        <div className="relative">
+          <input
+            type="text"
+            placeholder="Search types, properties, descriptions..."
+            value={rawQuery}
+            onChange={handleSearchChange}
+            className="input pr-8"
+            aria-label="Search metadata"
+          />
+          {rawQuery && (
+            <button
+              type="button"
+              onClick={clearSearch}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-engineering-400 hover:text-engineering-600"
+              aria-label="Clear search"
+            >
+              ×
+            </button>
+          )}
+        </div>
+        {activeTab !== 'stats' && (
+          <div className="mt-2 flex items-center justify-between text-xs text-engineering-500">
+            <span>
+              {query || kindFilter !== 'all' || allEntityMatches.length > MAX_RESULTS
+                ? activeTab === 'relationships'
+                  ? `${relationshipMatches.length} of ${allRelationshipMatches.length} ${plural(
+                      allRelationshipMatches.length,
+                      'relationship',
+                      'relationships',
+                    )}`
+                  : `${entityMatches.length} of ${kindTotal} ${plural(kindTotal, 'type')}`
+                : ''}
+            </span>
+            {activeTab !== 'relationships' && (
+              <div className="flex gap-1">
+                {[
+                  { id: 'all' as const, label: 'All' },
+                  { id: 'entity' as const, label: 'Entities' },
+                  { id: 'complex' as const, label: 'Complex' },
+                ].map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => setKindFilter(option.id)}
+                    aria-pressed={kindFilter === option.id}
+                    className={`px-2 py-0.5 rounded ${
+                      kindFilter === option.id
+                        ? 'bg-primary-500 text-white'
+                        : 'bg-engineering-100 hover:bg-engineering-200'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {activeTab === 'relationships'
+          ? allRelationshipMatches.length > MAX_RESULTS && (
+              <div className="mt-1 text-xs text-engineering-400">
+                {`Showing the first ${MAX_RESULTS} of ${allRelationshipMatches.length} relationships — refine your search.`}
+              </div>
+            )
+          : allEntityMatches.length > MAX_RESULTS && (
+              <div className="mt-1 text-xs text-engineering-400">
+                {`Showing the first ${MAX_RESULTS} of ${allEntityMatches.length} ${plural(
+                  allEntityMatches.length,
+                  'type',
+                )} — refine your search.`}
+              </div>
+            )}
+      </div>
+
       {/* Tabs */}
       <div className="flex border-b border-engineering-200">
         {[
@@ -130,30 +253,27 @@ export function MetadataExplorer({
         {/* Entities Tab */}
         {activeTab === 'entities' && (
           <div className="p-4">
-            <div className="mb-4">
-              <input
-                type="text"
-                placeholder="Search entities..."
-                value={searchTerm}
-                onChange={handleSearchChange}
-                className="input"
-              />
-            </div>
-
             <div className="space-y-2">
-              {filteredEntities.map((entity) => (
-                <EntityCard
-                  key={entity.name}
-                  entity={entity}
-                  isExpanded={expandedEntity === entity.name}
-                  isSelected={selectedEntity === entity.name}
-                  metadata={metadata}
-                  onToggle={() => handleEntityToggle(entity.name)}
-                  onNavigate={onEntitySelect}
-                />
-              ))}
-              {filteredEntities.length === 0 && (
-                <div className="text-center py-8 text-engineering-500">No entities found</div>
+              {entityMatches.map((match) => {
+                const entity = match.entity;
+                const entityKey = entity.qualifiedName ?? entity.name;
+                return (
+                  <EntityCard
+                    key={entityKey}
+                    entity={entity}
+                    matchReason={match.reasons.join(', ')}
+                    isExpanded={expandedEntity === entityKey}
+                    isSelected={selectedEntity === entity.name}
+                    metadata={metadata}
+                    onToggle={() => handleEntityToggle(entityKey, entity.name)}
+                    onNavigate={onEntitySelect}
+                  />
+                );
+              })}
+              {entityMatches.length === 0 && (
+                <div className="text-center py-8 text-engineering-500">
+                  {query ? `No types match "${query}"` : 'No entities found'}
+                </div>
               )}
             </div>
           </div>
@@ -163,9 +283,9 @@ export function MetadataExplorer({
         {activeTab === 'relationships' && (
           <div className="p-4">
             <div className="space-y-2">
-              {metadata.relationships.map((rel) => (
+              {relationshipMatches.map(({ relationship: rel }) => (
                 <div
-                  key={rel.name}
+                  key={`${rel.name}-${rel.from.entity}-${rel.to.entity}`}
                   className="p-3 bg-engineering-100 rounded hover:bg-engineering-200 cursor-pointer"
                   onClick={() => handleRelationshipClick(rel.from.entity)}
                 >
@@ -179,8 +299,10 @@ export function MetadataExplorer({
                   </div>
                 </div>
               ))}
-              {metadata.relationships.length === 0 && (
-                <div className="text-center py-8 text-engineering-500">No relationships found</div>
+              {relationshipMatches.length === 0 && (
+                <div className="text-center py-8 text-engineering-500">
+                  {query ? `No relationships match "${query}"` : 'No relationships found'}
+                </div>
               )}
             </div>
           </div>
@@ -220,6 +342,7 @@ export function MetadataExplorer({
 
 interface EntityCardProps {
   entity: ODataEntity;
+  matchReason?: string;
   isExpanded: boolean;
   isSelected: boolean;
   metadata: ODataMetadata;
@@ -229,6 +352,7 @@ interface EntityCardProps {
 
 function EntityCard({
   entity,
+  matchReason,
   isExpanded,
   isSelected,
   metadata,
@@ -248,9 +372,17 @@ function EntityCard({
         <div className="flex-1 min-w-0">
           <div className="font-medium text-sm truncate text-black">
             {entity.label || entity.name}
+            {entity.kind === 'complex' && (
+              <span className="ml-2 text-xs bg-engineering-100 text-engineering-600 px-1.5 py-0.5 rounded">
+                complex
+              </span>
+            )}
           </div>
-          {entity.namespace && (
-            <div className="text-xs text-engineering-500 truncate">{entity.namespace}</div>
+          <div className="text-xs text-engineering-500 truncate">
+            {entity.qualifiedName ?? entity.name}
+          </div>
+          {matchReason && (
+            <div className="text-xs text-primary-600 truncate">matches {matchReason}</div>
           )}
         </div>
         <div className="flex items-center gap-2 ml-2">
