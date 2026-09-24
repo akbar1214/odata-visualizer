@@ -1,7 +1,6 @@
 import { Router, type Request, type Response, type Router as ExpressRouter } from 'express';
 import multer from 'multer';
 import { parseCSDL } from '@odata-visualizer/shared';
-import { parseCSDLUrl } from '@odata-visualizer/shared/load';
 import { metadataStore, sanitizeModelId } from '../services/metadataStore.js';
 import { createHttpReferenceLoader } from '../services/referenceLoader.js';
 import { validateMetadataUrl } from '../services/urlPolicy.js';
@@ -195,11 +194,38 @@ router.post('/url', async (req: Request, res: Response) => {
         return;
       }
 
+      // fetch follows redirects, so a validated public URL can end up pointing
+      // at a private address. Re-check where the response actually came from.
+      if (response.url) {
+        try {
+          validateMetadataUrl(response.url, allowlistFromEnv(), {
+            blockPrivate: blockPrivateFromEnv(),
+          });
+        } catch (error) {
+          const rejected: ParseResponse = {
+            success: false,
+            error: `Refusing metadata from ${response.url}: ${
+              error instanceof Error ? error.message : 'blocked by policy'
+            }`,
+            parseTimeMs: Date.now() - startTime,
+            fileSizeBytes: 0,
+          };
+          res.status(400).json(rejected);
+          return;
+        }
+      }
+
       const xmlContent = await response.text();
       const contentLength = response.headers.get('content-length');
       const fileSizeBytes = contentLength ? parseInt(contentLength, 10) : xmlContent.length;
 
-      const data = await parseCSDLUrl(safeUrl);
+      // Parse the document we already fetched (a second fetch could return a
+      // different document than the one whose size was reported), and resolve
+      // references through the same URL policy.
+      const data = await parseCSDL(xmlContent, {
+        baseUri: safeUrl,
+        loadExternal: createHttpReferenceLoader(),
+      });
 
       metadataStore.save(sessionIdOf(req), data, {
         sourceName: safeUrl,

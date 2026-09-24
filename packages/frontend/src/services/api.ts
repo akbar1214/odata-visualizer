@@ -28,6 +28,29 @@ const SESSION_HEADERS: Record<string, string> = {
 };
 
 /**
+ * Optional API token, read from VITE_API_TOKEN at build time. Without it the UI
+ * still works, as long as API_TOKEN is not set on the backend.
+ */
+let apiTokenOverride: string | undefined;
+
+/** Override the API token (used by tests and by runtime configuration). */
+export function setApiToken(token: string | undefined): void {
+  apiTokenOverride = token;
+}
+
+function authHeaders(): Record<string, string> {
+  // Bracket access keeps this dynamic; Vite rewrites static
+  // `import.meta.env.X` member access at build time.
+  const env = import.meta.env as unknown as Record<string, string | undefined>;
+  const token = apiTokenOverride ?? env['VITE_API_TOKEN'];
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function withAuth(headers: Record<string, string>): Record<string, string> {
+  return { ...headers, ...authHeaders() };
+}
+
+/**
  * Parse OData metadata from uploaded file
  */
 export async function parseFile(file: File): Promise<ParseResponse> {
@@ -36,7 +59,7 @@ export async function parseFile(file: File): Promise<ParseResponse> {
 
   const response = await fetch(`${API_BASE}/parse/file`, {
     method: 'POST',
-    headers: SESSION_HEADERS,
+    headers: withAuth(SESSION_HEADERS),
     body: formData,
   });
 
@@ -54,10 +77,10 @@ export async function parseFile(file: File): Promise<ParseResponse> {
 export async function parseUrl(url: string): Promise<ParseResponse> {
   const response = await fetch(`${API_BASE}/parse/url`, {
     method: 'POST',
-    headers: {
+    headers: withAuth({
       'Content-Type': 'application/json',
       ...SESSION_HEADERS,
-    },
+    }),
     body: JSON.stringify({ url }),
   });
 
@@ -75,10 +98,10 @@ export async function parseUrl(url: string): Promise<ParseResponse> {
 export async function parseContent(content: string): Promise<ParseResponse> {
   const response = await fetch(`${API_BASE}/parse/content`, {
     method: 'POST',
-    headers: {
+    headers: withAuth({
       'Content-Type': 'application/json',
       ...SESSION_HEADERS,
-    },
+    }),
     body: JSON.stringify({ content }),
   });
 
@@ -96,7 +119,7 @@ export async function parseContent(content: string): Promise<ParseResponse> {
 export async function clearMetadata(): Promise<void> {
   await fetch(`${API_BASE}/metadata/current`, {
     method: 'DELETE',
-    headers: SESSION_HEADERS,
+    headers: withAuth(SESSION_HEADERS),
   });
 }
 

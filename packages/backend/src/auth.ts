@@ -9,7 +9,8 @@ export function createApiAuth(token: string | undefined) {
   const expected = token?.trim();
 
   return (req: Request, res: Response, next: NextFunction): void => {
-    const path = req.originalUrl.split('?')[0];
+    // Normalize a trailing slash so /api/health/ is also public.
+    const path = req.originalUrl.split('?')[0].replace(/\/+$/, '') || '/';
     if (!expected || path === '/api/health' || path === '/health') {
       next();
       return;

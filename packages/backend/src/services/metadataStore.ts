@@ -22,6 +22,11 @@ export interface ModelStore {
   save(id: string, metadata: ODataMetadata, info?: Partial<ModelInfo>): StoredModel;
   /** Look up a session's model; without an id this is the current model. */
   get(id?: string): StoredModel | null;
+  /**
+   * Holds one parsed model per session id so concurrent browser sessions do not
+   * overwrite each other, while still exposing a single "current" model for the
+   * MCP server.
+   */
   /** The most recently saved model (what MCP uses). */
   current(): StoredModel | null;
   clear(id?: string): void;
@@ -55,7 +60,7 @@ export function createModelStore(options: ModelStoreOptions = {}): ModelStore {
     save(id, metadata, info) {
       const key = sanitizeModelId(id);
       if (!models.has(key) && models.size >= maxModels) {
-        // Evict the oldest entry to stay bounded.
+        // Evict the least recently saved entry to stay bounded.
         const oldest = models.keys().next();
         if (!oldest.done) models.delete(oldest.value);
       }
@@ -63,13 +68,21 @@ export function createModelStore(options: ModelStoreOptions = {}): ModelStore {
         metadata,
         info: { ...info, loadedAt: info?.loadedAt ?? new Date().toISOString() },
       };
+      // Delete first so a re-saved key moves to the end (Map keeps insertion
+      // order), otherwise an active session could be evicted while a stale one
+      // survives.
+      models.delete(key);
       models.set(key, model);
       currentId = key;
       return model;
     },
     get(id) {
       if (id) {
-        // An explicit session never sees another session's model.
+        // An explicit session id never falls back to another session's model.
+        // Note this is a convenience boundary, not an authorization control:
+        // session ids are supplied by the client, so anyone who knows (or
+        // guesses) an id can read that model. Put API_TOKEN in front of the
+        // API when that matters.
         return models.get(sanitizeModelId(id)) ?? null;
       }
       return currentId ? (models.get(currentId) ?? null) : null;
@@ -86,8 +99,13 @@ export function createModelStore(options: ModelStoreOptions = {}): ModelStore {
         }
         return;
       }
-      models.clear();
-      currentId = null;
+      // No id: clear the "default" session only, matching where /parse/*
+      // stores an upload that arrives without a session header. Callers that
+      // really want to wipe everything use clearAll().
+      models.delete('default');
+      if (currentId === 'default') {
+        currentId = models.size > 0 ? ([...models.keys()].at(-1) ?? null) : null;
+      }
     },
     clearAll() {
       models.clear();
