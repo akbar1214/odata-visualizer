@@ -45,6 +45,12 @@ export interface AggregateNode {
 /** Options for building an OData V4 query URL. */
 export interface QueryOptions {
   entitySet: string;
+  /**
+   * Entity type used to resolve property types and expand targets when
+   * `entitySet` is not an actual entity set (the UI previews `/Part?...` using
+   * the type name). The URL still uses `entitySet`.
+   */
+  rootEntityName?: string;
   filters?: FilterClause[];
   filterLogic?: 'and' | 'or';
   select?: string[];
@@ -505,6 +511,13 @@ function buildExpand(
 
 function resolveRootEntity(options: QueryOptions): string | undefined {
   if (!options.metadata) return undefined;
+
+  // The caller may know the entity type even when the path is not a set name.
+  if (options.rootEntityName) {
+    const direct = findEntityByName(options.metadata.entities, options.rootEntityName);
+    if (direct) return direct.qualifiedName ?? direct.name;
+  }
+
   const set = findEntitySet(options.metadata, options.entitySet);
   if (!set) return undefined;
   return set.entityTypeQualified ?? set.entityType;

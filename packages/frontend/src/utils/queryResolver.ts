@@ -192,16 +192,35 @@ function toExpandNode(item: ExpandItem): ExpandNode {
 /**
  * Build the OData V4 query for the builder UI. The shared builder is used so
  * literals, encoding, and expansion syntax stay identical to the MCP server.
+ *
+ * The UI addresses the resource by entity type name (`/Part?...`), so the root
+ * type is passed explicitly for literal typing. Filter rows that are still
+ * being typed (empty or not yet a valid literal for their property) are left
+ * out instead of discarding the whole query.
  */
 export function buildODataQuery(query: QueryState, metadata: ODataMetadata): string {
   const resolved = getResolvedEntity(query.entityName, metadata.entities);
   if (!resolved) return '';
 
+  const filters = query.filters.filter((filter) => {
+    const value = filter.value.trim();
+    if (!value) return false;
+    const type = resolved.allProperties.find((p) => p.name === filter.property)?.type;
+    if (!type) return true;
+    try {
+      formatV4Literal(value, type);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
   try {
     return buildQueryUrl({
       entitySet: query.entityName,
+      rootEntityName: query.entityName,
       metadata,
-      filters: query.filters.length > 0 ? query.filters : undefined,
+      filters: filters.length > 0 ? filters : undefined,
       filterLogic: query.filterLogic,
       select: query.select.length > 0 ? query.select : undefined,
       expand: query.expand.length > 0 ? query.expand.map(toExpandNode) : undefined,
@@ -234,8 +253,12 @@ export function isComplexType(entity: ODataEntity): boolean {
   return entity.kind === 'complex';
 }
 
+/**
+ * Types that can be queried directly. Abstract entity types are not queryable
+ * resources, and complex types have no entity set at all.
+ */
 export function getQueryableEntities(entities: ODataEntity[]): ODataEntity[] {
-  return entities.filter((e) => !isComplexType(e));
+  return entities.filter((entity) => !isComplexType(entity) && !entity.abstract);
 }
 
 export function groupEntitiesByNamespace(entities: ODataEntity[]): Map<string, ODataEntity[]> {

@@ -71,7 +71,10 @@ export function FilterBuilder({
           const operators = getOperatorsForType(edmType);
 
           return (
-            <div key={`${filter.property}-${filter.operator}-${filter.value}`}>
+            // Keyed by property/operator rather than value: including the value
+            // remounted the row on every keystroke and stole focus after one
+            // character. Re-keying on a select change is fine.
+            <div key={`${filter.property}-${filter.operator}`}>
               {index > 0 && (
                 <div className="flex justify-center my-1">
                   <button

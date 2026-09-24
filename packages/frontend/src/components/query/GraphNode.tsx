@@ -400,7 +400,10 @@ function GraphNodeComponent({ data }: NodeProps) {
             <div className="mt-1 space-y-0.5">
               {nodeState.filters.map((f, i) => (
                 <FilterRow
-                  key={`${f.property}-${f.operator}-${f.value}`}
+                  // Keyed by property/operator rather than value: a
+                  // value-dependent key remounted the row on every keystroke
+                  // and stole focus after one character.
+                  key={`${f.property}-${f.operator}`}
                   filter={f}
                   index={i}
                   isRoot={isRoot}
