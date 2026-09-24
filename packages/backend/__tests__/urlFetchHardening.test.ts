@@ -93,13 +93,19 @@ describe('GET /api/parse/url hardening', () => {
     expect(res.body.fileSizeBytes).toBe(minimalCSDL.length);
   });
 
-  it('rejects a response that redirected to a private address', async () => {
+  it('rejects a response that redirects to a private address', async () => {
+    const requested: string[] = [];
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
+      vi.fn(async (input: string | URL, init?: RequestInit) => {
+        requested.push(String(input));
+        expect(init?.redirect).toBe('manual');
         // The public URL 302s to the cloud metadata endpoint.
-        responseWithUrl(minimalCSDL, 'http://169.254.169.254/latest/meta-data/'),
-      ),
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'http://169.254.169.254/latest/meta-data/' },
+        });
+      }),
     );
 
     const app = createApp();
@@ -109,16 +115,19 @@ describe('GET /api/parse/url hardening', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/private or loopback/i);
+    // The private hop is never requested.
+    expect(requested).toEqual(['https://windchill.example.com/odata/$metadata']);
   });
 
   it('accepts a response that stayed on an allowed host', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        responseWithUrl(
-          minimalCSDL,
-          'https://windchill.example.com/odata/$metadata?v=2',
-        ),
+      vi.fn(
+        async () =>
+          new Response(minimalCSDL, {
+            status: 200,
+            headers: { 'content-type': 'application/xml' },
+          }),
       ),
     );
 

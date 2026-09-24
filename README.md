@@ -183,6 +183,9 @@ Clear this session's model, or all of them when no session id is supplied.
 | `METADATA_URL_ALLOWLIST` | unset | Hosts `/api/parse/url` may fetch (`*.example.com` wildcards allowed) |
 | `METADATA_URL_BLOCK_PRIVATE` | `1` | `0` allows fetching private/loopback metadata URLs (needed for internal services) |
 | `ODATA_BACKEND_URL` | `http://localhost:3001` | Backend used by the standalone stdio MCP server |
+| `VITE_API_TOKEN` | unset | Frontend build-time variable; sent as `Authorization: Bearer …` to match `API_TOKEN` |
+
+> **Note on `VITE_API_TOKEN`:** a value compiled into the frontend bundle is *not* a secret — anyone who can read the bundle can read the token. It exists so the bundled UI can talk to a token-protected backend, which is reasonable for a local single-user tool. Do not reuse it as a shared secret across untrusted users; put a reverse proxy in front of the API for that.
 
 ## MCP Server
 

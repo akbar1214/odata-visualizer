@@ -1,33 +1,22 @@
-import { validateMetadataUrl } from './urlPolicy.js';
+import { fetchWithPolicy, urlPolicyFromEnv } from './safeFetch.js';
 
 /**
  * Build a loader for `edmx:Reference/@Uri` values that resolves them over
- * HTTP relative to `baseUrl`, subject to the same allowlist/private-address
- * policy as /api/parse/url. Used when the main document is uploaded from the
- * browser but its references live next to the service.
+ * HTTP relative to the document, subject to the same allowlist/private-address
+ * policy as /api/parse/url. Redirects are followed manually so a reference can
+ * never be bounced to a private address.
  */
 export function createHttpReferenceLoader() {
-  const allowlist = parseAllowlist(process.env['METADATA_URL_ALLOWLIST']);
-  const blockPrivate = process.env['METADATA_URL_BLOCK_PRIVATE'] !== '0';
+  const policy = urlPolicyFromEnv();
 
   return async (uri: string): Promise<string> => {
-    const target = validateMetadataUrl(uri, allowlist, { blockPrivate });
-    const response = await fetch(target.toString(), {
-      headers: { Accept: 'application/xml, text/xml' },
-      signal: AbortSignal.timeout(30000),
+    const response = await fetchWithPolicy(uri, {
+      ...policy,
+      accept: 'application/xml, text/xml',
     });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status} ${response.statusText}`);
     }
     return response.text();
   };
-}
-
-function parseAllowlist(raw: string | undefined): string[] | undefined {
-  if (!raw) return undefined;
-  const hosts = raw
-    .split(',')
-    .map((host) => host.trim())
-    .filter((host) => host.length > 0);
-  return hosts.length > 0 ? hosts : undefined;
 }

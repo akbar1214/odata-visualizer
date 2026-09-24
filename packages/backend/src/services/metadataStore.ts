@@ -22,11 +22,6 @@ export interface ModelStore {
   save(id: string, metadata: ODataMetadata, info?: Partial<ModelInfo>): StoredModel;
   /** Look up a session's model; without an id this is the current model. */
   get(id?: string): StoredModel | null;
-  /**
-   * Holds one parsed model per session id so concurrent browser sessions do not
-   * overwrite each other, while still exposing a single "current" model for the
-   * MCP server.
-   */
   /** The most recently saved model (what MCP uses). */
   current(): StoredModel | null;
   clear(id?: string): void;
