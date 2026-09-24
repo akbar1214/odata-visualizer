@@ -102,4 +102,66 @@ describe('metadata sharing via the API', () => {
     expect(res.body.info.sourceName).not.toContain('hunter2');
     vi.unstubAllGlobals();
   });
+
+  it('resolves edmx:Reference documents relative to a supplied baseUrl', async () => {
+    const main = `<?xml version="1.0"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Main" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing" BaseType="ext.Base">
+        <Property Name="Id" Type="Edm.String" />
+      </EntityType>
+    </Schema>
+    <edmx:Reference Uri="shared.xml"><edmx:Include Namespace="Ext" Alias="ext" /></edmx:Reference>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+    const shared = `<?xml version="1.0"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Ext" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base"><Key><PropertyRef Name="Id"/></Key>
+      <Property Name="Id" Type="Edm.String" Nullable="false" /></EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const requested: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL) => {
+        requested.push(String(input));
+        return new Response(shared, { status: 200 });
+      }),
+    );
+
+    const app = createApp();
+    const parse = await request(app)
+      .post('/api/parse/content')
+      .send({ content: main, baseUrl: 'https://windchill.example.com/odata/main.xml' });
+
+    expect(parse.status).toBe(200);
+    expect(requested).toEqual(['https://windchill.example.com/odata/shared.xml']);
+    expect(parse.body.data.entities.map((e: { qualifiedName: string }) => e.qualifiedName)).toEqual(
+      expect.arrayContaining(['Main.Thing', 'Ext.Base']),
+    );
+    expect(parse.body.data.unresolvedReferences).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
+  it('reports unresolved references when no baseUrl is supplied', async () => {
+    const main = `<?xml version="1.0"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Main" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing"><Key><PropertyRef Name="Id"/></Key>
+      <Property Name="Id" Type="Edm.String" Nullable="false" /></EntityType>
+    </Schema>
+    <edmx:Reference Uri="shared.xml"><edmx:Include Namespace="Ext" Alias="ext" /></edmx:Reference>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const app = createApp();
+    const parse = await request(app).post('/api/parse/content').send({ content: main });
+    expect(parse.body.data.unresolvedReferences).toEqual(['shared.xml']);
+  });
 });

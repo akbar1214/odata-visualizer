@@ -21,6 +21,7 @@ import {
   suggestNames,
   type ExpandNode,
   type FilterClause,
+  type QueryOptions,
 } from '@odata-visualizer/shared';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { loadMetadataFromSource, type MetadataSource } from './metadata-loader.js';
@@ -495,6 +496,12 @@ export function createToolHandler(
             `Functions: ${metadata.functions.length}`,
             `Enums: ${metadata.enumTypes.length}`,
             `Relationships: ${metadata.relationships.length}`,
+            ...(metadata.unresolvedReferences?.length
+              ? [
+                  '',
+                  `Warning: unresolved references: ${metadata.unresolvedReferences.join(', ')} (some types may be missing)`,
+                ]
+              : []),
             '',
             'First entities:',
             ...preview.map((e) => `  - ${formatEntitySummary(e, metadata)}`),
@@ -523,19 +530,23 @@ export function createToolHandler(
           );
         }
         const { metadata, info } = stored;
-        return textResult(
-          [
-            'Metadata loaded:',
-            `  Source: ${info.sourceName ?? 'unknown'} (${info.sourceType ?? 'unknown'})`,
-            `  Loaded: ${info.loadedAt}`,
-            `  Entities: ${metadata.entities.length}`,
-            `  Entity sets: ${getAllEntitySets(metadata).length}`,
-            `  Actions: ${metadata.actions.length}`,
-            `  Functions: ${metadata.functions.length}`,
-            `  Enums: ${metadata.enumTypes.length}`,
-            `  Relationships: ${metadata.relationships.length}`,
-          ].join('\n'),
-        );
+        const lines = [
+          'Metadata loaded:',
+          `  Source: ${info.sourceName ?? 'unknown'} (${info.sourceType ?? 'unknown'})`,
+          `  Loaded: ${info.loadedAt}`,
+          `  Entities: ${metadata.entities.length}`,
+          `  Entity sets: ${getAllEntitySets(metadata).length}`,
+          `  Actions: ${metadata.actions.length}`,
+          `  Functions: ${metadata.functions.length}`,
+          `  Enums: ${metadata.enumTypes.length}`,
+          `  Relationships: ${metadata.relationships.length}`,
+        ];
+        if (metadata.unresolvedReferences?.length) {
+          lines.push(
+            `  Unresolved references: ${metadata.unresolvedReferences.join(', ')} (some types may be missing)`,
+          );
+        }
+        return textResult(lines.join('\n'));
       }
 
       case 'search_entities': {
@@ -543,7 +554,7 @@ export function createToolHandler(
         const metadata = currentMetadata;
         const query = (asString(args['query']) ?? '').toLowerCase();
         if (!query) return errorResult('Error: query is required');
-        const limit = asNumber(args['limit']) ?? 20;
+        const limit = Math.min(MAX_LIMIT, Math.max(1, asNumber(args['limit']) ?? 20));
 
         const scored = metadata.entities
           .map((entity) => {
@@ -764,6 +775,7 @@ export function createToolHandler(
         const entitySet = asString(args['entitySet']);
         if (!entitySet) return errorResult('Error: entitySet is required');
 
+        const warnings: string[] = [];
         try {
           const url = buildQueryUrl({
             entitySet,
@@ -772,15 +784,17 @@ export function createToolHandler(
             filterLogic: args['filterLogic'] as 'and' | 'or' | undefined,
             select: args['select'] as string[] | undefined,
             expand: args['expand'] as ExpandNode[] | undefined,
+            groupBy: args['groupBy'] as QueryOptions['groupBy'],
+            aggregates: args['aggregates'] as QueryOptions['aggregates'],
             orderBy: asString(args['orderBy']),
             top: asNumber(args['top']),
             skip: asNumber(args['skip']),
             count: typeof args['count'] === 'boolean' ? args['count'] : undefined,
             search: asString(args['search']),
             metadata,
+            onWarning: (message) => warnings.push(message),
           });
 
-          const warnings: string[] = [];
           if (!findEntitySet(metadata, entitySet)) {
             const suggestions = suggestNames(
               entitySet,
@@ -971,7 +985,9 @@ function buildInvocationUnsafe(
       : metadata.actionImports.find(
           (i) => i.qualifiedActionName === item.qualifiedName || i.actionName === item.name,
         )?.name;
-    path = importName ?? item.name;
+    // V4 addresses an unbound operation by its import name, or by the
+    // qualified operation name when no import exists.
+    path = importName ?? item.qualifiedName ?? item.name;
   }
 
   const inline = isFunction ? formatInlineParams(item, parameters) : '';

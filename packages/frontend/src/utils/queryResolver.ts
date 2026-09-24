@@ -4,6 +4,15 @@ import type {
   ODataProperty,
   ODataNavigationProperty,
 } from '@odata-visualizer/shared';
+import {
+  buildQueryUrl,
+  findEntityByName,
+  formatV4Literal,
+  getEffectiveNavigationProperties,
+  getEffectiveProperties,
+  resolveInheritanceChain,
+  type ExpandNode,
+} from '@odata-visualizer/shared';
 
 export interface ResolvedEntity {
   entity: ODataEntity;
@@ -43,62 +52,30 @@ export interface QueryState {
   skip: number;
 }
 
+/** Find an entity by short or namespace-qualified name. */
 export function findEntity(entityName: string, entities: ODataEntity[]): ODataEntity | undefined {
-  return entities.find((e) => e.name.toLowerCase() === entityName.toLowerCase());
+  return findEntityByName(entities, entityName);
 }
 
+/** Inheritance chain, most-derived first. */
 export function resolveInheritance(entity: ODataEntity, entities: ODataEntity[]): ODataEntity[] {
-  const chain: ODataEntity[] = [entity];
-  if (entity.baseType) {
-    const baseName = entity.baseType.includes('.')
-      ? entity.baseType.split('.').pop() || entity.baseType
-      : entity.baseType;
-    const base = findEntity(baseName, entities);
-    if (base && !chain.some((e) => e.name === base.name)) {
-      chain.push(...resolveInheritance(base, entities));
-    }
-  }
-  return chain;
+  return resolveInheritanceChain(entity, entities);
 }
 
+/** Own + inherited properties, base types first. */
 export function getResolvedProperties(
   entity: ODataEntity,
   entities: ODataEntity[],
 ): ODataProperty[] {
-  const chain = resolveInheritance(entity, entities);
-  const seen = new Set<string>();
-  const props: ODataProperty[] = [];
-
-  for (const e of chain.reverse()) {
-    for (const prop of e.properties) {
-      if (!seen.has(prop.name)) {
-        seen.add(prop.name);
-        props.push(prop);
-      }
-    }
-  }
-
-  return props;
+  return getEffectiveProperties(entity, entities);
 }
 
+/** Own + inherited navigation properties, base types first. */
 export function getResolvedNavProperties(
   entity: ODataEntity,
   entities: ODataEntity[],
 ): ODataNavigationProperty[] {
-  const chain = resolveInheritance(entity, entities);
-  const seen = new Set<string>();
-  const navProps: ODataNavigationProperty[] = [];
-
-  for (const e of chain.reverse()) {
-    for (const nav of e.navigationProperties) {
-      if (!seen.has(nav.name)) {
-        seen.add(nav.name);
-        navProps.push(nav);
-      }
-    }
-  }
-
-  return navProps;
+  return getEffectiveNavigationProperties(entity, entities);
 }
 
 export function getResolvedEntity(
@@ -120,33 +97,24 @@ export function getTargetEntityName(
   sourceEntity: ODataEntity,
   metadata: ODataMetadata,
 ): string | undefined {
-  // Search through resolved (inherited) nav properties
-  const allNavProps = getResolvedNavProperties(sourceEntity, metadata.entities);
-  const relationship = allNavProps.find((n) => n.name === navProperty);
-  if (!relationship) return undefined;
+  const nav = getResolvedNavProperties(sourceEntity, metadata.entities).find(
+    (n) => n.name === navProperty,
+  );
+  if (!nav) return undefined;
 
-  // OData V4: use targetType directly if no relationship defined
-  if (relationship.targetType) {
-    return relationship.targetType;
-  }
+  // OData V4: the navigation property points straight at the target type.
+  if (nav.targetTypeQualified) return nav.targetTypeQualified;
+  if (nav.targetType) return nav.targetType;
 
-  // OData V3: resolve through Association
-  if (!relationship.relationship) return undefined;
-
-  const rel = metadata.relationships.find((r) => r.name === relationship.relationship);
+  // OData V3: resolve through the Association.
+  if (!nav.relationship) return undefined;
+  const rel = metadata.relationships.find((r) => r.name === nav.relationship);
   if (!rel) return undefined;
 
-  if (relationship.toRole) {
-    if (rel.from.role === relationship.toRole) {
-      return rel.from.entity;
-    }
-    return rel.to.entity;
+  if (nav.toRole) {
+    return rel.from.role === nav.toRole ? rel.from.entity : rel.to.entity;
   }
-
-  if (rel.from.entity === sourceEntity.name) {
-    return rel.to.entity;
-  }
-  return rel.from.entity;
+  return rel.from.entity === sourceEntity.name ? rel.to.entity : rel.from.entity;
 }
 
 const STRING_OPERATORS = ['eq', 'ne', 'contains', 'startswith', 'endswith'];
@@ -155,40 +123,37 @@ const BOOLEAN_OPERATORS = ['eq'];
 const DATE_OPERATORS = ['eq', 'ne', 'gt', 'lt', 'ge', 'le'];
 const GUID_OPERATORS = ['eq', 'ne'];
 
+const NUMERIC_EDM_TYPES = new Set([
+  'Edm.Int16',
+  'Edm.Int32',
+  'Edm.Int64',
+  'Edm.Decimal',
+  'Edm.Double',
+  'Edm.Single',
+  'Edm.Byte',
+  'Edm.SByte',
+]);
+
+const TEMPORAL_EDM_TYPES = new Set([
+  'Edm.DateTime',
+  'Edm.DateTimeOffset',
+  'Edm.Date',
+  'Edm.TimeOfDay',
+  'Edm.Duration',
+]);
+
 export function getOperatorsForType(edmType: string): string[] {
   if (edmType === 'Edm.Boolean') return BOOLEAN_OPERATORS;
-  if (
-    edmType.startsWith('Edm.Int') ||
-    edmType === 'Edm.Decimal' ||
-    edmType === 'Edm.Double' ||
-    edmType === 'Edm.Single' ||
-    edmType === 'Edm.Byte' ||
-    edmType === 'Edm.SByte'
-  ) {
+  if (edmType.startsWith('Edm.Int') || NUMERIC_EDM_TYPES.has(edmType)) {
     return NUMBER_OPERATORS;
   }
-  if (
-    edmType === 'Edm.DateTime' ||
-    edmType === 'Edm.DateTimeOffset' ||
-    edmType === 'Edm.Date' ||
-    edmType === 'Edm.Time' ||
-    edmType === 'Edm.Duration'
-  ) {
-    return DATE_OPERATORS;
-  }
+  if (TEMPORAL_EDM_TYPES.has(edmType)) return DATE_OPERATORS;
   if (edmType === 'Edm.Guid') return GUID_OPERATORS;
   return STRING_OPERATORS;
 }
 
 export function getInputTypeForEdm(edmType: string): 'number' | 'date' | 'text' {
-  if (
-    edmType.startsWith('Edm.Int') ||
-    edmType === 'Edm.Decimal' ||
-    edmType === 'Edm.Double' ||
-    edmType === 'Edm.Single' ||
-    edmType === 'Edm.Byte' ||
-    edmType === 'Edm.SByte'
-  ) {
+  if (edmType.startsWith('Edm.Int') || NUMERIC_EDM_TYPES.has(edmType)) {
     return 'number';
   }
   if (edmType === 'Edm.DateTime' || edmType === 'Edm.DateTimeOffset' || edmType === 'Edm.Date') {
@@ -197,155 +162,58 @@ export function getInputTypeForEdm(edmType: string): 'number' | 'date' | 'text' 
   return 'text';
 }
 
+/**
+ * Format a value as an OData V4 literal. The shared formatter also validates
+ * the value; while the user is still typing we fall back to a quoted string
+ * so the preview never throws.
+ */
 export function formatODataValue(value: string, edmType: string): string {
   if (!value) return "''";
-
-  if (edmType === 'Edm.Boolean') {
-    return value.toLowerCase() === 'true' ? 'true' : 'false';
+  try {
+    return formatV4Literal(value, edmType);
+  } catch {
+    return `'${value.replace(/'/g, "''")}'`;
   }
-
-  if (
-    edmType.startsWith('Edm.Int') ||
-    edmType === 'Edm.Decimal' ||
-    edmType === 'Edm.Double' ||
-    edmType === 'Edm.Single'
-  ) {
-    return value;
-  }
-
-  if (edmType === 'Edm.Guid') {
-    return `guid'${value}'`;
-  }
-
-  if (edmType === 'Edm.DateTime' || edmType === 'Edm.DateTimeOffset' || edmType === 'Edm.Date') {
-    return `datetime'${value}'`;
-  }
-
-  return `'${value.replace(/'/g, "''")}'`;
 }
 
-function buildFilterString(
-  filters: QueryFilter[],
-  properties: ODataProperty[],
-  logic: FilterLogic = 'and',
-): string {
-  if (filters.length === 0) return '';
-
-  const parts = filters.map((f) => {
-    const prop = properties.find((p) => p.name === f.property);
-    const edmType = prop?.type || 'Edm.String';
-    const formattedValue = formatODataValue(f.value, edmType);
-
-    if (f.operator === 'contains') return `contains(${f.property},${formattedValue})`;
-    if (f.operator === 'startswith') return `startswith(${f.property},${formattedValue})`;
-    if (f.operator === 'endswith') return `endswith(${f.property},${formattedValue})`;
-
-    return `${f.property} ${f.operator} ${formattedValue}`;
-  });
-
-  return parts.join(` ${logic} `);
+function toExpandNode(item: ExpandItem): ExpandNode {
+  return {
+    navProperty: item.navProperty,
+    select: item.select.length > 0 ? item.select : undefined,
+    filters: item.filters.length > 0 ? item.filters : undefined,
+    filterLogic: item.filterLogic,
+    orderBy: item.sort ? `${item.sort} ${item.sortDirection}` : undefined,
+    top: item.top > 0 ? item.top : undefined,
+    skip: item.skip > 0 ? item.skip : undefined,
+    expand: item.expand.length > 0 ? item.expand.map(toExpandNode) : undefined,
+  };
 }
 
-function buildExpandString(
-  expands: ExpandItem[],
-  metadata: ODataMetadata,
-  parentEntityName: string,
-): string {
-  if (expands.length === 0) return '';
-
-  return expands
-    .map((item) => {
-      const parts: string[] = [];
-
-      if (item.select.length > 0) {
-        parts.push(`$select=${item.select.join(',')}`);
-      }
-
-      if (item.filters.length > 0) {
-        const targetEntity = getTargetEntityName(
-          item.navProperty,
-          findEntity(parentEntityName, metadata.entities)!,
-          metadata,
-        );
-        if (targetEntity) {
-          const resolved = getResolvedEntity(targetEntity, metadata.entities);
-          if (resolved) {
-            const filterStr = buildFilterString(
-              item.filters,
-              resolved.allProperties,
-              item.filterLogic,
-            );
-            if (filterStr) parts.push(`$filter=${filterStr}`);
-          }
-        }
-      }
-
-      if (item.expand.length > 0) {
-        const targetEntity = getTargetEntityName(
-          item.navProperty,
-          findEntity(parentEntityName, metadata.entities)!,
-          metadata,
-        );
-        if (targetEntity) {
-          const subExpand = buildExpandString(item.expand, metadata, targetEntity);
-          if (subExpand) parts.push(`$expand=${subExpand}`);
-        }
-      }
-
-      if (item.sort) {
-        parts.push(`$orderby=${item.sort} ${item.sortDirection}`);
-      }
-
-      if (item.top > 0) {
-        parts.push(`$top=${item.top}`);
-      }
-
-      if (item.skip > 0) {
-        parts.push(`$skip=${item.skip}`);
-      }
-
-      if (parts.length > 0) {
-        return `${item.navProperty}(${parts.join(';')})`;
-      }
-      return item.navProperty;
-    })
-    .join(',');
-}
-
+/**
+ * Build the OData V4 query for the builder UI. The shared builder is used so
+ * literals, encoding, and expansion syntax stay identical to the MCP server.
+ */
 export function buildODataQuery(query: QueryState, metadata: ODataMetadata): string {
   const resolved = getResolvedEntity(query.entityName, metadata.entities);
   if (!resolved) return '';
 
-  const parts: string[] = [];
-
-  if (query.filters.length > 0) {
-    const filterStr = buildFilterString(query.filters, resolved.allProperties, query.filterLogic);
-    if (filterStr) parts.push(`$filter=${filterStr}`);
+  try {
+    return buildQueryUrl({
+      entitySet: query.entityName,
+      metadata,
+      filters: query.filters.length > 0 ? query.filters : undefined,
+      filterLogic: query.filterLogic,
+      select: query.select.length > 0 ? query.select : undefined,
+      expand: query.expand.length > 0 ? query.expand.map(toExpandNode) : undefined,
+      orderBy: query.sort ? `${query.sort} ${query.sortDirection}` : undefined,
+      top: query.top > 0 ? query.top : undefined,
+      skip: query.skip > 0 ? query.skip : undefined,
+    });
+  } catch {
+    // Invalid values while the user is editing: show the bare resource path
+    // rather than an error state in the preview.
+    return `/${query.entityName}`;
   }
-
-  if (query.select.length > 0) {
-    parts.push(`$select=${query.select.join(',')}`);
-  }
-
-  if (query.expand.length > 0) {
-    const expandStr = buildExpandString(query.expand, metadata, query.entityName);
-    if (expandStr) parts.push(`$expand=${expandStr}`);
-  }
-
-  if (query.sort) {
-    parts.push(`$orderby=${query.sort} ${query.sortDirection}`);
-  }
-
-  if (query.top > 0) {
-    parts.push(`$top=${query.top}`);
-  }
-
-  if (query.skip > 0) {
-    parts.push(`$skip=${query.skip}`);
-  }
-
-  const queryString = parts.length > 0 ? `?${parts.join('&')}` : '';
-  return `/${query.entityName}${queryString}`;
 }
 
 export function getDefaultQuery(entityName: string): QueryState {
@@ -363,7 +231,7 @@ export function getDefaultQuery(entityName: string): QueryState {
 }
 
 export function isComplexType(entity: ODataEntity): boolean {
-  return entity.keys.length === 0 && !entity.abstract;
+  return entity.kind === 'complex';
 }
 
 export function getQueryableEntities(entities: ODataEntity[]): ODataEntity[] {

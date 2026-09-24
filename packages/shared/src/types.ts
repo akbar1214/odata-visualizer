@@ -186,6 +186,8 @@ export interface ODataMetadata {
   functions: ODataFunction[];
   enumTypes: ODataEnumType[];
   typeDefinitions: ODataTypeDefinition[];
+  /** edmx:Reference targets that could not be loaded (no loader or fetch failed). */
+  unresolvedReferences?: string[];
   annotations?: Record<string, unknown>;
 }
 

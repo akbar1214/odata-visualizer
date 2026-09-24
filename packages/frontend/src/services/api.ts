@@ -3,6 +3,31 @@ import type { ParseResponse } from '@odata-visualizer/shared';
 const API_BASE = '/api';
 
 /**
+ * Per-tab session id so concurrent browser sessions keep their own uploaded
+ * model on the backend (MCP always sees the most recent one).
+ */
+function getSessionId(): string {
+  if (typeof window === 'undefined') return 'default';
+  const key = 'odata-visualizer-session';
+  try {
+    const existing = window.sessionStorage.getItem(key);
+    if (existing) return existing;
+    const created =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2);
+    window.sessionStorage.setItem(key, created);
+    return created;
+  } catch {
+    return 'default';
+  }
+}
+
+const SESSION_HEADERS: Record<string, string> = {
+  'X-Metadata-Session': getSessionId(),
+};
+
+/**
  * Parse OData metadata from uploaded file
  */
 export async function parseFile(file: File): Promise<ParseResponse> {
@@ -11,6 +36,7 @@ export async function parseFile(file: File): Promise<ParseResponse> {
 
   const response = await fetch(`${API_BASE}/parse/file`, {
     method: 'POST',
+    headers: SESSION_HEADERS,
     body: formData,
   });
 
@@ -30,6 +56,7 @@ export async function parseUrl(url: string): Promise<ParseResponse> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...SESSION_HEADERS,
     },
     body: JSON.stringify({ url }),
   });
@@ -50,6 +77,7 @@ export async function parseContent(content: string): Promise<ParseResponse> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...SESSION_HEADERS,
     },
     body: JSON.stringify({ content }),
   });
@@ -63,10 +91,13 @@ export async function parseContent(content: string): Promise<ParseResponse> {
 }
 
 /**
- * Clear the metadata currently held by the backend (and shared with MCP).
+ * Clear the metadata currently held by the backend for this session.
  */
 export async function clearMetadata(): Promise<void> {
-  await fetch(`${API_BASE}/metadata/current`, { method: 'DELETE' });
+  await fetch(`${API_BASE}/metadata/current`, {
+    method: 'DELETE',
+    headers: SESSION_HEADERS,
+  });
 }
 
 /**

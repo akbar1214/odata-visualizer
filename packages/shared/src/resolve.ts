@@ -27,6 +27,31 @@ export function findEntityByName(entities: ODataEntity[], name: string): ODataEn
 }
 
 /**
+ * Resolve a type reference, preferring an exact qualified-name match and then
+ * a match in the same namespace before falling back to any short-name match.
+ * Short names are unique per namespace in CSDL but not across a model, so the
+ * namespace hint prevents resolving `BaseType="Part"` to the wrong `Part`.
+ */
+function findTypeInScope(
+  entities: ODataEntity[],
+  name: string,
+  preferredNamespace?: string,
+): ODataEntity | undefined {
+  const needle = name.toLowerCase();
+  const byQualified = entities.find((e) => (e.qualifiedName ?? '').toLowerCase() === needle);
+  if (byQualified) return byQualified;
+
+  const sameNamespace = entities.find(
+    (e) =>
+      e.namespace?.toLowerCase() === preferredNamespace?.toLowerCase() &&
+      e.name.toLowerCase() === needle,
+  );
+  if (sameNamespace) return sameNamespace;
+
+  return entities.find((e) => e.name.toLowerCase() === needle);
+}
+
+/**
  * Resolve the inheritance chain for an entity, starting with the entity
  * itself followed by base types (base, grandbase, ...). Guards against
  * cycles.
@@ -36,18 +61,15 @@ export function resolveInheritanceChain(
   entities: ODataEntity[],
 ): ODataEntity[] {
   const chain: ODataEntity[] = [entity];
-  const seen = new Set<string>([entity.name]);
+  const seen = new Set<string>([entity.qualifiedName ?? entity.name]);
   let current = entity;
 
   while (current.baseType) {
-    const baseName = current.baseType.includes('.')
-      ? current.baseType.split('.').pop() || current.baseType
-      : current.baseType;
-    if (seen.has(baseName)) break;
-    const base =
-      findEntityByName(entities, current.baseType) ?? findEntityByName(entities, baseName);
-    if (!base || seen.has(base.name)) break;
-    seen.add(base.name);
+    const base = findTypeInScope(entities, current.baseType, current.namespace);
+    if (!base) break;
+    const baseId = base.qualifiedName ?? base.name;
+    if (seen.has(baseId)) break;
+    seen.add(baseId);
     chain.push(base);
     current = base;
   }
