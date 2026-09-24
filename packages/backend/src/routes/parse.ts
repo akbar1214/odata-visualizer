@@ -1,10 +1,10 @@
 import { Router, type Request, type Response, type Router as ExpressRouter } from 'express';
 import multer from 'multer';
 import { parseCSDL } from '@odata-visualizer/shared';
-import { parseCSDLUrl } from '@odata-visualizer/shared/load';
 import { metadataStore, sanitizeModelId } from '../services/metadataStore.js';
 import { createHttpReferenceLoader } from '../services/referenceLoader.js';
-import { validateMetadataUrl } from '../services/urlPolicy.js';
+import { validateMetadataUrl, UrlPolicyError } from '../services/urlPolicy.js';
+import { fetchWithPolicy, RedirectLimitError, urlPolicyFromEnv } from '../services/safeFetch.js';
 import type { ParseRequest, ParseResponse } from '@odata-visualizer/shared';
 
 const router: ExpressRouter = Router();
@@ -168,21 +168,17 @@ router.post('/url', async (req: Request, res: Response) => {
       return;
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000); // 30 second timeout
     // Credentials embedded in a URL are not a supported auth mechanism (and
     // fetch rejects them), so they are stripped before the request.
     const safeUrl = redactUrlCredentials(parsedUrl);
 
     try {
-      const response = await fetch(safeUrl, {
-        signal: controller.signal,
-        headers: {
-          Accept: 'application/xml, text/xml, application/atomsvc+xml',
-        },
+      // Validates every redirect hop *before* requesting it, so a public URL
+      // cannot bounce the server to a private address.
+      const response = await fetchWithPolicy(safeUrl, {
+        ...urlPolicyFromEnv(),
+        accept: 'application/xml, text/xml, application/atomsvc+xml',
       });
-
-      clearTimeout(timeout);
 
       if (!response.ok) {
         const errorResponse: ParseResponse = {
@@ -199,7 +195,13 @@ router.post('/url', async (req: Request, res: Response) => {
       const contentLength = response.headers.get('content-length');
       const fileSizeBytes = contentLength ? parseInt(contentLength, 10) : xmlContent.length;
 
-      const data = await parseCSDLUrl(safeUrl);
+      // Parse the document we already fetched (a second fetch could return a
+      // different document than the one whose size was reported), and resolve
+      // references through the same URL policy.
+      const data = await parseCSDL(xmlContent, {
+        baseUri: safeUrl,
+        loadExternal: createHttpReferenceLoader(),
+      });
 
       metadataStore.save(sessionIdOf(req), data, {
         sourceName: safeUrl,
@@ -216,7 +218,28 @@ router.post('/url', async (req: Request, res: Response) => {
 
       res.json(result);
     } catch (fetchError) {
-      clearTimeout(timeout);
+      // Policy violations (blocked redirect, bad scheme) are caller errors;
+      // a redirect loop is an upstream problem.
+      if (fetchError instanceof UrlPolicyError) {
+        const rejected: ParseResponse = {
+          success: false,
+          error: fetchError.message,
+          parseTimeMs: Date.now() - startTime,
+          fileSizeBytes: 0,
+        };
+        res.status(400).json(rejected);
+        return;
+      }
+      if (fetchError instanceof RedirectLimitError) {
+        const failed: ParseResponse = {
+          success: false,
+          error: `Failed to fetch metadata: ${fetchError.message}`,
+          parseTimeMs: Date.now() - startTime,
+          fileSizeBytes: 0,
+        };
+        res.status(502).json(failed);
+        return;
+      }
       throw fetchError;
     }
   } catch (error) {

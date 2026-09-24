@@ -320,4 +320,15 @@ describe('$apply aggregation', () => {
       }),
     ).toThrow('$expand');
   });
+
+  it('encodes $apply values that would corrupt the query string', async () => {
+    const m = await metadata;
+    const url = buildQueryUrl({
+      entitySet: 'Parts',
+      metadata: m,
+      aggregates: [{ method: 'count', alias: 'A&B' }],
+    });
+    // A caller-supplied alias must not be able to inject another parameter.
+    expect(url).toBe('/Parts?$apply=aggregate($count as A%26B)');
+  });
 });

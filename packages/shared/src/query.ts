@@ -255,10 +255,10 @@ export function buildQueryUrl(options: QueryOptions): string {
   }
 
   if (hasApply) {
-    // $apply must be the first system query option.
-    params.push(
-      `$apply=${buildApply(options.groupBy, options.aggregates, rootEntity, options.metadata)}`,
-    );
+    // $apply must be the first system query option. Aliases are caller-supplied,
+    // so the value goes through the same encoding as the other options.
+    const apply = buildApply(options.groupBy, options.aggregates, rootEntity, options.metadata);
+    params.push(`$apply=${encodeQueryValue(apply)}`);
   }
 
   for (const selected of options.select ?? []) {

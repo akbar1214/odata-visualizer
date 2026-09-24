@@ -8,6 +8,14 @@ export interface UrlPolicyOptions {
   blockPrivate?: boolean;
 }
 
+/** Thrown when a URL is refused by policy (caller error, reported as 400). */
+export class UrlPolicyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UrlPolicyError';
+  }
+}
+
 const PRIVATE_HOSTNAMES = new Set([
   'localhost',
   'localhost.localdomain',
@@ -70,23 +78,23 @@ export function validateMetadataUrl(
   try {
     parsed = new URL(url);
   } catch {
-    throw new Error('Invalid URL format');
+    throw new UrlPolicyError('Invalid URL format');
   }
 
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(
+    throw new UrlPolicyError(
       `Unsupported URL scheme "${parsed.protocol.replace(':', '')}" (use http or https)`,
     );
   }
 
   if (options.blockPrivate && isPrivateAddress(parsed.hostname)) {
-    throw new Error(
+    throw new UrlPolicyError(
       `Refusing to fetch a private or loopback address (${parsed.hostname}); set METADATA_URL_BLOCK_PRIVATE=0 to allow`,
     );
   }
 
   if (allowlist && allowlist.length > 0 && !hostAllowed(parsed.hostname, allowlist)) {
-    throw new Error(
+    throw new UrlPolicyError(
       `Host "${parsed.hostname}" is not allowed. Set METADATA_URL_ALLOWLIST to permit it.`,
     );
   }
