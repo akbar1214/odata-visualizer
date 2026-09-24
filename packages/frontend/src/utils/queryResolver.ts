@@ -92,6 +92,15 @@ export function getResolvedEntity(
   };
 }
 
+/**
+ * Resolve the entity type a navigation property points at.
+ *
+ * Returns the **short** name on purpose: the query graph identifies entities
+ * by `entity.name` (node ids, selects, path steps), and the PathFinder
+ * compares these values directly. Returning a namespace-qualified name here
+ * silently breaks path finding, because a traversal step would no longer
+ * equal the short name chosen in the UI.
+ */
 export function getTargetEntityName(
   navProperty: string,
   sourceEntity: ODataEntity,
@@ -103,8 +112,11 @@ export function getTargetEntityName(
   if (!nav) return undefined;
 
   // OData V4: the navigation property points straight at the target type.
-  if (nav.targetTypeQualified) return nav.targetTypeQualified;
   if (nav.targetType) return nav.targetType;
+  if (nav.targetTypeQualified) {
+    const target = findEntityByName(metadata.entities, nav.targetTypeQualified);
+    if (target) return target.name;
+  }
 
   // OData V3: resolve through the Association.
   if (!nav.relationship) return undefined;
