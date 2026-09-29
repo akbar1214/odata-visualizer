@@ -4,14 +4,27 @@ import { parseCSDL } from '@odata-visualizer/shared';
 import { metadataStore, sanitizeModelId } from '../services/metadataStore.js';
 import { createHttpReferenceLoader } from '../services/referenceLoader.js';
 import { validateMetadataUrl, UrlPolicyError } from '../services/urlPolicy.js';
-import { fetchWithPolicy, RedirectLimitError, urlPolicyFromEnv } from '../services/safeFetch.js';
+import { fetchWithPolicy, readLimitedText, RedirectLimitError, urlPolicyFromEnv } from '../services/safeFetch.js';
+import { ClientError, statusForError } from '../services/errors.js';
 import type { ParseRequest, ParseResponse } from '@odata-visualizer/shared';
 
 const router: ExpressRouter = Router();
+
+/**
+ * A real `$metadata` document is a few hundred KB at most; the largest models in
+ * the test corpus are well under a megabyte. Uploads were previously buffered
+ * whole in memory (100 MB), then decoded into a ~2x string, then expanded by
+ * fast-xml-parser into an object graph routinely 10-20x the input size.
+ */
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 100 * 1024 * 1024, // 100MB limit
+    fileSize: MAX_UPLOAD_BYTES,
+    files: 1,
+    fields: 10,
+    parts: 20,
   },
   fileFilter: (_req, file, cb) => {
     const allowedMimes = ['application/xml', 'text/xml', 'application/octet-stream'];
@@ -23,7 +36,7 @@ const upload = multer({
     ) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Only XML files are allowed.'));
+      cb(new ClientError('Invalid file type. Only XML files are allowed.', 400));
     }
   },
 });
@@ -37,12 +50,16 @@ function sessionIdOf(req: Request, body?: { session?: string }): string {
 }
 
 /**
- * Keep the URL safe to display and hand to an MCP client by stripping any
- * embedded password.
+ * Keep the URL safe to display and hand to an MCP client.
+ *
+ * fetch rejects any URL carrying credentials, and `https://token@host/` is a
+ * common way to pass an API token — so the username has to go as well as the
+ * password, otherwise the fetch fails and the token is echoed in the error.
  */
 function redactUrlCredentials(url: URL): string {
-  if (!url.password) return url.toString();
+  if (!url.username && !url.password) return url.toString();
   const redacted = new URL(url.toString());
+  redacted.username = '';
   redacted.password = '';
   return redacted.toString();
 }
@@ -62,6 +79,29 @@ function blockPrivateFromEnv(): boolean {
 }
 
 /**
+ * Parse a CSDL document, reporting a malformed one as a caller error.
+ *
+ * `parseCSDL` throws plain `Error`s for "not CSDL", which the route would
+ * otherwise surface as a 500 — hiding the cause and implying the server broke
+ * when the caller simply sent HTML.
+ */
+async function parseCSDLDocument(
+  xmlContent: string,
+  options?: Parameters<typeof parseCSDL>[1],
+): Promise<Awaited<ReturnType<typeof parseCSDL>>> {
+  try {
+    return await parseCSDL(xmlContent, options);
+  } catch (error) {
+    if (error instanceof ClientError) throw error;
+    if (error instanceof UrlPolicyError) throw error;
+    throw new ClientError(
+      error instanceof Error ? error.message : 'Could not parse the metadata document',
+      400,
+    );
+  }
+}
+
+/**
  * Parse an uploaded/POSTed document. When the caller supplies a `baseUrl`,
  * `edmx:Reference/@Uri` values are fetched relative to it (browser uploads
  * have no filesystem base of their own).
@@ -70,12 +110,12 @@ async function parseUploadedDocument(
   xmlContent: string,
   baseUrl: string | undefined,
 ): Promise<Awaited<ReturnType<typeof parseCSDL>>> {
-  if (!baseUrl) return parseCSDL(xmlContent);
+  if (!baseUrl) return parseCSDLDocument(xmlContent);
 
   const base = validateMetadataUrl(baseUrl, allowlistFromEnv(), {
     blockPrivate: blockPrivateFromEnv(),
   });
-  return parseCSDL(xmlContent, {
+  return parseCSDLDocument(xmlContent, {
     baseUri: base.toString(),
     loadExternal: createHttpReferenceLoader(),
   });
@@ -104,7 +144,7 @@ router.post('/file', upload.single('metadata'), async (req: Request, res: Respon
     const baseUrl = typeof req.body?.baseUrl === 'string' ? req.body.baseUrl : undefined;
     const data = await parseUploadedDocument(xmlContent, baseUrl);
 
-    metadataStore.save(sessionIdOf(req), data, {
+    metadataStore.save(sessionIdOf(req, req.body as { session?: string }), data, {
       sourceName: req.file.originalname,
       sourceType: 'file',
       fileSizeBytes: req.file.size,
@@ -119,14 +159,23 @@ router.post('/file', upload.single('metadata'), async (req: Request, res: Respon
 
     res.json(response);
   } catch (error) {
+    // Malformed input is a caller error, not a server fault.
+    const status = statusForError(error);
     const response: ParseResponse = {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error occurred',
+      error:
+        status >= 500
+          ? 'Internal server error'
+          : error instanceof Error
+            ? error.message
+            : 'Unknown error occurred',
       parseTimeMs: Date.now() - startTime,
       fileSizeBytes: req.file?.size || 0,
     };
 
-    res.status(500).json(response);
+    if (status >= 500) console.error('[odata-visualizer] /api/parse/file failed:', error);
+
+    res.status(status).json(response);
   }
 });
 
@@ -191,14 +240,15 @@ router.post('/url', async (req: Request, res: Response) => {
         return;
       }
 
-      const xmlContent = await response.text();
-      const contentLength = response.headers.get('content-length');
-      const fileSizeBytes = contentLength ? parseInt(contentLength, 10) : xmlContent.length;
+      const xmlContent = await readLimitedText(response);
+      // Content-Length is advisory (and can be absent or malformed), so report
+      // the size of the document that was actually parsed.
+      const fileSizeBytes = Buffer.byteLength(xmlContent, 'utf8');
 
       // Parse the document we already fetched (a second fetch could return a
       // different document than the one whose size was reported), and resolve
       // references through the same URL policy.
-      const data = await parseCSDL(xmlContent, {
+      const data = await parseCSDLDocument(xmlContent, {
         baseUri: safeUrl,
         loadExternal: createHttpReferenceLoader(),
       });
@@ -243,23 +293,26 @@ router.post('/url', async (req: Request, res: Response) => {
       throw fetchError;
     }
   } catch (error) {
-    let errorMessage = 'Unknown error occurred';
-    if (error instanceof Error) {
-      if (error.name === 'AbortError') {
-        errorMessage = 'Request timed out after 30 seconds';
-      } else {
-        errorMessage = error.message;
-      }
-    }
-
+    // A timeout aborts with a DOMException named "TimeoutError" (not
+    // "AbortError"), which is why the friendly message was never reached.
+    const status = statusForError(error);
     const response: ParseResponse = {
       success: false,
-      error: errorMessage,
+      error:
+        status === 504
+          ? 'Request timed out while fetching the metadata document'
+          : status >= 500
+            ? 'Internal server error'
+            : error instanceof Error
+              ? error.message
+              : 'Unknown error occurred',
       parseTimeMs: Date.now() - startTime,
       fileSizeBytes: 0,
     };
 
-    res.status(500).json(response);
+    if (status >= 500) console.error('[odata-visualizer] /api/parse/url failed:', error);
+
+    res.status(status).json(response);
   }
 });
 
@@ -305,14 +358,22 @@ router.post('/content', async (req: Request, res: Response) => {
 
     res.json(response);
   } catch (error) {
+    const status = statusForError(error);
     const response: ParseResponse = {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error occurred',
+      error:
+        status >= 500
+          ? 'Internal server error'
+          : error instanceof Error
+            ? error.message
+            : 'Unknown error occurred',
       parseTimeMs: Date.now() - startTime,
       fileSizeBytes: 0,
     };
 
-    res.status(500).json(response);
+    if (status >= 500) console.error('[odata-visualizer] /api/parse/content failed:', error);
+
+    res.status(status).json(response);
   }
 });
 

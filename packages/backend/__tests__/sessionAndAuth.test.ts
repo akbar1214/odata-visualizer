@@ -27,13 +27,21 @@ describe('session handling', () => {
     await request(app).post('/api/parse/content').send({ content: minimalCSDL });
 
     const list = await request(app).get('/api/metadata');
-    expect(list.body.models.map((m: { id: string }) => m.id).sort()).toEqual(['default', 'tab1']);
+    expect(list.body.models.map((m: { id: string }) => m.id)).toEqual(['default']);
+
+    const asTab1 = await request(app).get('/api/metadata').set('X-Metadata-Session', 'tab1');
+    expect(asTab1.body.models.map((m: { id: string }) => m.id)).toEqual(['tab1']);
 
     // No header: must not wipe every session (it used to clear them all).
     await request(app).delete('/api/metadata/current');
 
-    const after = await request(app).get('/api/metadata');
-    expect(after.body.models.map((m: { id: string }) => m.id)).toEqual(['tab1']);
+    // tab1 must have survived; only the default bucket is gone.
+    const stillTab1 = await request(app)
+      .get('/api/metadata')
+      .set('X-Metadata-Session', 'tab1');
+    expect(stillTab1.body.models.map((m: { id: string }) => m.id)).toEqual(['tab1']);
+    const goneDefault = await request(app).get('/api/metadata');
+    expect(goneDefault.body.models.map((m: { id: string }) => m.id)).toEqual([]);
   });
 
   it('deletes only the named session', async () => {
@@ -49,8 +57,10 @@ describe('session handling', () => {
 
     await request(app).delete('/api/metadata/current').set('X-Metadata-Session', 'tab1');
 
-    const after = await request(app).get('/api/metadata');
-    expect(after.body.models.map((m: { id: string }) => m.id)).toEqual(['tab2']);
+    const tab1 = await request(app).get('/api/metadata').set('X-Metadata-Session', 'tab1');
+    expect(tab1.body.models).toEqual([]);
+    const tab2 = await request(app).get('/api/metadata').set('X-Metadata-Session', 'tab2');
+    expect(tab2.body.models.map((m: { id: string }) => m.id)).toEqual(['tab2']);
   });
 });
 

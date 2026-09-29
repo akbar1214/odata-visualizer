@@ -89,7 +89,35 @@ describe('createModelStore', () => {
   it('sanitizes session ids', async () => {
     const m = createModelStore();
     m.save('../../etc/passwd', await metadata(), { sourceName: 'x' });
-    expect(m.list().map((entry) => entry.id)).toEqual(['etcpasswd']);
+    const [entry] = m.list();
+    // Hashed, so a traversal-shaped id cannot collide with a benign one.
+    expect(entry.id).toMatch(/^h-[0-9a-f]{22}$/);
     expect(m.get('../../etc/passwd')).not.toBeNull();
+    expect(m.get('h-' + entry.id.slice(2))).not.toBeNull();
+  });
+
+  it('keeps distinct ids that previously collapsed onto the same key', async () => {
+    const m = createModelStore();
+    m.save('..', await metadata(), { sourceName: 'dots' });
+    m.save('!!!', await metadata(), { sourceName: 'bangs' });
+    m.save('a/b', await metadata(), { sourceName: 'slash' });
+    m.save('ab', await metadata(), { sourceName: 'plain' });
+
+    // Stripping disallowed characters used to map all of these onto 'default'
+    // (or onto each other), so unrelated uploads silently clobbered one another.
+    const ids = m.list().map((entry) => entry.id);
+    expect(new Set(ids).size).toBe(4);
+    expect(m.get('a/b').info.sourceName).toBe('slash');
+    expect(m.get('ab').info.sourceName).toBe('plain');
+  });
+
+  it('scopes listFor to a single session', async () => {
+    const m = createModelStore();
+    m.save('tab1', await metadata(), { sourceName: 'one' });
+    m.save('tab2', await metadata(), { sourceName: 'two' });
+
+    expect(m.list().map((entry) => entry.id).sort()).toEqual(['tab1', 'tab2']);
+    expect(m.listFor('tab1').map((entry) => entry.id)).toEqual(['tab1']);
+    expect(m.listFor('nobody')).toEqual([]);
   });
 });

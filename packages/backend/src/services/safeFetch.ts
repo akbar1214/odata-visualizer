@@ -1,7 +1,15 @@
 import { resolveMetadataUrl, type HostnameResolver } from './urlPolicy.js';
+import { ResponseTooLargeError } from './errors.js';
 
 const MAX_REDIRECTS = 5;
 const DEFAULT_TIMEOUT_MS = 30000;
+
+/**
+ * Upper bound on a metadata document. A real `$metadata` document is a few
+ * hundred KB; `response.text()` buffers the whole body before the parser ever
+ * sees it, so an unbounded upstream can exhaust the heap.
+ */
+const DEFAULT_MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 /** Thrown when a redirect chain is too long (upstream problem, reported as 502). */
 export class RedirectLimitError extends Error {
@@ -18,6 +26,8 @@ export interface FetchPolicyOptions {
   timeoutMs?: number;
   /** Injectable DNS resolver; see `assertHostResolvesPublic`. */
   resolveHostname?: HostnameResolver;
+  /** Refuse a response body larger than this (default 32 MB). */
+  maxResponseBytes?: number;
 }
 
 function parseAllowlist(raw: string | undefined): string[] | undefined {
@@ -55,6 +65,13 @@ export async function fetchWithPolicy(
 ): Promise<Response> {
   const allowlist = options.allowlist;
   const blockPrivate = options.blockPrivate ?? true;
+  const maxBytes = options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+
+  // One deadline for the whole chain. Creating the signal per hop made the real
+  // worst case (MAX_REDIRECTS + 1) x timeoutMs while callers were told the
+  // timeout was a single timeoutMs.
+  const signal = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+
   let current = await resolveMetadataUrl(url, allowlist, {
     blockPrivate,
     resolveHostname: options.resolveHostname,
@@ -64,12 +81,21 @@ export async function fetchWithPolicy(
     const response = await fetch(current.toString(), {
       headers: { Accept: options.accept ?? 'application/xml, text/xml' },
       redirect: 'manual',
-      signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      signal,
     });
 
     const location = response.headers.get('location');
     const isRedirect = response.status >= 300 && response.status < 400 && location;
-    if (!isRedirect) return response;
+    if (!isRedirect) {
+      // Only the declared length can be checked without consuming the body,
+      // which the caller still has to read.
+      assertDeclaredLengthWithinLimit(response, maxBytes);
+      return response;
+    }
+
+    // Release the hop's socket before opening the next one; an undrained body
+    // keeps the connection out of the reuse pool.
+    await response.body?.cancel().catch(() => undefined);
 
     // Validated before the next request is issued.
     current = await resolveMetadataUrl(new URL(location, current).toString(), allowlist, {
@@ -79,4 +105,35 @@ export async function fetchWithPolicy(
   }
 
   throw new RedirectLimitError(MAX_REDIRECTS);
+}
+
+/** Refuse a body whose declared Content-Length already exceeds the cap. */
+function assertDeclaredLengthWithinLimit(response: Response, maxBytes: number): void {
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isSafeInteger(declared) && declared > maxBytes) {
+    throw new ResponseTooLargeError(
+      `Metadata document is too large (${declared} bytes, limit ${maxBytes}).`,
+    );
+  }
+}
+
+/**
+ * Read a policy-approved response body, refusing anything over the cap.
+ *
+ * `response.text()` buffers the whole body, so the cap has to be enforced here
+ * rather than after the fact — by the time the caller sees a giant string the
+ * memory has already been spent.
+ */
+export async function readLimitedText(response: Response, maxBytes?: number): Promise<string> {
+  const limit = maxBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+  assertDeclaredLengthWithinLimit(response, limit);
+
+  const text = await response.text();
+  const actual = Buffer.byteLength(text, 'utf8');
+  if (actual > limit) {
+    throw new ResponseTooLargeError(
+      `Metadata document is too large (${actual} bytes, limit ${limit}).`,
+    );
+  }
+  return text;
 }
