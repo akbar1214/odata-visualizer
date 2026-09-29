@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { ODataMetadata } from '@odata-visualizer/shared';
 import { findPaths, getReachableEntities, type EntityPath } from '../../utils/graphState';
 import { SearchableSelect } from './SearchableSelect';
@@ -14,6 +14,16 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
   const [targetEntity, setTargetEntity] = useState('');
   const [foundPaths, setFoundPaths] = useState<EntityPath[]>([]);
   const [searched, setSearched] = useState(false);
+
+  // `currentEntity` was only read on mount, so changing the query root left the
+  // "From entity" control pointing at the previous entity — and running a path
+  // then silently reset the query root back to it.
+  useEffect(() => {
+    setSourceEntity(currentEntity);
+    setTargetEntity('');
+    setFoundPaths([]);
+    setSearched(false);
+  }, [currentEntity]);
 
   const reachableEntities = useMemo(() => {
     if (!sourceEntity) return new Set<string>();

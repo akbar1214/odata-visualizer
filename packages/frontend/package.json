@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "lint": "eslint src __tests__",
     "test": "vitest run --browser",
     "test:watch": "vitest watch --browser",
