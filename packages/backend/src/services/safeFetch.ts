@@ -1,4 +1,4 @@
-import { validateMetadataUrl } from './urlPolicy.js';
+import { resolveMetadataUrl, type HostnameResolver } from './urlPolicy.js';
 
 const MAX_REDIRECTS = 5;
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -16,6 +16,8 @@ export interface FetchPolicyOptions {
   blockPrivate?: boolean;
   accept?: string;
   timeoutMs?: number;
+  /** Injectable DNS resolver; see `assertHostResolvesPublic`. */
+  resolveHostname?: HostnameResolver;
 }
 
 function parseAllowlist(raw: string | undefined): string[] | undefined {
@@ -43,6 +45,9 @@ export function urlPolicyFromEnv(): { allowlist?: string[]; blockPrivate: boolea
  * public URL can 302 to a private address, and the response body would already
  * have been fetched by the time we noticed. Validating each hop first means a
  * blocked hop is never requested at all.
+ *
+ * Validation covers the resolved addresses as well as the URL text, because a
+ * public hostname can still point at loopback or the cloud metadata endpoint.
  */
 export async function fetchWithPolicy(
   url: string,
@@ -50,7 +55,10 @@ export async function fetchWithPolicy(
 ): Promise<Response> {
   const allowlist = options.allowlist;
   const blockPrivate = options.blockPrivate ?? true;
-  let current = validateMetadataUrl(url, allowlist, { blockPrivate });
+  let current = await resolveMetadataUrl(url, allowlist, {
+    blockPrivate,
+    resolveHostname: options.resolveHostname,
+  });
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     const response = await fetch(current.toString(), {
@@ -64,8 +72,9 @@ export async function fetchWithPolicy(
     if (!isRedirect) return response;
 
     // Validated before the next request is issued.
-    current = validateMetadataUrl(new URL(location, current).toString(), allowlist, {
+    current = await resolveMetadataUrl(new URL(location, current).toString(), allowlist, {
       blockPrivate,
+      resolveHostname: options.resolveHostname,
     });
   }
 
