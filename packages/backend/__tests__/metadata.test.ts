@@ -19,6 +19,13 @@ const minimalCSDL = `<?xml version="1.0" encoding="utf-8"?>
   </edmx:DataServices>
 </edmx:Edmx>`;
 
+// The SSRF guard resolves a hostname's addresses before fetching it. These tests
+// are about metadata sharing, so pin resolution to a public address rather than
+// depending on `windchill.example.com` failing to resolve.
+vi.mock('node:dns/promises', () => ({
+  lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+}));
+
 describe('metadata sharing via the API', () => {
   beforeEach(() => {
     metadataStore.clear();
