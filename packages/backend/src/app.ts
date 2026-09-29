@@ -21,14 +21,23 @@ const __dirname = dirname(__filename);
 export interface CreateAppOptions {
   /** Mount the MCP server at /mcp. Defaults to true. */
   mcp?: boolean;
-  /** Bearer token required for /mcp when set. Defaults to MCP_TOKEN. */
-  mcpToken?: string;
   /** Allow load_metadata over HTTP. Defaults to MCP_ALLOW_LOAD === "1". */
   allowLoadMetadata?: boolean;
   /** Hostnames allowed in the Host header for /mcp. Defaults to MCP_ALLOWED_HOSTS or localhost. */
   allowedHosts?: string[];
   /** Bearer token required for the REST API. Defaults to API_TOKEN. */
   apiToken?: string;
+  /**
+   * Bearer token for /mcp. Defaults to MCP_TOKEN, then to API_TOKEN: an
+   * operator who sets only API_TOKEN reasonably expects the whole server to be
+   * authenticated, and /mcp sits outside the /api router. Pass `null` to force
+   * /mcp to stay unauthenticated.
+   */
+  mcpToken?: string | null;
+  /** Maximum concurrent /mcp sessions. Defaults to 32. */
+  maxSessions?: number;
+  /** Close an idle /mcp session after this long. Defaults to 10 minutes. */
+  sessionIdleMs?: number;
   /**
    * Origins allowed to read responses cross-origin. Defaults to CORS_ORIGINS,
    * and to none: the bundled frontend is served from this same origin (and
@@ -86,10 +95,19 @@ export function createApp(options: CreateAppOptions = {}): Express {
   });
 
   if (options.mcp !== false) {
+    // An explicit `null` means "leave /mcp unauthenticated even though the API
+    // has a token"; anything else falls back to the API token.
+    const mcpToken =
+      options.mcpToken === null
+        ? undefined
+        : (options.mcpToken ?? process.env['MCP_TOKEN'] ?? options.apiToken ?? process.env['API_TOKEN']);
+
     mountMcp(app, metadataStore.accessors, {
-      token: options.mcpToken ?? process.env['MCP_TOKEN'],
+      token: mcpToken,
       allowLoadMetadata: options.allowLoadMetadata ?? process.env['MCP_ALLOW_LOAD'] === '1',
       allowedHosts: options.allowedHosts ?? parseList(process.env['MCP_ALLOWED_HOSTS']),
+      maxSessions: options.maxSessions,
+      sessionIdleMs: options.sessionIdleMs,
     });
   }
 
