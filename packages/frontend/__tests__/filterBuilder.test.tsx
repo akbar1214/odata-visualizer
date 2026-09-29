@@ -6,8 +6,8 @@ import type { QueryFilter } from '../src/utils/queryResolver';
 
 const properties: ODataProperty[] = [
   { name: 'Id', type: 'Edm.Int32', nullable: false, isKey: true },
-  { name: 'Number', type: 'Edm.String', nullable: true },
-  { name: 'Total', type: 'Edm.Decimal', nullable: true },
+  { name: 'Number', type: 'Edm.String', nullable: true, isKey: false },
+  { name: 'Total', type: 'Edm.Decimal', nullable: true, isKey: false },
 ];
 
 describe('FilterBuilder', () => {

@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { useState, type ReactNode } from 'react';
+import { useState, type ComponentProps, type ReactNode } from 'react';
 import type { ODataEntity, ODataMetadata } from '@odata-visualizer/shared';
 import { EntityNode } from '../src/components/EntityNode';
 import { QueryPreview } from '../src/components/query/QueryPreview';
@@ -35,6 +35,24 @@ function renderNode(node: ReactNode) {
   return render(<ReactFlowProvider>{node}</ReactFlowProvider>);
 }
 
+/** React Flow injects these defaults at render time; the test has to supply them. */
+function nodeProps(entity: ODataEntity): ComponentProps<typeof EntityNode> {
+  return {
+    id: entity.name,
+    type: 'entity',
+    isConnectable: true,
+    positionAbsoluteX: 0,
+    positionAbsoluteY: 0,
+    data: { entity },
+    selected: false,
+    dragging: false,
+    draggable: true,
+    selectable: true,
+    deletable: true,
+    zIndex: 0,
+  };
+}
+
 describe('EntityNode property budget', () => {
   afterEach(() => cleanup());
 
@@ -53,7 +71,7 @@ describe('EntityNode property budget', () => {
       ],
     });
 
-    renderNode(<EntityNode data={{ entity: wide }} />);
+    renderNode(<EntityNode {...nodeProps(wide)} />);
 
     expect(screen.queryByText('P1')).toBeNull();
     expect(screen.queryByText('P4')).toBeNull();
@@ -65,7 +83,7 @@ describe('EntityNode property budget', () => {
       properties: [prop('Id', true), prop('A'), prop('B'), prop('C'), prop('D')],
     });
 
-    renderNode(<EntityNode data={{ entity: ok }} />);
+    renderNode(<EntityNode {...nodeProps(ok)} />);
 
     expect(screen.getByText('A')).toBeDefined();
     expect(screen.getByText('D')).toBeDefined();
