@@ -20,10 +20,16 @@ export interface MountMcpOptions {
    * (DNS-rebinding protection). Set to serve /mcp from another hostname.
    */
   allowedHosts?: string[];
+  /** Maximum concurrent sessions. Defaults to 32. */
+  maxSessions?: number;
+  /** Close a session after this long without a request. Defaults to 10 minutes. */
+  sessionIdleMs?: number;
 }
 
 const DEFAULT_ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
-const MAX_SESSIONS = 32;
+const DEFAULT_MAX_SESSIONS = 32;
+const DEFAULT_SESSION_IDLE_MS = 10 * 60 * 1000;
+const REAP_INTERVAL_MS = 30 * 1000;
 
 function tokensMatch(provided: string | undefined, expected: string): boolean {
   if (!provided) return false;
@@ -54,8 +60,42 @@ export function mountMcp(
   options: MountMcpOptions = {},
 ): void {
   const path = options.path ?? '/mcp';
-  const transports: Record<string, StreamableHTTPServerTransport> = {};
   const guards = resolveGuard(options);
+  const maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
+  const sessionIdleMs = options.sessionIdleMs ?? DEFAULT_SESSION_IDLE_MS;
+
+  /**
+   * A Map, not a plain object: `mcp-session-id` is attacker-controlled, and
+   * `transports['__proto__']` returns `Object.prototype` — truthy, so the
+   * "unknown session" guard passed and `handleRequest` was then called on it,
+   * giving a 500 and a stack trace on every request.
+   */
+  interface Session {
+    transport: StreamableHTTPServerTransport;
+    /** Last time this session served a request. */
+    lastSeen: number;
+  }
+  const sessions = new Map<string, Session>();
+
+  /** Sessions being created right now, so the cap cannot be raced past. */
+  let pending = 0;
+
+  // Never keep the process alive just to sweep sessions. The sweep interval
+  // tracks the TTL so a short TTL (tests, ephemeral clients) is actually swept
+  // promptly rather than waiting for the default half-hour cadence.
+  const reaper = setInterval(
+    () => {
+      const cutoff = Date.now() - sessionIdleMs;
+      for (const [sessionId, session] of sessions) {
+        if (session.lastSeen < cutoff) {
+          sessions.delete(sessionId);
+          void session.transport.close().catch(() => undefined);
+        }
+      }
+    },
+    Math.min(REAP_INTERVAL_MS, Math.max(10, Math.floor(sessionIdleMs / 2))),
+  );
+  reaper.unref?.();
 
   const authorized = (req: Request, res: Response): boolean => {
     if (!options.token) return true;
@@ -93,12 +133,13 @@ export function mountMcp(
 
     try {
       if (typeof sessionId === 'string') {
-        const existing = transports[sessionId];
+        const existing = sessions.get(sessionId);
         if (!existing) {
           jsonRpcError(res, 404, -32001, 'Session not found');
           return;
         }
-        await existing.handleRequest(req, res, req.body);
+        existing.lastSeen = Date.now();
+        await existing.transport.handleRequest(req, res, req.body);
         return;
       }
 
@@ -107,27 +148,38 @@ export function mountMcp(
         return;
       }
 
-      if (Object.keys(transports).length >= MAX_SESSIONS) {
+      // `pending` is claimed before the first await so concurrent initializes
+      // cannot all observe a free slot and blow past the cap.
+      if (sessions.size + pending >= maxSessions) {
         jsonRpcError(res, 503, -32000, 'Too many MCP sessions; close an existing session first.');
         return;
       }
+      pending += 1;
 
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (sid) => {
-          transports[sid] = transport;
-        },
-      });
-      transport.onclose = () => {
-        const sid = transport.sessionId;
-        if (sid) delete transports[sid];
-      };
+      try {
+        // Captured here because the SDK clears `transport.sessionId` while it
+        // is closing, so reading it back from `onclose` finds nothing and the
+        // session would never be released.
+        let registeredId: string | undefined;
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (sid) => {
+            registeredId = sid;
+            sessions.set(sid, { transport, lastSeen: Date.now() });
+          },
+        });
+        transport.onclose = () => {
+          if (registeredId) sessions.delete(registeredId);
+        };
 
-      const server = createMcpServer(accessors, {
-        allowLoadMetadata: options.allowLoadMetadata ?? false,
-      });
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
+        const server = createMcpServer(accessors, {
+          allowLoadMetadata: options.allowLoadMetadata ?? false,
+        });
+        await server.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      } finally {
+        pending -= 1;
+      }
     } catch (error) {
       console.error('Error handling MCP request:', error);
       serverError(res);
@@ -137,12 +189,14 @@ export function mountMcp(
   const handleSessionRequest = async (req: Request, res: Response): Promise<void> => {
     if (!authorized(req, res)) return;
     const sessionId = req.headers['mcp-session-id'];
-    if (typeof sessionId !== 'string' || !transports[sessionId]) {
+    const session = typeof sessionId === 'string' ? sessions.get(sessionId) : undefined;
+    if (!session) {
       res.status(404).send('Invalid or missing session ID');
       return;
     }
     try {
-      await transports[sessionId].handleRequest(req, res);
+      session.lastSeen = Date.now();
+      await session.transport.handleRequest(req, res);
     } catch (error) {
       console.error('Error handling MCP session request:', error);
       serverError(res);
@@ -151,4 +205,8 @@ export function mountMcp(
 
   app.get(path, ...guards, handleSessionRequest);
   app.delete(path, ...guards, handleSessionRequest);
+
+  // Exposed so an embedding application (and the test suite) can stop the
+  // reaper instead of waiting for process exit.
+  app.locals.stopMcpReaper = (): void => clearInterval(reaper);
 }
