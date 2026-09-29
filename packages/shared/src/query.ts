@@ -210,15 +210,222 @@ function encodeQueryValue(value: string): string {
   });
 }
 
+/** An OData simple identifier, e.g. `Name` or `_internal`. */
+const SIMPLE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** A property path, e.g. `Name` or `Address/City`. */
+const PROPERTY_PATH = /^[A-Za-z_][A-Za-z0-9_]*(?:\/[A-Za-z_][A-Za-z0-9_]*)*$/;
+
+/**
+ * One `/`-separated resource path segment. Dots are allowed because the
+ * builder UI addresses an entity by its qualified type name
+ * (`SampleService.Models.Part`), which is not a property path.
+ */
+const RESOURCE_SEGMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+
+/**
+ * Validate the single resource path segment the URL is built from (an entity
+ * set name, or the entity type name the builder UI previews with).
+ */
+function assertResourceSegment(entitySet: string): string {
+  if (!entitySet || entitySet.trim().length === 0) {
+    throw new Error('entitySet is required');
+  }
+  if (entitySet.startsWith('/') || entitySet.endsWith('/')) {
+    throw new Error(
+      `Invalid entitySet: ${JSON.stringify(entitySet)}. Expected a resource path without leading or trailing "/".`,
+    );
+  }
+  // A container-qualified path (Container/EntitySet) is legitimate, so each
+  // segment is checked on its own rather than rejecting "/" outright.
+  for (const segment of entitySet.split('/')) {
+    if (!RESOURCE_SEGMENT.test(segment)) {
+      throw new Error(
+        `Invalid entitySet: ${JSON.stringify(entitySet)}. ` +
+          'Expected a resource path of OData identifiers, e.g. "Parts" or "Container/Parts".',
+      );
+    }
+  }
+  return entitySet;
+}
+
+function assertIdentifier(value: string, label: string): string {
+  if (!SIMPLE_IDENTIFIER.test(value)) {
+    throw new Error(`Invalid ${label}: ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+function assertPropertyPath(value: string, label: string): string {
+  if (!PROPERTY_PATH.test(value)) {
+    throw new Error(`Invalid ${label}: ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+function assertNonNegativeInteger(value: number | undefined, label: string): void {
+  if (value === undefined) return;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new Error(`Invalid ${label}: ${value}`);
+  }
+}
+
+function isSortDirection(token: string): boolean {
+  const lowered = token.toLowerCase();
+  return lowered === 'asc' || lowered === 'desc';
+}
+
+/**
+ * Build `$orderby`, which may name more than one field. Anything after the
+ * direction used to be dropped silently, so `name desc junk` quietly produced
+ * `name desc`; extra tokens are now an error instead.
+ */
+function buildOrderBy(orderBy: string): string {
+  const clauses = orderBy
+    .split(',')
+    .map((clause) => clause.trim())
+    .filter((clause) => clause.length > 0);
+
+  if (clauses.length === 0) {
+    throw new Error('Invalid $orderby: no sort field given');
+  }
+
+  return clauses
+    .map((clause) => {
+      const tokens = clause.split(/\s+/);
+      if (tokens.length > 2) {
+        throw new Error(`Invalid $orderby expression: ${JSON.stringify(clause)}`);
+      }
+      const [rawField, direction] = tokens;
+      // A lone `asc`/`desc` is a direction with its field missing (e.g. the
+      // caller sent " desc"), not a request to sort on a column named "desc".
+      if (tokens.length === 1 && isSortDirection(rawField)) {
+        throw new Error(`Invalid $orderby: missing sort field in ${JSON.stringify(clause)}`);
+      }
+      const field = assertPropertyPath(rawField, '$orderby field');
+      if (direction && !isSortDirection(direction)) {
+        throw new Error(`Invalid sort direction: ${direction}`);
+      }
+      return `${encodeQueryValue(field)}${direction ? ` ${direction.toLowerCase()}` : ''}`;
+    })
+    .join(',');
+}
+
+/** Split a comma-separated list, ignoring commas inside single-quoted values. */
+function splitLiteralList(input: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let inString = false;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i];
+    if (inString) {
+      if (char === "'" && input[i + 1] === "'") {
+        current += "''";
+        i += 1;
+        continue;
+      }
+      if (char === "'") inString = false;
+      current += char;
+      continue;
+    }
+    if (char === "'") {
+      inString = true;
+      current += char;
+      continue;
+    }
+    if (char === ',') {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts;
+}
+
+/**
+ * Strip one layer of surrounding quotes and un-escape doubled quotes, so the
+ * value round-trips back through `formatV4Literal`. A value that mixes quoted
+ * and unquoted text cannot be a single literal and is rejected rather than
+ * escaped into something that silently never matches.
+ */
+function unquoteLiteral(value: string, property: string): string {
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1).replace(/''/g, "'");
+  }
+  if (value.includes("'")) {
+    throw new Error(
+      `Invalid "in" list value for "${property}": ${JSON.stringify(value)}. ` +
+        'Use a quoted string (Edm.String and enum values) or an unquoted literal.',
+    );
+  }
+  return value;
+}
+
+/**
+ * Build the parenthesised value list of an `in` comparison. The list used to be
+ * spliced in verbatim, which both skipped literal typing and let a value such
+ * as `1) or true or (1` inject extra filter logic.
+ */
+function buildInList(raw: string, edmType: string | undefined, property: string): string {
+  const empty = () =>
+    new Error(`The "in" operator on "${property}" requires a non-empty list of values.`);
+
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) throw empty();
+
+  let inner = trimmed;
+  if (trimmed.startsWith('(')) {
+    if (!trimmed.endsWith(')')) {
+      throw new Error(`Unbalanced parentheses in "in" list for "${property}": ${trimmed}`);
+    }
+    inner = trimmed.slice(1, -1);
+  }
+  if (/[()]/.test(inner)) {
+    throw new Error(`Unexpected parentheses in "in" list for "${property}": ${trimmed}`);
+  }
+
+  const elements = splitLiteralList(inner)
+    .map((element) => element.trim())
+    .filter((element) => element.length > 0);
+  if (elements.length === 0) throw empty();
+
+  return `(${elements
+    .map((element) => formatV4Literal(unquoteLiteral(element, property), edmType))
+    .join(',')})`;
+}
+
+/**
+ * Validate every value in an `$expand` tree before any of it is emitted. This
+ * runs once for the whole tree so nested segments are covered no matter which
+ * branch of `buildExpand` produces them.
+ */
+function validateExpand(expands: ExpandNode[]): void {
+  for (const item of expands) {
+    assertIdentifier(item.navProperty, 'navigation property');
+    for (const selected of item.select ?? []) {
+      assertIdentifier(selected, '$select');
+    }
+    for (const clause of item.filters ?? []) {
+      assertPropertyPath(clause.property, 'property');
+    }
+    if (item.orderBy && item.orderBy.trim().length > 0) {
+      buildOrderBy(item.orderBy);
+    }
+    assertNonNegativeInteger(item.top, '$top');
+    assertNonNegativeInteger(item.skip, '$skip');
+    if (item.expand?.length) validateExpand(item.expand);
+  }
+}
+
 /**
  * Build an OData V4 query URL (relative to the service root, or absolute
  * when baseUrl is given).
  */
 export function buildQueryUrl(options: QueryOptions): string {
-  const { entitySet } = options;
-  if (!entitySet) {
-    throw new Error('entitySet is required');
-  }
+  const entitySet = assertResourceSegment(options.entitySet);
 
   if (
     options.search &&
@@ -257,8 +464,14 @@ export function buildQueryUrl(options: QueryOptions): string {
   };
 
   for (const filter of options.filters ?? []) {
+    assertPropertyPath(filter.property, 'property');
     checkProperty(filter.property);
   }
+
+  for (const selected of options.select ?? []) {
+    assertIdentifier(selected, '$select');
+  }
+  validateExpand(options.expand ?? []);
 
   if (hasApply) {
     // $apply must be the first system query option. Aliases are caller-supplied,
@@ -285,29 +498,22 @@ export function buildQueryUrl(options: QueryOptions): string {
     if (expandStr) params.push(`$expand=${encodeQueryValue(expandStr)}`);
   }
 
-  if (options.orderBy) {
-    const orderBy = options.orderBy.trim();
-    if (orderBy) {
-      const [field, dir] = orderBy.split(/\s+/);
-      if (dir && dir.toLowerCase() !== 'asc' && dir.toLowerCase() !== 'desc') {
-        throw new Error(`Invalid sort direction: ${dir}`);
-      }
-      checkProperty(field);
-      params.push(`$orderby=${encodeQueryValue(field)}${dir ? ` ${dir.toLowerCase()}` : ''}`);
+  if (options.orderBy && options.orderBy.trim().length > 0) {
+    const orderBy = buildOrderBy(options.orderBy);
+    for (const clause of options.orderBy.split(',')) {
+      const field = clause.trim().split(/\s+/)[0];
+      if (field) checkProperty(field);
     }
+    params.push(`$orderby=${orderBy}`);
   }
 
+  assertNonNegativeInteger(options.top, '$top');
   if (options.top !== undefined) {
-    if (!Number.isInteger(options.top) || options.top < 0) {
-      throw new Error(`Invalid $top: ${options.top}`);
-    }
     params.push(`$top=${options.top}`);
   }
 
+  assertNonNegativeInteger(options.skip, '$skip');
   if (options.skip !== undefined) {
-    if (!Number.isInteger(options.skip) || options.skip < 0) {
-      throw new Error(`Invalid $skip: ${options.skip}`);
-    }
     params.push(`$skip=${options.skip}`);
   }
 
@@ -411,9 +617,7 @@ function buildFilter(
     }
 
     if (operator === 'in') {
-      const inner = clause.value.trim();
-      const list = inner.startsWith('(') ? inner : `(${inner})`;
-      return `${clause.property} in ${list}`;
+      return `${clause.property} in ${buildInList(clause.value, edmType, clause.property)}`;
     }
 
     const literal = formatV4Literal(clause.value, edmType ?? inferTypeFromValue(clause.value));
@@ -441,7 +645,7 @@ function buildExpand(
         const parts: string[] = [];
         if (item.select?.length) parts.push(`$select=${item.select.join(',')}`);
         if (nested) parts.push(`$expand=${nested}`);
-        if (item.orderBy) parts.push(`$orderby=${item.orderBy}`);
+        if (item.orderBy) parts.push(`$orderby=${buildOrderBy(item.orderBy)}`);
         if (item.top !== undefined) parts.push(`$top=${item.top}`);
         if (item.skip !== undefined) parts.push(`$skip=${item.skip}`);
         if (item.filters?.length) {
@@ -495,7 +699,7 @@ function buildExpand(
       }
 
       if (item.orderBy) {
-        parts.push(`$orderby=${item.orderBy}`);
+        parts.push(`$orderby=${buildOrderBy(item.orderBy)}`);
       }
       if (item.top !== undefined) {
         parts.push(`$top=${item.top}`);
