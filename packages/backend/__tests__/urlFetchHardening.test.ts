@@ -28,6 +28,13 @@ function responseWithUrl(body: string, url: string) {
   return response;
 }
 
+// The SSRF guard resolves a hostname's addresses before fetching it. These tests
+// are about fetch hardening, so pin resolution to a public address rather than
+// depending on `windchill.example.com` failing to resolve.
+vi.mock('node:dns/promises', () => ({
+  lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+}));
+
 afterEach(() => {
   vi.unstubAllGlobals();
   metadataStore.clearAll();

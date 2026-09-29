@@ -14,6 +14,13 @@ function redirectTo(location: string, status = 302) {
   return new Response(null, { status, headers: { location } });
 }
 
+// The SSRF guard resolves a hostname's addresses before fetching it. These tests
+// are about redirect policy, so pin resolution to a public address instead of
+// depending on `windchill.example.com` failing to resolve.
+vi.mock('node:dns/promises', () => ({
+  lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+}));
+
 afterEach(() => {
   vi.unstubAllGlobals();
   metadataStore.clearAll();
