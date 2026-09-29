@@ -1,17 +1,37 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface QueryPreviewProps {
   query: string;
 }
 
+const COPIED_FEEDBACK_MS = 2000;
+
 export function QueryPreview({ query }: QueryPreviewProps) {
   const [copied, setCopied] = useState(false);
+  // Held so repeated clicks reuse one timer instead of stacking one per click
+  // (a stale timer reset the "Copied" state early) and so unmount can clear it.
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (resetTimer.current !== null) clearTimeout(resetTimer.current);
+    },
+    [],
+  );
+
+  const showCopied = useCallback(() => {
+    setCopied(true);
+    if (resetTimer.current !== null) clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => {
+      resetTimer.current = null;
+      setCopied(false);
+    }, COPIED_FEEDBACK_MS);
+  }, []);
 
   const handleCopy = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(query);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      showCopied();
     } catch {
       const textarea = document.createElement('textarea');
       textarea.value = query;
@@ -19,10 +39,9 @@ export function QueryPreview({ query }: QueryPreviewProps) {
       textarea.select();
       document.execCommand('copy');
       document.body.removeChild(textarea);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      showCopied();
     }
-  }, [query]);
+  }, [query, showCopied]);
 
   return (
     <div>

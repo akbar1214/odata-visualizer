@@ -106,11 +106,15 @@ export function ERDiagram({ metadata, selectedEntity, onEntitySelect }: ERDiagra
 
   // Fit view when nodes change
   useEffect(() => {
-    if (reactFlowInstance && nodes.length > 0 && !loading) {
-      setTimeout(() => {
-        reactFlowInstance.fitView({ padding: 0.2, maxZoom: 1.5 });
-      }, 100);
+    if (!reactFlowInstance || nodes.length === 0 || loading) {
+      return undefined;
     }
+    // The delay lets React Flow finish measuring; it must be cleared so the
+    // timer cannot fire against a torn-down instance after unmount.
+    const timer = setTimeout(() => {
+      reactFlowInstance.fitView({ padding: 0.2, maxZoom: 1.5 });
+    }, 100);
+    return () => clearTimeout(timer);
   }, [reactFlowInstance, nodes.length, loading]);
 
   // MiniMap node color based on selection

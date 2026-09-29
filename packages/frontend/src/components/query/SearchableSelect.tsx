@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useId } from 'react';
 import { isComplexType } from '../../utils/queryResolver';
 import type { ODataEntity } from '@odata-visualizer/shared';
 
@@ -55,8 +55,13 @@ export function SearchableSelect({
   const handleClear = useCallback(() => {
     onChange('');
     setSearch('');
-    inputRef.current?.focus();
+    setOpen(false);
+    // Focusing here used to re-trigger the focus handler, which reopened the
+    // dropdown the user had just dismissed by clearing the value.
   }, [onChange]);
+
+  const listboxId = useId();
+  const inputId = useId();
 
   const handleOptionMouseDown = useCallback(
     (name: string) => (ev: React.MouseEvent) => {
@@ -81,14 +86,22 @@ export function SearchableSelect({
     <div ref={containerRef} className="relative">
       <input
         ref={inputRef}
+        id={inputId}
         type="text"
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={open ? listboxId : undefined}
+        aria-autocomplete="list"
+        autoComplete="off"
         className="input text-xs w-full pr-6"
+        // The selection was rendered as placeholder text, so it vanished the
+        // moment the user typed one character and the field looked empty.
         placeholder={
-          selectedEntity
+          !value && selectedEntity
             ? `${selectedEntity.name}${isComplexType(selectedEntity) ? ' (ComplexType)' : ''}`
             : placeholder
         }
-        value={search}
+        value={open ? search : search || (value ?? '')}
         onFocus={handleFocus}
         onChange={handleInputChange}
         disabled={disabled}
@@ -103,7 +116,12 @@ export function SearchableSelect({
         </button>
       )}
       {open && (
-        <div className="absolute z-50 mt-1 w-full bg-white border border-engineering-200 rounded shadow-odv max-h-48 overflow-auto">
+        <div
+          id={listboxId}
+          role="listbox"
+          aria-labelledby={inputId}
+          className="absolute z-50 mt-1 w-full bg-white border border-engineering-200 rounded shadow-odv max-h-48 overflow-auto"
+        >
           {filtered.length === 0 && (
             <div className="px-2 py-1.5 text-[10px] text-engineering-400">No matches</div>
           )}
@@ -111,6 +129,8 @@ export function SearchableSelect({
             <button
               key={e.name}
               type="button"
+              role="option"
+              aria-selected={e.name === value}
               className={`w-full text-left px-2 py-1.5 text-[11px] hover:bg-primary-50 flex items-center justify-between ${
                 e.name === value ? 'bg-primary-100 text-primary-600' : 'text-engineering-600'
               }`}

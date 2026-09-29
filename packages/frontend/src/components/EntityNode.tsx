@@ -12,7 +12,11 @@ function EntityNodeComponent({ data, selected }: NodeProps<EntityNodeData>) {
   const maxPropertiesToShow = 6;
   const keyProperties = entity.properties.filter((p) => p.isKey);
   const regularProperties = entity.properties.filter((p) => !p.isKey);
-  const visibleProperties = regularProperties.slice(0, maxPropertiesToShow - keyProperties.length);
+  // Composite keys routinely exceed the budget. `slice(0, -3)` means "all but
+  // the last three", which showed *more* properties than the budget allows and
+  // overflowed the card height the layout reserves for it.
+  const budget = Math.max(0, maxPropertiesToShow - keyProperties.length);
+  const visibleProperties = regularProperties.slice(0, budget);
   const hiddenCount = regularProperties.length - visibleProperties.length;
 
   return (
