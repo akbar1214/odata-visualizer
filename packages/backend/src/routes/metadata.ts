@@ -25,15 +25,22 @@ router.get('/current', (req: Request, res: Response) => {
 
 /**
  * GET /api/metadata
- * Lists the models held for each session (no metadata payload).
+ * Lists the models held for *this caller's* session (no metadata payload).
+ *
+ * It used to return every session, which leaked internal hostnames and tenant
+ * identifiers from `sourceName` to anyone who could reach the API.
  */
-router.get('/', (_req: Request, res: Response) => {
-  res.json({ success: true, models: metadataStore.list() });
+router.get('/', (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    models: metadataStore.listFor(sessionIdOf(req, req.query as Record<string, unknown>)),
+  });
 });
 
 /**
  * DELETE /api/metadata/current
- * Clears this session's model (or all of them when no session is given).
+ * Clears this session's model. With no session id, only the shared "default"
+ * bucket is cleared — use `clearAll()` to wipe everything.
  */
 router.delete('/current', (req: Request, res: Response) => {
   metadataStore.clear(sessionIdOf(req));

@@ -105,8 +105,11 @@ describe('metadata sharing via the API', () => {
     expect(parse.status).toBe(200);
 
     const res = await request(app).get('/api/metadata/current');
-    expect(res.body.info.sourceName).toBe('https://user@windchill.example.com/odata/$metadata');
+    // Both credentials go: fetch rejects any credentialed URL, and a token is
+    // commonly passed as the username (`https://<token>@host/`).
+    expect(res.body.info.sourceName).toBe('https://windchill.example.com/odata/$metadata');
     expect(res.body.info.sourceName).not.toContain('hunter2');
+    expect(res.body.info.sourceName).not.toContain('user');
     vi.unstubAllGlobals();
   });
 

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { ODataMetadata } from '@odata-visualizer/shared';
 import type { MetadataAccessors } from '@odata-visualizer/mcp/server';
 
@@ -27,6 +28,8 @@ export interface ModelStore {
   clear(id?: string): void;
   clearAll(): void;
   list(): ModelSummary[];
+  /** Summaries for one session only; without an id, the default bucket. */
+  listFor(id?: string): ModelSummary[];
   /** MCP accessors backed by the current model. */
   accessors: MetadataAccessors;
 }
@@ -36,9 +39,23 @@ export interface ModelStoreOptions {
   maxModels?: number;
 }
 
-/** Session ids come from clients, so keep them to a safe character set. */
+const DEFAULT_MODEL_ID = 'default';
+
+/**
+ * Session ids come from clients, so they are hashed into a fixed-shape key.
+ *
+ * The previous implementation stripped disallowed characters, which collapsed
+ * `'..'`, `'.'`, `'!!!'` and `''` all onto `default`, and made `'a/b'` collide
+ * with `'ab'` — so two unrelated uploads silently clobbered each other.
+ */
 export function sanitizeModelId(id: string): string {
-  return id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'default';
+  const raw = String(id ?? '');
+  if (raw.length === 0) return DEFAULT_MODEL_ID;
+
+  // A short, well-behaved id is kept verbatim so the API stays debuggable.
+  if (/^[a-zA-Z0-9_-]{1,64}$/.test(raw)) return raw;
+
+  return `h-${createHash('sha256').update(raw).digest('hex').slice(0, 22)}`;
 }
 
 /**
@@ -108,6 +125,11 @@ export function createModelStore(options: ModelStoreOptions = {}): ModelStore {
     },
     list() {
       return [...models.entries()].map(([id, model]) => ({ id, ...model.info }));
+    },
+    listFor(id) {
+      const key = sanitizeModelId(id ?? DEFAULT_MODEL_ID);
+      const model = models.get(key);
+      return model ? [{ id: key, ...model.info }] : [];
     },
     accessors: {
       get: () => store.current(),
