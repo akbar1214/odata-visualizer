@@ -544,7 +544,12 @@ export async function parseCSDL(
     new Set([...registry.keys()].map((ns) => ns.toLowerCase())),
   );
 
-  applyTargetedAnnotations(metadata, targetedAnnotations, aliases);
+  applyTargetedAnnotations(
+    metadata,
+    targetedAnnotations,
+    aliases,
+    new Set([...registry.keys()].map((ns) => ns.toLowerCase())),
+  );
 
   // Derived types often omit <Key> (it is inherited). Backfill keys from
   // the base-type chain so consumers (and the complex-type heuristic) work.
@@ -640,6 +645,7 @@ function applyTargetedAnnotations(
   metadata: ODataMetadata,
   targeted: Array<{ target: string; annotations: Record<string, string> }>,
   aliases: Map<string, string>,
+  namespaces: Set<string>,
 ): void {
   const merge = (
     current: Record<string, string> | undefined,
@@ -647,9 +653,10 @@ function applyTargetedAnnotations(
   ): Record<string, string> => ({ ...extra, ...current });
 
   for (const { target, annotations } of targeted) {
-    // Two arguments deliberately: the namespace guard that `expandAlias` gains
-    // in #25 is additive, so this call stays valid either way.
-    const expanded = expandAlias(target, aliases);
+    // The namespace guard added in #25 matters here too: a prefix that names an
+    // actual schema is a namespace, not an alias, so an annotation target
+    // cannot be rewritten into another document's namespace.
+    const expanded = expandAlias(target, aliases, namespaces);
     const segments = expanded.split('/');
 
     // `NS.Type/Prop`. Per CSDL a schema child must be namespace-qualified, so
