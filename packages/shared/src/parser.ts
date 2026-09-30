@@ -1,5 +1,5 @@
 import { XMLParser, type X2jOptions } from 'fast-xml-parser';
-import { resolveInheritanceChain } from './resolve.js';
+import { resolveInheritanceChain, findEntityByName, findEntitySet } from './resolve.js';
 import type {
   ODataMetadata,
   ODataEntity,
@@ -295,6 +295,13 @@ export async function parseCSDL(
   const enumTypes: ODataEnumType[] = [];
   const typeDefinitions: ODataTypeDefinition[] = [];
   const unresolvedReferences: string[] = [];
+  /**
+   * `<Annotations Target="...">` blocks, collected per schema and applied once
+   * the whole model is parsed. CSDL places most annotations here rather than
+   * inline, and `parseAnnotations` reads only direct `<Annotation>` children,
+   * so these were dropped entirely.
+   */
+  const targetedAnnotations: Array<{ target: string; annotations: Record<string, string> }> = [];
 
   const registry = new Map<string, XmlElement>();
   const aliases = new Map<string, string>();
@@ -465,7 +472,7 @@ export async function parseCSDL(
         }
       }
       if (containerName || parsedEntitySets.length > 0) {
-        entityContainers.push({ name: containerName, entitySets: parsedEntitySets });
+        entityContainers.push({ name: containerName, namespace, entitySets: parsedEntitySets });
       }
 
       const funcImports = ensureArray(
@@ -504,6 +511,17 @@ export async function parseCSDL(
         }
       }
     }
+
+    // Schema-level annotations, applied after the model is complete so a target
+    // may name anything in any schema.
+    for (const annotationsEl of ensureArray(
+      schema['Annotations'] || schema['edm:Annotations'] || [],
+    )) {
+      const target = str(annotationsEl['@_Target']);
+      if (!target) continue;
+      const annotations = parseAnnotations(annotationsEl);
+      if (annotations) targetedAnnotations.push({ target, annotations });
+    }
   }
 
   const metadata: ODataMetadata = {
@@ -522,6 +540,13 @@ export async function parseCSDL(
 
   expandAliasesInMetadata(
     metadata,
+    aliases,
+    new Set([...registry.keys()].map((ns) => ns.toLowerCase())),
+  );
+
+  applyTargetedAnnotations(
+    metadata,
+    targetedAnnotations,
     aliases,
     new Set([...registry.keys()].map((ns) => ns.toLowerCase())),
   );
@@ -599,6 +624,90 @@ function relationshipFromNavigationProperty(
       multiplicity: isCollection ? '1' : '*',
     },
   };
+}
+
+/**
+ * Apply `<Annotations Target="...">` blocks to the elements they name.
+ *
+ * CSDL puts most annotations in these blocks rather than inline on the element:
+ * it is the canonical form for annotating a type defined elsewhere, and the
+ * only way to annotate one property of a type. `parseAnnotations` reads direct
+ * `<Annotation>` children, so every block was dropped.
+ *
+ * An annotation declared on the element itself wins over a targeted one — the
+ * element's own declaration is the more specific statement.
+ *
+ * Targets that name nothing in the document are ignored rather than reported:
+ * an `Annotations` block commonly targets a type from an `edmx:Reference` that
+ * could not be loaded, which `unresolvedReferences` already covers.
+ */
+function applyTargetedAnnotations(
+  metadata: ODataMetadata,
+  targeted: Array<{ target: string; annotations: Record<string, string> }>,
+  aliases: Map<string, string>,
+  namespaces: Set<string>,
+): void {
+  const merge = (
+    current: Record<string, string> | undefined,
+    extra: Record<string, string>,
+  ): Record<string, string> => ({ ...extra, ...current });
+
+  for (const { target, annotations } of targeted) {
+    // The namespace guard added in #25 matters here too: a prefix that names an
+    // actual schema is a namespace, not an alias, so an annotation target
+    // cannot be rewritten into another document's namespace.
+    const expanded = expandAlias(target, aliases, namespaces);
+    const segments = expanded.split('/');
+
+    // `NS.Type/Prop`. Per CSDL a schema child must be namespace-qualified, so
+    // an unqualified first segment cannot be a type — requiring the dot keeps
+    // `C/Widgets` from matching a property named `Widgets` on some type `C`.
+    if (segments.length === 2 && segments[0].includes('.')) {
+      const owner = findEntityByName(metadata.entities, segments[0]);
+      if (owner) {
+        // Annotations apply to structural *or* navigation properties.
+        const property =
+          owner.properties.find((p) => p.name === segments[1]) ??
+          owner.navigationProperties.find((p) => p.name === segments[1]);
+        if (property) {
+          property.annotations = merge(property.annotations, annotations);
+          property.label = labelFromAnnotations(property.annotations) ?? property.label;
+          continue;
+        }
+      }
+    }
+
+    // `NS.Container/Set` — the spec form, and what `odata-demo-metadata.xml`
+    // uses (`ODataDemo.DemoService/Suppliers`). The unqualified `Container/Set`
+    // is accepted too, because it costs nothing and appears in hand-written
+    // documents.
+    if (segments.length === 2) {
+      const container = metadata.entityContainers.find(
+        (c) => c.name === segments[0] || `${c.namespace ?? ''}.${c.name}` === segments[0],
+      );
+      const set = container?.entitySets.find((s) => s.name === segments[1]);
+      if (set) {
+        set.annotations = merge(set.annotations, annotations);
+        set.label = labelFromAnnotations(set.annotations) ?? set.label;
+        continue;
+      }
+    }
+
+    if (segments.length === 1) {
+      // A type, or a container-less entity set name.
+      const entity = findEntityByName(metadata.entities, expanded);
+      if (entity) {
+        entity.annotations = merge(entity.annotations, annotations);
+        entity.label = labelFromAnnotations(entity.annotations) ?? entity.label;
+        continue;
+      }
+      const set = findEntitySet(metadata, expanded);
+      if (set) {
+        set.annotations = merge(set.annotations, annotations);
+        set.label = labelFromAnnotations(set.annotations) ?? set.label;
+      }
+    }
+  }
 }
 
 function parseEntitySet(entitySet: XmlElement): ODataEntitySet | null {
