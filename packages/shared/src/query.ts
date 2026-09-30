@@ -109,8 +109,70 @@ const INTEGER_RANGES: Record<string, { min: bigint; max: bigint }> = {
   'Edm.Int64': { min: -9223372036854775808n, max: 9223372036854775807n },
 };
 
-/** Floating types that must not be emitted as an infinite literal. */
-const FLOATING_TYPES = new Set(['Edm.Decimal', 'Edm.Double', 'Edm.Single']);
+/**
+ * Per-type magnitude caps for the non-integer types, checked explicitly
+ * because `Number.isFinite` only knows binary64:
+ *
+ * - `Edm.Single` is IEEE-754 binary32, whose maximum finite value is
+ *   2^128 - 2^104 = 3.4028234663852886e38. `Math.fround` is the right oracle:
+ *   it accepts exactly the literals that binary32 can hold, including
+ *   `3.4028235e38` (how .NET prints float.MaxValue, which rounds to the
+ *   finite maximum) while `1e39` and `3.4028236e38` round to Infinity. The
+ *   previous comparison against binary64 magnitude accepted the first as
+ *   finite and rejected the last two — but also rejected the round-trippable
+ *   float.MaxValue spelling, so a value a service returns could not be sent
+ *   back. `1e39` parses to a perfectly finite double, which is why the old
+ *   check needed replacing in both directions.
+ * - `Edm.Decimal` has no digit cap in the ABNF (decimalLiteral), and CSDL
+ *   imposes no general digit limit: `Precision` is optional and its default
+ *   is service-defined, and `Precision="floating"` explicitly permits values
+ *   like `9.999999e96`. The 38-digit bound below is therefore a *deliberate
+ *   product cap*, not a necessary condition derived from the spec: it matches
+ *   what mainstream fixed-precision stores can hold (SQL Server decimal(38,x);
+ *   .NET's SqlDecimal carries 28 digits of *scale*, not 38 digits of
+ *   precision) and keeps the builder from emitting queries most services will
+ *   reject. It is applied without consulting the property's `Precision`/`Scale`
+ *   facets, which this module does not carry, so a value beyond it may still
+ *   be legal for a service that declares floating precision. Before the cap
+ *   the limit was an accident of binary64: values up to ~1.797e308 slipped
+ *   through while a 400-digit integer overflowed to Infinity and was rejected
+ *   as "not a finite number". The check runs on the decimal digits rather
+ *   than on `Number(...)`: `Number('999…9')` (38 nines) rounds to the same
+ *   double as `1e38`, so a float comparison would reject the largest
+ *   in-cap 38-digit integer.
+ * - `Edm.Double` keeps the binary64 finiteness check below: its range *is*
+ *   binary64, so that check is the right oracle for it.
+ *
+ * INF/-INF/NaN are not part of these bounds: they are spelled nanInfinity in
+ * the ABNF and handled before the numeric parse.
+ */
+const DECIMAL_MAX_DIGITS = 38;
+
+/**
+ * Is the decimal within the deliberate 38-digit product cap, decided exactly
+ * on the decimal digits?
+ *
+ * A decimal literal is `m_int * 10^(exp - fracLen)` where m_int is the digit
+ * string without leading zeros, which is below 1e38 precisely when
+ * `digits(m_int) + exp - fracLen <= 38`. Pure integer arithmetic, so the
+ * boundary is not blurred by binary64 rounding. A zero mantissa is zero
+ * whatever the exponent says: `0e1000` is accepted.
+ */
+function decimalIsWithinBound(numeric: string): boolean {
+  const unsigned = numeric.replace(/^[+-]/, '');
+  let mantissa = unsigned;
+  let exp = 0;
+  const eIndex = unsigned.search(/[eE]/);
+  if (eIndex !== -1) {
+    mantissa = unsigned.slice(0, eIndex);
+    exp = Number(unsigned.slice(eIndex + 1));
+  }
+  const dotIndex = mantissa.indexOf('.');
+  const fracLen = dotIndex === -1 ? 0 : mantissa.length - dotIndex - 1;
+  const digits = mantissa.replace(/\./g, '').replace(/^0+/, '');
+  if (digits.length === 0) return true; // zero mantissa: 0 * 10^k = 0
+  return digits.length + exp - fracLen <= DECIMAL_MAX_DIGITS;
+}
 const DATE_TYPES = new Set(['Edm.Date', 'Edm.DateTimeOffset', 'Edm.DateTime']);
 
 /** Shape checks for the ISO 8601 forms OData V4 uses. */
@@ -122,7 +184,23 @@ const DATE_PATTERNS: Record<string, RegExp> = {
   'Edm.Duration': /^-?P(?!$)(\d+Y)?(\d+M)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+(\.\d+)?S)?)?$/,
 };
 
-/** Reject values like 2024-13-45 or "yesterday" that a service would refuse. */
+/**
+ * Does the calendar actually have this date? `Date` rolls 2024-02-31 over to
+ * 2024-03-02, so comparing the fields after the round-trip catches 31-day
+ * months, non-leap February 29ths and month 13 alike. `setUTCFullYear` is used
+ * rather than `Date.UTC(year, ...)`, which maps years 0-99 into the 1900s.
+ */
+function isRealCalendarDate(year: string, month: string, day: string): boolean {
+  const date = new Date(0);
+  date.setUTCFullYear(Number(year), Number(month) - 1, Number(day));
+  return (
+    date.getUTCFullYear() === Number(year) &&
+    date.getUTCMonth() === Number(month) - 1 &&
+    date.getUTCDate() === Number(day)
+  );
+}
+
+/** Reject values like 2024-13-45, 2024-02-31 or "yesterday" that a service would refuse. */
 function isPlausibleDateTime(type: string, raw: string): boolean {
   const pattern = DATE_PATTERNS[type];
   if (!pattern) return true;
@@ -131,16 +209,8 @@ function isPlausibleDateTime(type: string, raw: string): boolean {
   if (type === 'Edm.Duration') return true;
 
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw.trim());
-  if (match) {
-    const [, year, month, day] = match;
-    const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
-    if (
-      date.getUTCFullYear() !== Number(year) ||
-      date.getUTCMonth() !== Number(month) - 1 ||
-      date.getUTCDate() !== Number(day)
-    ) {
-      return false;
-    }
+  if (match && !isRealCalendarDate(match[1], match[2], match[3])) {
+    return false;
   }
 
   const time = /T(\d{2}):(\d{2}):(\d{2})/.exec(raw.trim());
@@ -197,11 +267,37 @@ export function formatV4Literal(value: string, edmType?: string): string {
       return numeric;
     }
 
+    // nanInfinity = "NaN" / "-INF" / "INF" is an alternative of
+    // decimalLiteral, which the ABNF shares between doubleLiteral and
+    // singleLiteral: these are legal literals for the binary floating types
+    // and refusing them was the same defect as accepting too much elsewhere.
+    // Edm.Decimal cannot represent them (no decimal implementation has a NaN
+    // or an infinity) and the integer rules do not admit them, so they are
+    // rejected there with a message that says why.
+    if (numeric === 'NaN' || numeric === 'INF' || numeric === '-INF') {
+      if (type === 'Edm.Double' || type === 'Edm.Single') return numeric;
+      throw new Error(
+        `Invalid ${type} value: ${raw} (${numeric} is only valid for Edm.Double or Edm.Single)`,
+      );
+    }
+
     if (!isNumericLiteral(numeric)) {
       throw new Error(`Invalid ${type} value: ${raw}`);
     }
-    if (FLOATING_TYPES.has(type) && !Number.isFinite(Number(numeric))) {
-      // `1e999` parses to Infinity: a number syntactically, not a usable literal.
+    if (type === 'Edm.Single') {
+      // The oracle is binary32, not binary64: `3.4028235e38` is .NET's
+      // float.MaxValue spelling and rounds back to the finite maximum, while
+      // `3.4028236e38` and `1e39` round to Infinity.
+      if (!Number.isFinite(Math.fround(Number(numeric)))) {
+        throw new Error(`Invalid Edm.Single value: ${raw} (not a finite binary32 value)`);
+      }
+    } else if (type === 'Edm.Decimal') {
+      if (!decimalIsWithinBound(numeric)) {
+        throw new Error(`Invalid Edm.Decimal value: ${raw} (out of range, magnitude < 1e38)`);
+      }
+    } else if (!Number.isFinite(Number(numeric))) {
+      // Edm.Double: `1e999` parses to Infinity — a number syntactically, not
+      // a usable literal.
       throw new Error(`Invalid ${type} value: ${raw} (not a finite number)`);
     }
     return numeric;
@@ -294,13 +390,220 @@ const SELECT_ITEM =
  * quoted value allows only characters that are legal raw *or* a well-formed
  * percent escape. `/` and `\` are excluded even though both are legal inside an
  * OData string: they are the path separator, and WHATWG URL normalizes `\` to
- * `/`, so `Parts('a/b')` would address a different resource. `%XX` is allowed
- * so a value that genuinely needs a space or a slash can be spelled legibly —
- * which is also what the MCP key builder emits.
+ * `/`, so `Parts('a/b')` would address a different resource. `%20`-`%26` and
+ * `%28`-`%2F` are allowed so a value that genuinely needs a space or a slash
+ * can be spelled legibly — which is also what the MCP key builder emits — but
+ * `%27` is not content: `SQUOTE = "'" / "%27"` makes it a quote, so the
+ * predicate is normalised before parsing and the quoted-value matcher accepts
+ * only `pct-encoded-no-SQUOTE` (which also excludes `%70`-`%7F`).
+ *
+ * The predicate is validated by a small parser instead of one regex, because
+ * the ABNF rules (oasis-tcs/odata-abnf: `compoundKey = OPEN keyValuePair *(
+ * COMMA keyValuePair )`) are structural: once a comma appears, *every*
+ * element must be `name=value`, and `keyPropertyValue` is a choice of
+ * literal shapes — no `null` alternative. Each value is checked against those
+ * shapes rather than against a permissive character class; numeric tokens may
+ * be `int64Literal = [ SIGN ] 1*19DIGIT` (range-restricted) or the uncapped
+ * `decimalLiteral`.
  */
+
+/** An OData key property name: `odataIdentifier` in the ABNF. */
+const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 // prettier-ignore
-const KEY_PREDICATE =
-  /^\((?:[A-Za-z_][A-Za-z0-9_]*=)?(?:'(?:[^'%/\\?#&\s\p{Cc}]|%[0-9A-Fa-f]{2}|'')*'|[A-Za-z0-9_.:+-]+)(?:,(?:[A-Za-z_][A-Za-z0-9_]*=)?(?:'(?:[^'%/\\?#&\s\p{Cc}]|%[0-9A-Fa-f]{2}|'')*'|[A-Za-z0-9_.:+-]+))*\)$/u;
+const KEY_QUOTED_INNER = /^(?:[^'%/\\?#&\s\p{Cc}]|%(?:[01345689A-Fa-f][0-9A-Fa-f]|2[01345689A-Fa-f])|'')*$/u;
+
+const KEY_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/** `[ SIGN ] 1*DIGIT`: a bare integer token, i.e. int64Literal in a URL. */
+const KEY_BARE_INTEGER = /^[+-]?\d+$/;
+
+/**
+ * decimalLiteral = [ SIGN ] 1*DIGIT [ "." 1*DIGIT ] [ "e" [ SIGN ] 1*DIGIT ],
+ * shared with doubleLiteral/singleLiteral. `E` is accepted next to the ABNF's
+ * lowercase `e`, matching `isNumericLiteral` elsewhere in this module.
+ */
+const KEY_DECIMAL = /^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+
+/** date = year "-" month "-" day, with ABNF month/day ranges. */
+const KEY_DATE = /^(-?)(\d{4})-(\d{2})-(\d{2})$/;
+
+/** dateTimeOffsetLiteral = date "T" timeOfDayLiteral ( "Z" / SIGN hour COLON minute ). */
+// prettier-ignore
+const KEY_DATE_TIME = /^(-?)(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+
+/** timeOfDayLiteral = hour COLON minute [ COLON second [ "." 1*DIGIT ] ]. */
+const KEY_TIME = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/;
+
+function inRange(digitPair: string, min: number, max: number): boolean {
+  const n = Number(digitPair);
+  return n >= min && n <= max;
+}
+
+function validDateFields(year: string, month: string, day: string): boolean {
+  return isRealCalendarDate(year, month, day);
+}
+
+function validTimeFields(hour: string, minute: string, second?: string): boolean {
+  if (!inRange(hour, 0, 23) || !inRange(minute, 0, 59)) return false;
+  // The ABNF allows second = 60 for leap seconds.
+  if (second !== undefined && !inRange(second, 0, 60)) return false;
+  return true;
+}
+
+/** Shape plus field ranges for bare date, date-time and time-of-day tokens. */
+function isValidKeyTemporal(value: string): boolean {
+  // Groups: [1] sign, [2] year, [3] month, [4] day, [5] hour, [6] minute,
+  // [7] second, [8] zone.
+  const date = KEY_DATE.exec(value);
+  if (date) return validDateFields(date[2], date[3], date[4]);
+
+  const dateTime = KEY_DATE_TIME.exec(value);
+  if (dateTime) {
+    if (!validDateFields(dateTime[2], dateTime[3], dateTime[4])) return false;
+    if (!validTimeFields(dateTime[5], dateTime[6], dateTime[7])) return false;
+    const offset = dateTime[8];
+    if (offset === 'Z') return true;
+    return inRange(offset.slice(1, 3), 0, 23) && inRange(offset.slice(4, 6), 0, 59);
+  }
+
+  const time = KEY_TIME.exec(value);
+  if (time) return validTimeFields(time[1], time[2], time[3]);
+
+  return false;
+}
+
+/** An unquoted value must be one of the keyPropertyValue alternatives. */
+function isValidKeyUnquotedValue(value: string): boolean {
+  if (value === 'true' || value === 'false') return true;
+  // nanInfinity, exactly these three spellings (the ABNF has no `+INF`).
+  if (value === 'NaN' || value === 'INF' || value === '-INF') return true;
+  if (KEY_GUID.test(value)) return true;
+
+  if (KEY_BARE_INTEGER.test(value) && value.replace(/^[+-]/, '').length <= 19) {
+    // A token of at most 19 digits has the int64Literal shape, so it is held
+    // to the ABNF rule's semantic restriction, the int64 range. A longer
+    // token is not an int64Literal at all and falls through instead.
+    const range = INTEGER_RANGES['Edm.Int64'];
+    const parsed = BigInt(value);
+    if (parsed < range.min || parsed > range.max) return false;
+  }
+
+  // decimalLiteral = [ SIGN ] 1*DIGIT has no digit cap and no range, so every
+  // bare integer that is not rejected as an out-of-range int64Literal — and
+  // that includes 27-digit spellings of small values like
+  // `000000000000000000000000001` — is accepted here.
+  if (KEY_DECIMAL.test(value)) return true;
+
+  return isValidKeyTemporal(value);
+}
+
+function isValidKeyValue(value: string): boolean {
+  if (value.startsWith("'")) {
+    return value.length >= 2 && value.endsWith("'") && KEY_QUOTED_INNER.test(value.slice(1, -1));
+  }
+  return isValidKeyUnquotedValue(value);
+}
+
+/**
+ * Split predicate content on top-level commas. Quotes are tracked (with `''`
+ * as an escaped quote); a structural paren outside quotes or an unbalanced
+ * quote makes the predicate invalid, signalled by null.
+ */
+function splitKeyElements(content: string): string[] | null {
+  const elements: string[] = [];
+  let current = '';
+  let inQuote = false;
+
+  for (let i = 0; i < content.length; i += 1) {
+    const char = content[i];
+    if (inQuote) {
+      if (char === "'") {
+        if (content[i + 1] === "'") {
+          current += "''";
+          i += 1;
+          continue;
+        }
+        inQuote = false;
+      }
+      current += char;
+      continue;
+    }
+    if (char === "'") {
+      inQuote = true;
+      current += char;
+      continue;
+    }
+    // Parens are legal inside a quoted value (sub-delims) but outside them
+    // they would be URL structure the predicate does not own.
+    if (char === '(' || char === ')') return null;
+    if (char === ',') {
+      elements.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (inQuote) return null;
+  elements.push(current);
+  return elements;
+}
+
+/** Index of `target` outside quotes, or -1 (also -1 for an odd quote count). */
+function indexOfUnquoted(text: string, target: string): number {
+  let inQuote = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (inQuote) {
+      if (char === "'") {
+        if (text[i + 1] === "'") {
+          i += 1;
+          continue;
+        }
+        inQuote = false;
+      }
+      continue;
+    }
+    if (char === "'") {
+      inQuote = true;
+      continue;
+    }
+    if (char === target) return i;
+  }
+  return -1;
+}
+
+/** Validate `(...)` against `keyPredicate = simpleKey / compoundKey`. */
+function isValidKeyPredicate(predicate: string): boolean {
+  // SQUOTE = "'" / "%27": the ABNF makes the two spellings one token, so a
+  // `%27` can open, close, or (doubled) escape a quoted value. Normalising
+  // first makes the quote-aware scanner see the tokens the decoder will:
+  // `Parts('a%27b')` becomes `Parts('a'b')` and is rejected as unbalanced,
+  // while `Parts('O%27%27Brien')` becomes `Parts('O''Brien')`.
+  const normalized = predicate.replace(/%27/g, "'");
+  if (normalized.length < 3 || !normalized.startsWith('(') || !normalized.endsWith(')')) {
+    return false;
+  }
+
+  const elements = splitKeyElements(normalized.slice(1, -1));
+  if (elements === null || elements.length === 0) return false;
+
+  for (const element of elements) {
+    if (element.length === 0) return false;
+    const eq = indexOfUnquoted(element, '=');
+    if (eq === -1) {
+      // simpleKey: one positional value. compoundKey admits no positional
+      // element, so with a comma present every element must be name=value —
+      // positional and named cannot be mixed.
+      if (elements.length > 1) return false;
+      if (!isValidKeyValue(element)) return false;
+      continue;
+    }
+    if (eq === 0 || !KEY_NAME.test(element.slice(0, eq))) return false;
+    if (!isValidKeyValue(element.slice(eq + 1))) return false;
+  }
+  return true;
+}
 
 /**
  * Validate the single resource path segment the URL is built from (an entity
@@ -343,7 +646,7 @@ function assertResourceSegment(entitySet: string): string {
     if (!RESOURCE_SEGMENT.test(segment)) throw rejection();
   }
 
-  if (predicate && !KEY_PREDICATE.test(predicate)) throw rejection();
+  if (predicate && !isValidKeyPredicate(predicate)) throw rejection();
 
   return entitySet;
 }
