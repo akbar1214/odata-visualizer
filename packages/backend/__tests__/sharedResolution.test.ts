@@ -3,40 +3,50 @@ import { describe, it, expect } from 'vitest';
 import config from '../vitest.config';
 
 /**
- * `@odata-visualizer/shared` declares `exports` pointing at `./dist`, a
- * gitignored build artifact that nothing built before `pnpm test`.
+ * `@odata-visualizer/shared` and `@odata-visualizer/mcp` both declare `exports`
+ * pointing at `./dist`, which is gitignored and never built by `pnpm test`.
  *
- * Verified by hiding `packages/shared/dist`: on a fresh clone 9 of 11 backend
- * test files failed to load with `Failed to resolve entry for package
- * "@odata-visualizer/shared"` and only 28 of 113 tests ran; on an existing
- * clone the suite passed while exercising whatever stale build was on disk.
+ * Verified by hiding both directories (a true fresh clone):
+ *   - `shared` hidden only: 9 of 11 backend test files failed to load, 28 ran
+ *   - `mcp` hidden only:    8 of 11 backend test files failed to load, 39 ran
+ *   - both hidden:          back to 28 of 113
  *
- * The alias in `vitest.config.ts` is what prevents this, so assert it exists.
+ * The aliases in `vitest.config.ts` are what prevent this, so assert they exist.
  * This checks the configuration rather than the running module graph because
- * Vitest's SSR transform does not provide `import.meta.resolve`.
+ * Vitest's SSR transform does not provide `import.meta.resolve`. It is a shape
+ * assertion: it would not notice a refactor that kept the behaviour but changed
+ * the form, and it can only fail for the reason it describes.
  */
-describe('shared package resolution', () => {
+describe('workspace package resolution', () => {
   const aliases = (config.resolve?.alias ?? []) as Array<{ find: string; replacement: string }>;
 
+  const expected: Array<[specifier: string, packageDir: string, sourceFile: string]> = [
+    ['@odata-visualizer/shared', 'shared', 'index.ts'],
+    ['@odata-visualizer/shared/load', 'shared', 'load.ts'],
+    ['@odata-visualizer/mcp', 'mcp', 'index.ts'],
+    ['@odata-visualizer/mcp/server', 'mcp', 'server.ts'],
+  ];
+
+  it.each(expected)(
+    'aliases %s to source, not to a build artifact',
+    (specifier, packageDir, sourceFile) => {
+      const match = aliases.find((alias) => alias.find === specifier);
+
+      expect(match, `no alias configured for ${specifier}`).toBeDefined();
+      expect(match!.replacement).toContain(`/${packageDir}/src/`);
+      expect(match!.replacement).toContain(sourceFile);
+      expect(match!.replacement).not.toContain(`/${packageDir}/dist/`);
+    },
+  );
+
   it.each([
-    ['@odata-visualizer/shared', 'index.ts'],
-    ['@odata-visualizer/shared/load', 'load.ts'],
-  ])('aliases %s to source, not to a build artifact', (specifier, sourceFile) => {
-    const match = aliases.find((alias) => alias.find === specifier);
-
-    expect(match, `no alias configured for ${specifier}`).toBeDefined();
-    expect(match!.replacement).toContain('/shared/src/');
-    expect(match!.replacement).toContain(sourceFile);
-    expect(match!.replacement).not.toContain('/shared/dist/');
-  });
-
-  it('lists the subpath alias before the bare specifier', () => {
-    // Vite picks the first matching alias, so `shared/load` has to come first
-    // or it would be swallowed by the `shared` entry.
+    ['@odata-visualizer/shared/load', '@odata-visualizer/shared'],
+    ['@odata-visualizer/mcp/server', '@odata-visualizer/mcp'],
+  ])('lists the %s subpath alias before its bare package', (subpath, bare) => {
+    // Vite picks the first matching alias, so a subpath has to come first or it
+    // would be swallowed by the bare package entry.
     const index = (specifier: string) => aliases.findIndex((a) => a.find === specifier);
 
-    expect(index('@odata-visualizer/shared/load')).toBeLessThan(
-      index('@odata-visualizer/shared'),
-    );
+    expect(index(subpath)).toBeLessThan(index(bare));
   });
 });

@@ -2,29 +2,31 @@ import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 
 /**
- * Resolve `@odata-visualizer/shared` to its source rather than `dist`.
+ * Resolve workspace packages to their source rather than their `dist` output.
  *
- * The package's `exports` map points at `./dist`, which is a gitignored build
- * artifact. Nothing built it before `pnpm test`, so on a fresh clone the entry
- * could not be resolved and 9 of 11 backend test files failed to load
- * (`Failed to resolve entry for package "@odata-visualizer/shared"`), while an
- * existing clone silently ran against whatever stale build happened to be on
- * disk.
+ * Both `@odata-visualizer/shared` and `@odata-visualizer/mcp` declare `exports`
+ * pointing at `./dist`, which is gitignored and not built by `pnpm test`. On a
+ * fresh clone neither entry resolves at all — 9 of 11 backend test files failed
+ * to load and only 28 of 113 tests ran — and with a stale build on disk the
+ * suite passes while exercising old code.
+ *
+ * `@odata-visualizer/mcp` matters as much as `shared`: the backend mounts the
+ * MCP server, so `mcp.ts` and `metadataStore.ts` import
+ * `@odata-visualizer/mcp/server`. Aliasing only `shared` left 8 of 11 files
+ * failing to load.
  */
-const sharedSrc = fileURLToPath(new URL('../shared/src/index.ts', import.meta.url));
-const sharedLoadSrc = fileURLToPath(new URL('../shared/src/load.ts', import.meta.url));
+function src(relative: string): string {
+  return fileURLToPath(new URL(relative, import.meta.url));
+}
 
 export default defineConfig({
   resolve: {
     alias: [
-      // Longest specifier first: `shared/load` must win over `shared`.
-      { find: '@odata-visualizer/shared/load', replacement: sharedLoadSrc },
-      { find: '@odata-visualizer/shared', replacement: sharedSrc },
+      // Longest specifier first: a subpath alias must win over its bare package.
+      { find: '@odata-visualizer/shared/load', replacement: src('../shared/src/load.ts') },
+      { find: '@odata-visualizer/shared', replacement: src('../shared/src/index.ts') },
+      { find: '@odata-visualizer/mcp/server', replacement: src('../mcp/src/server.ts') },
+      { find: '@odata-visualizer/mcp', replacement: src('../mcp/src/index.ts') },
     ],
-  },
-  test: {
-    globals: true,
-    environment: 'node',
-    include: ['__tests__/**/*.test.ts'],
   },
 });

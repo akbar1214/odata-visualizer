@@ -4,14 +4,14 @@ import { fileURLToPath } from 'node:url';
 /**
  * Resolve `@odata-visualizer/shared` to its source rather than `dist`.
  *
- * The package's `exports` map points at `./dist`, which is a gitignored build
- * artifact. Nothing built it before `pnpm test`, so on a fresh clone the entry
- * could not be resolved at all and 183 of the 368 tests silently failed to
- * load (`Failed to resolve entry for package "@odata-visualizer/shared"`), and
- * on an existing clone the suite happily ran against a stale build.
+ * The package's `exports` map points at `./dist`, a gitignored build artifact
+ * that nothing builds before `pnpm test`. On a fresh clone the entry does not
+ * resolve and the suite fails loudly — 2 of 3 test files, 65 of 70 tests. With a
+ * stale build present the suite instead passes while exercising old code, which
+ * is the more dangerous of the two failure modes.
  *
- * Tests should exercise the source they are sitting next to; the build output
- * is only needed by the compiled `dist` consumers.
+ * Tests should exercise the source they sit next to; `dist` remains the entry
+ * point for the compiled consumers.
  */
 const sharedSrc = fileURLToPath(new URL('../shared/src/index.ts', import.meta.url));
 const sharedLoadSrc = fileURLToPath(new URL('../shared/src/load.ts', import.meta.url));

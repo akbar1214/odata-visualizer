@@ -7,13 +7,14 @@ import { fileURLToPath } from 'node:url';
  *
  * The package's `exports` map points at `./dist`, a gitignored build artifact
  * that nothing builds before `pnpm test`. Verified by hiding
- * `packages/shared/dist`: 9 of the 11 frontend test files failed to load, and
- * with a stale build present the suite passed while testing the wrong code.
+ * `packages/shared/dist`: 9 of the 11 frontend test files fail to load (76 of 87
+ * tests do not run), and with a stale build present the suite passes while
+ * testing the wrong code.
  *
  * This alias is load-bearing. There is no test asserting it, because Vitest's
- * browser runner has no access to `node:fs` and cannot resolve module paths;
- * the equivalent guards live in the `mcp` and `backend` suites, which run in
- * Node. Remove it and the fresh-clone failure comes straight back.
+ * browser runner has no access to `node:fs` and cannot resolve module paths; the
+ * equivalent guards live in the `mcp` and `backend` suites, which run in Node.
+ * Remove it and the fresh-clone failure comes straight back.
  */
 const sharedSrc = fileURLToPath(new URL('../shared/src/index.ts', import.meta.url));
 
