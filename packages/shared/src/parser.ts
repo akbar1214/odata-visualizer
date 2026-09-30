@@ -526,11 +526,16 @@ function relationshipFromNavigationProperty(
     namespace,
     from: {
       entity: entity.name,
+      entityQualified: entity.qualifiedName,
       role: nav.fromRole || entity.name,
       multiplicity: isCollection ? '*' : '1',
     },
     to: {
       entity: nav.targetType,
+      // The parser keeps the qualified target (`nav.targetTypeQualified`) but
+      // this used to drop it, so consumers could only guess between types that
+      // share a short name across namespaces.
+      entityQualified: nav.targetTypeQualified,
       role: nav.toRole || nav.targetType,
       multiplicity: isCollection ? '1' : '*',
     },
@@ -911,6 +916,9 @@ function parseAssociationEnd(end: XmlElement): ODataAssociationEnd | null {
 
   return {
     entity,
+    // `shortName` throws the namespace away; keep it so the diagram can tell
+    // two same-named types apart.
+    entityQualified: type && type.includes('.') ? type : undefined,
     role,
     multiplicity,
   };

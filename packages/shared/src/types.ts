@@ -51,6 +51,8 @@ export interface ODataEntity {
 /** Association end */
 export interface ODataAssociationEnd {
   entity: string;
+  /** Fully qualified endpoint type when the document provides one. */
+  entityQualified?: string;
   role: string;
   multiplicity: string;
 }
