@@ -87,8 +87,18 @@ const NUMERIC_TYPES = new Set([
   'Edm.Single',
 ]);
 
-/** Integral EDM types take an optional sign and digits only — no fraction, no exponent. */
-const INTEGER_TYPES = new Set(['Edm.Byte', 'Edm.SByte', 'Edm.Int16', 'Edm.Int32', 'Edm.Int64']);
+/**
+ * Integral EDM types take an optional sign and digits only — no fraction, no
+ * exponent. Exported so consumers that re-encode a literal (the MCP action
+ * body) apply exactly the same rule the formatter validated.
+ */
+export const INTEGER_TYPES = new Set([
+  'Edm.Byte',
+  'Edm.SByte',
+  'Edm.Int16',
+  'Edm.Int32',
+  'Edm.Int64',
+]);
 
 /** Inclusive bounds, as BigInt so `Edm.Int64` survives 64-bit values. */
 const INTEGER_RANGES: Record<string, { min: bigint; max: bigint }> = {

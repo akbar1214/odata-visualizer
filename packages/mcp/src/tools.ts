@@ -17,6 +17,7 @@ import {
   getEffectiveKeys,
   getEffectiveNavigationProperties,
   getEffectiveProperties,
+  INTEGER_TYPES,
   resolveInheritanceChain,
   resourcePathOf,
   suggestNames,
@@ -457,6 +458,43 @@ function coerceBodyValue(type: string, value: unknown, metadata: ODataMetadata):
   return coerceScalar(type, value, metadata);
 }
 
+/**
+ * A decimal literal's value as sign, significant digits and power of ten, so
+ * two spellings can be compared exactly: `1.50`, `15e-1` and `1.5` all become
+ * `{ negative: false, digits: '15', exponent: -1 }`. Zero normalises to an
+ * empty digit string, so `0`, `0.000` and `-0` compare equal.
+ */
+interface DecimalValue {
+  negative: boolean;
+  digits: string;
+  exponent: number;
+}
+
+function parseDecimalValue(text: string): DecimalValue | null {
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(text.trim());
+  if (!match) return null;
+  const [, sign, intPart, fraction = '', exponentPart = '0'] = match;
+
+  let digits = intPart + fraction;
+  let exponent = Number(exponentPart) - fraction.length;
+  digits = digits.replace(/^0+/, '');
+  if (digits.length === 0) return { negative: false, digits: '', exponent: 0 };
+
+  while (digits.endsWith('0')) {
+    digits = digits.slice(0, -1);
+    exponent += 1;
+  }
+  return { negative: sign === '-', digits, exponent };
+}
+
+/** Do two decimal spellings denote the same decimal value? */
+function denotesSameDecimal(left: string, right: string): boolean {
+  const a = parseDecimalValue(left);
+  const b = parseDecimalValue(right);
+  if (!a || !b) return false;
+  return a.negative === b.negative && a.digits === b.digits && a.exponent === b.exponent;
+}
+
 function coerceScalar(type: string, value: unknown, metadata: ODataMetadata): unknown {
   if (value === null || value === undefined) return value;
 
@@ -482,9 +520,39 @@ function coerceScalar(type: string, value: unknown, metadata: ODataMetadata): un
     type === 'Edm.Byte' ||
     type === 'Edm.SByte'
   ) {
-    const num = Number(value);
-    if (Number.isNaN(num)) {
-      throw new Error(`Invalid ${type} value: ${String(value)}`);
+    // Syntax and EDM range checks come from the shared literal formatter —
+    // the same `[sign] 1*10DIGIT` pattern and BigInt bounds #23 fixed for
+    // query literals — so the body and the URL cannot disagree about what is
+    // valid. The JSON body needs the number behind that literal, so convert
+    // only after validation, and only when the conversion is exact: `Number`
+    // would otherwise turn `1e999` into `Infinity` (JSON `null`) and silently
+    // round Int64 values past 2^53.
+    const literal = formatV4Literal(String(value), type);
+    const num = Number(literal);
+    if (!Number.isFinite(num)) {
+      // `formatV4Literal` maps the string "null" to a null literal; in a JSON
+      // body null is the value, never the string.
+      throw new Error(`Invalid ${type} value: ${String(value)} (expected a number)`);
+    }
+    if (INTEGER_TYPES.has(type) && BigInt(JSON.stringify(num)) !== BigInt(literal)) {
+      // `BigInt(literal) !== BigInt(num)` is not enough: `num` can hold the
+      // exact value while `JSON.stringify` prints the shortest round-tripping
+      // decimal, which may use different digits (2^62 -> 4611686018427388000).
+      // Integer EDM types are range-capped below 1e21, so `JSON.stringify`
+      // never switches to exponent notation for them and `BigInt` always
+      // parses the result. The set comes from the shared formatter so the
+      // guard cannot drift out of step with the syntax it validated.
+      throw new Error(
+        `Invalid ${type} value: ${String(value)} (cannot be represented exactly as a JSON number)`,
+      );
+    }
+    if (type === 'Edm.Decimal' && !denotesSameDecimal(literal, JSON.stringify(num))) {
+      // Decimal is a decimal type, so the JSON text must denote the same
+      // decimal the caller sent: `Number` may round it, and even when it does
+      // not, `JSON.stringify` may print a different (shortest) spelling.
+      throw new Error(
+        `Invalid ${type} value: ${String(value)} (cannot be represented exactly as a JSON number)`,
+      );
     }
     return num;
   }
