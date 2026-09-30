@@ -237,3 +237,42 @@ describe('odata-demo-metadata.xml', () => {
     expect(product.annotations).toBeDefined();
   });
 });
+
+/**
+ * The same guard #25 added for type references applies to annotation targets: a
+ * prefix that names an actual schema is a namespace, not an alias, so a target
+ * must not be rewritten into another document's namespace.
+ */
+describe('target alias expansion respects real namespaces', () => {
+  const csdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Y" Alias="Other" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="Other" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="OtherId" /></Key>
+        <Property Name="OtherId" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Annotations Target="Other.Widget">
+        <Annotation Term="Core.Description" String="The other one" />
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('does not rewrite a target whose prefix is a real schema', async () => {
+    const model = await parseCSDL(csdl);
+    const other = model.entities.find((e) => e.qualifiedName === 'Other.Widget')!;
+    const y = model.entities.find((e) => e.qualifiedName === 'Y.Widget')!;
+
+    // `Other` is a schema here, so the block targets it — not `Y.Widget` via
+    // the `Alias="Other"` declared on the other schema.
+    expect(other.annotations?.['Core.Description']).toBe('The other one');
+    expect(y.annotations).toBeUndefined();
+  });
+});
