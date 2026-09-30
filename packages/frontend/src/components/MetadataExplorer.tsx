@@ -263,7 +263,9 @@ export function MetadataExplorer({
                     entity={entity}
                     matchReason={match.reasons.join(', ')}
                     isExpanded={expandedEntity === entityKey}
-                    isSelected={selectedEntity === entity.name}
+                    isSelected={
+                      selectedEntity === entity.name || selectedEntity === entity.qualifiedName
+                    }
                     metadata={metadata}
                     onToggle={() => handleEntityToggle(entityKey, entity.name)}
                     onNavigate={onEntitySelect}
