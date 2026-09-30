@@ -282,7 +282,7 @@ export function createMcpServer(
     'build_action_invocation',
     {
       description:
-        'Build a POST request (URL, JSON body, curl example) to invoke an action. Bound actions require entitySet + keys. Does not execute the request.',
+        'Build a POST request (URL, JSON body, curl example) to invoke an action. Bound actions require entitySet + keys. Numeric parameters take numeric literals only; booleans and empty strings are rejected rather than coerced to 1/0. Does not execute the request.',
       inputSchema: {
         actionName: z.string().describe('Action name, e.g. "GetPartStructure"'),
         entitySet: z.string().optional().describe('Required for bound actions, e.g. "Parts"'),

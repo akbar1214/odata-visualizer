@@ -17,6 +17,7 @@ import {
   getEffectiveKeys,
   getEffectiveNavigationProperties,
   getEffectiveProperties,
+  INTEGER_TYPES,
   resolveInheritanceChain,
   resourcePathOf,
   suggestNames,
@@ -458,18 +459,41 @@ function coerceBodyValue(type: string, value: unknown, metadata: ODataMetadata):
 }
 
 /**
- * EDM types that hold whole numbers. Mirrors `INTEGER_TYPES` in
- * `@odata-visualizer/shared`'s query module (which is not exported): these
- * take `[sign] 1*10DIGIT` only, are range-checked against their EDM bounds,
- * and must survive the trip through `Number` exactly.
+ * A decimal literal's value as sign, significant digits and power of ten, so
+ * two spellings can be compared exactly: `1.50`, `15e-1` and `1.5` all become
+ * `{ negative: false, digits: '15', exponent: -1 }`. Zero normalises to an
+ * empty digit string, so `0`, `0.000` and `-0` compare equal.
  */
-const INTEGER_BODY_TYPES = new Set([
-  'Edm.Byte',
-  'Edm.SByte',
-  'Edm.Int16',
-  'Edm.Int32',
-  'Edm.Int64',
-]);
+interface DecimalValue {
+  negative: boolean;
+  digits: string;
+  exponent: number;
+}
+
+function parseDecimalValue(text: string): DecimalValue | null {
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(text.trim());
+  if (!match) return null;
+  const [, sign, intPart, fraction = '', exponentPart = '0'] = match;
+
+  let digits = intPart + fraction;
+  let exponent = Number(exponentPart) - fraction.length;
+  digits = digits.replace(/^0+/, '');
+  if (digits.length === 0) return { negative: false, digits: '', exponent: 0 };
+
+  while (digits.endsWith('0')) {
+    digits = digits.slice(0, -1);
+    exponent += 1;
+  }
+  return { negative: sign === '-', digits, exponent };
+}
+
+/** Do two decimal spellings denote the same decimal value? */
+function denotesSameDecimal(left: string, right: string): boolean {
+  const a = parseDecimalValue(left);
+  const b = parseDecimalValue(right);
+  if (!a || !b) return false;
+  return a.negative === b.negative && a.digits === b.digits && a.exponent === b.exponent;
+}
 
 function coerceScalar(type: string, value: unknown, metadata: ODataMetadata): unknown {
   if (value === null || value === undefined) return value;
@@ -510,9 +534,22 @@ function coerceScalar(type: string, value: unknown, metadata: ODataMetadata): un
       // body null is the value, never the string.
       throw new Error(`Invalid ${type} value: ${String(value)} (expected a number)`);
     }
-    if (INTEGER_BODY_TYPES.has(type) && BigInt(literal) !== BigInt(num)) {
-      // A JS number cannot carry every Edm.Int64; emitting the rounded value
-      // would send a different number than the caller asked for.
+    if (INTEGER_TYPES.has(type) && BigInt(JSON.stringify(num)) !== BigInt(literal)) {
+      // `BigInt(literal) !== BigInt(num)` is not enough: `num` can hold the
+      // exact value while `JSON.stringify` prints the shortest round-tripping
+      // decimal, which may use different digits (2^62 -> 4611686018427388000).
+      // Integer EDM types are range-capped below 1e21, so `JSON.stringify`
+      // never switches to exponent notation for them and `BigInt` always
+      // parses the result. The set comes from the shared formatter so the
+      // guard cannot drift out of step with the syntax it validated.
+      throw new Error(
+        `Invalid ${type} value: ${String(value)} (cannot be represented exactly as a JSON number)`,
+      );
+    }
+    if (type === 'Edm.Decimal' && !denotesSameDecimal(literal, JSON.stringify(num))) {
+      // Decimal is a decimal type, so the JSON text must denote the same
+      // decimal the caller sent: `Number` may round it, and even when it does
+      // not, `JSON.stringify` may print a different (shortest) spelling.
       throw new Error(
         `Invalid ${type} value: ${String(value)} (cannot be represented exactly as a JSON number)`,
       );
