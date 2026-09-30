@@ -46,9 +46,11 @@ export interface AggregateNode {
 export interface QueryOptions {
   entitySet: string;
   /**
-   * Entity type used to resolve property types and expand targets when
-   * `entitySet` is not an actual entity set (the UI previews `/Part?...` using
-   * the type name). The URL still uses `entitySet`.
+   * Entity type the query is *about*, used to resolve property types and
+   * `$expand` targets. Needed when `entitySet` is a derived-type cast
+   * (`Products/Model.FeaturedProduct`), where the path segment is the set but
+   * literals must still be typed from the derived type. Defaults to the type
+   * declared by `entitySet`.
    */
   rootEntityName?: string;
   filters?: FilterClause[];
@@ -217,9 +219,9 @@ const SIMPLE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const PROPERTY_PATH = /^[A-Za-z_][A-Za-z0-9_]*(?:\/[A-Za-z_][A-Za-z0-9_]*)*$/;
 
 /**
- * One `/`-separated resource path segment. Dots are allowed because the
- * builder UI addresses an entity by its qualified type name
- * (`SampleService.Models.Part`), which is not a property path.
+ * One `/`-separated resource path segment. Dots are allowed because a derived
+ * type is addressed with a qualified cast (`Products/Model.FeaturedProduct`),
+ * which is not a property path.
  */
 const RESOURCE_SEGMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 

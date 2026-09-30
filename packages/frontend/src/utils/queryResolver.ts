@@ -209,28 +209,44 @@ function toExpandNode(item: ExpandItem): ExpandNode {
 function setForType(entity: ODataEntity, metadata: ODataMetadata): ODataEntitySet | undefined {
   const sets = getAllEntitySets(metadata);
   const typeRef = (set: ODataEntitySet) => set.entityTypeQualified ?? set.entityType;
-  const qualified = entity.qualifiedName?.toLowerCase();
 
-  // Prefer an exact qualified-name match so a short-name collision across
-  // namespaces cannot bind the type to the wrong schema's set. The Windchill
+  // A set whose type reference names exactly one type — this very entity.
+  // An ambiguous short reference matches nothing, because a wrong match would
+  // silently bind the type to another namespace's set. The repo's Windchill
   // fixture has two `Part` types, so this is the common case, not a corner one.
-  const byQualifiedName = qualified
-    ? sets.find((set) => typeRef(set).toLowerCase() === qualified)
-    : undefined;
-  if (byQualifiedName) return byQualifiedName;
-
-  // Then a set whose unqualified type reference names exactly one type — this
-  // very entity. A short reference that is ambiguous across namespaces matches
-  // nothing, because `findEntityByName` would pick one in document order and
-  // silently bind the type to another schema's set.
-  return sets.find((set) => {
+  const byTypeRef = sets.find((set) => {
     const matches = findEntitiesByName(metadata.entities, typeRef(set));
+    return matches.length === 1 && matches[0] === entity;
+  });
+  if (byTypeRef) return byTypeRef;
+
+  // The parser derives `entityType` as the short name of the raw reference, so
+  // this recovers an alias-qualified reference (`self.Widget`) that the parser
+  // does not expand. Guarded the same way, so it cannot capture across
+  // namespaces either.
+  return sets.find((set) => {
+    if (set.entityType.toLowerCase() !== entity.name.toLowerCase()) return false;
+    const matches = findEntitiesByName(metadata.entities, set.entityType);
     return matches.length === 1 && matches[0] === entity;
   });
 }
 
 /**
- * The URL segment an entity type is addressed by, or `undefined` when it has no
+ * The value the entity selector uses for a type.
+ *
+ * Short names are used while they are unique — that is what the graph and the
+ * rest of the UI speak. When two types share a short name (the Windchill
+ * fixture ships two `Part` types) the qualified name is used instead, because
+ * otherwise both dropdown entries emit the same string and the selection
+ * silently resolves to whichever one the parser saw first. That turned a loud
+ * 404 into a query against the wrong collection.
+ */
+export function getEntitySelectionValue(entity: ODataEntity, entities: ODataEntity[]): string {
+  const ambiguous = entities.some((other) => other !== entity && other.name === entity.name);
+  return ambiguous ? (entity.qualifiedName ?? entity.name) : entity.name;
+}
+
+/** The URL segment an entity type is addressed by, or `undefined` when it has no
  * addressable resource path at all.
  *
  * An OData resource path uses the **entity set** name from the entity

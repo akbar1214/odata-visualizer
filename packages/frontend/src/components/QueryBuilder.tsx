@@ -5,7 +5,12 @@ import { PathFinder } from './query/PathFinder';
 import { FunctionImportSelector } from './query/FunctionImportSelector';
 import { QueryPreview } from './query/QueryPreview';
 import { QueryCanvas } from './query/QueryCanvas';
-import { buildODataQuery, getQueryableEntities, type QueryState } from '../utils/queryResolver';
+import {
+  buildODataQuery,
+  getEntitySelectionValue,
+  getQueryableEntities,
+  type QueryState,
+} from '../utils/queryResolver';
 import {
   createRootNode,
   expandPath,
@@ -26,8 +31,10 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
     [metadata.entities],
   );
 
-  const [selectedEntity, setSelectedEntity] = useState<string>(
-    queryableEntities.length > 0 ? queryableEntities[0].name : '',
+  const [selectedEntity, setSelectedEntity] = useState<string>(() =>
+    queryableEntities.length > 0
+      ? getEntitySelectionValue(queryableEntities[0], queryableEntities)
+      : '',
   );
 
   const [graphNodes, setGraphNodes] = useState<GraphNodeState[]>(() =>

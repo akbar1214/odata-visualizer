@@ -9,6 +9,7 @@ import {
   getResolvedEntity,
   getTargetEntityName,
   isComplexType,
+  getEntitySelectionValue,
   resolveResourcePath,
 } from '../src/utils/queryResolver';
 
@@ -331,6 +332,56 @@ describe('buildODataQuery with an unqualified entity set type reference', () => 
 
     expect(resolveResourcePath('Product', model)).toBe('Products');
   });
+
+  it('recovers a set whose type reference uses an unexpanded alias', async () => {
+    // The parser derives `entityType` from the raw reference, but does not
+    // expand `Schema/@Alias` or a root-level `edmx:Reference`. Falling back to
+    // the short type name — under the same uniqueness guard — still finds it.
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" Alias="self" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityContainer Name="Container">
+        <EntitySet Name="Widgets" EntityType="self.Widget" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+    expect(resolveResourcePath('Widget', model)).toBe('Widgets');
+    expect(buildODataQuery(getDefaultQuery('Widget'), model)).toBe('/Widgets?$top=25');
+  });
+
+  it('does not recover an alias reference when the short name is ambiguous', async () => {
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="A" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="B" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityContainer Name="Container">
+        <EntitySet Name="Widgets" EntityType="other.Widget" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+    // `Widget` names two types, so the alias fallback must refuse for both.
+    expect(resolveResourcePath('A.Widget', model)).toBeUndefined();
+    expect(resolveResourcePath('B.Widget', model)).toBeUndefined();
+  });
 });
 
 /**
@@ -393,8 +444,7 @@ describe('buildODataQuery for derived types', () => {
  * preview looked like a working query. Complex types cannot be set types at all,
  * and a type with no set anywhere in its inheritance chain has no resource path.
  */
-describe('buildODataQuery for unaddressable types', () => {
-  it('emits nothing for a complex type', async () => {
+describe('buildODataQuery for unaddressable types', () => {  it('emits nothing for a complex type', async () => {
     const model = await loadModel();
     expect(resolveResourcePath('Money', model)).toBeUndefined();
     expect(buildODataQuery(getDefaultQuery('Money'), model)).toBe('');
@@ -415,5 +465,85 @@ describe('buildODataQuery for unaddressable types', () => {
   it('still builds a path when an entity set is named directly', async () => {
     const model = await loadModel();
     expect(resolveResourcePath('Orders', model)).toBe('Orders');
+  });
+
+  it('uses the resolved set in the fallback path, not the type name', async () => {
+    const model = await loadModel();
+    // `foo) or (1 eq 1` is not a valid property path, so `buildQueryUrl` throws
+    // and the `catch` produces the bare resource path. That fallback used to
+    // return `/${query.entityName}` — the very bug this PR fixes.
+    const url = buildODataQuery(
+      {
+        ...getDefaultQuery('Order'),
+        filters: [{ property: 'foo) or (1 eq 1', operator: 'eq', value: 'x' }],
+      },
+      model,
+    );
+
+    expect(url).toBe('/Orders');
+    expect(url).not.toContain('Order?');
+  });
+});
+
+/**
+ * Two types can share a short name — the Windchill fixture ships two `Part`
+ * types. The selector must not hand the builder the same string for both, or the
+ * selection silently resolves to whichever type the parser saw first and queries
+ * the wrong collection.
+ */
+describe('entity selection identity', () => {
+  const twoParts = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="PTC" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Part">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityContainer Name="Container">
+        <EntitySet Name="Parts" EntityType="PTC.Part" />
+      </EntityContainer>
+    </Schema>
+    <Schema Namespace="common" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Part">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="title" Type="Edm.String" />
+      </EntityType>
+      <EntityContainer Name="Container">
+        <EntitySet Name="CommonParts" EntityType="common.Part" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('falls back to the qualified name only for colliding short names', async () => {
+    const model = await parseCSDL(twoParts);
+    const [ptcPart] = model.entities.filter((e) => e.name === 'Part');
+    const commonPart = model.entities.find((e) => e.qualifiedName === 'common.Part')!;
+
+    expect(getEntitySelectionValue(ptcPart, model.entities)).toBe('PTC.Part');
+    expect(getEntitySelectionValue(commonPart, model.entities)).toBe('common.Part');
+  });
+
+  it('keeps using the short name when it is unique', async () => {
+    const model = await loadModel();
+    const order = model.entities.find((e) => e.name === 'Order')!;
+    expect(getEntitySelectionValue(order, model.entities)).toBe('Order');
+  });
+
+  it('queries the selected namespace, not the first one', async () => {
+    const model = await parseCSDL(twoParts);
+    const commonPart = model.entities.find((e) => e.qualifiedName === 'common.Part')!;
+    const value = getEntitySelectionValue(commonPart, model.entities);
+
+    // Without the disambiguation both entries emit "Part" and this resolves to
+    // PTC's `Parts`, returning the wrong collection with a 200.
+    expect(buildODataQuery(getDefaultQuery(value), model)).toBe('/CommonParts?$top=25');
+
+    const ptcPart = model.entities.find((e) => e.qualifiedName === 'PTC.Part')!;
+    expect(buildODataQuery(getDefaultQuery(getEntitySelectionValue(ptcPart, model.entities)), model)).toBe(
+      '/Parts?$top=25',
+    );
   });
 });

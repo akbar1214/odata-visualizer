@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useId } from 'react';
-import { isComplexType } from '../../utils/queryResolver';
+import { getEntitySelectionValue, isComplexType } from '../../utils/queryResolver';
 import type { ODataEntity } from '@odata-visualizer/shared';
 
 interface SearchableSelectProps {
@@ -22,7 +22,12 @@ export function SearchableSelect({
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const selectedEntity = entities.find((e) => e.name === value);
+  // Selection identity, not display name: two types may share a short name.
+  const optionValue = useCallback(
+    (entity: ODataEntity) => getEntitySelectionValue(entity, entities),
+    [entities],
+  );
+  const selectedEntity = entities.find((e) => optionValue(e) === value);
 
   const filtered = entities.filter((e) => {
     if (!search) return true;
@@ -127,14 +132,16 @@ export function SearchableSelect({
           )}
           {filtered.map((e) => (
             <button
-              key={e.name}
+              key={optionValue(e)}
               type="button"
               role="option"
-              aria-selected={e.name === value}
+              aria-selected={optionValue(e) === value}
               className={`w-full text-left px-2 py-1.5 text-[11px] hover:bg-primary-50 flex items-center justify-between ${
-                e.name === value ? 'bg-primary-100 text-primary-600' : 'text-engineering-600'
+                optionValue(e) === value
+                  ? 'bg-primary-100 text-primary-600'
+                  : 'text-engineering-600'
               }`}
-              onMouseDown={handleOptionMouseDown(e.name)}
+              onMouseDown={handleOptionMouseDown(optionValue(e))}
             >
               <span className="truncate">
                 {e.namespace && <span className="text-engineering-400">{e.namespace}.</span>}
