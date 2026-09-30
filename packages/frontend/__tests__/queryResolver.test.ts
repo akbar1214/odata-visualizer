@@ -334,9 +334,9 @@ describe('buildODataQuery with an unqualified entity set type reference', () => 
   });
 
   it('recovers a set whose type reference uses an unexpanded alias', async () => {
-    // The parser derives `entityType` from the raw reference, but does not
-    // expand `Schema/@Alias` or a root-level `edmx:Reference`. Falling back to
-    // the short type name — under the same uniqueness guard — still finds it.
+    // The parser now expands `Schema/@Alias` and a root-level `edmx:Reference`,
+    // so this fallback is mostly redundant. It still covers a document whose
+    // set type reference is a bare short name, which the parser cannot expand.
     const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
   <edmx:DataServices>
