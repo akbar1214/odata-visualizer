@@ -104,36 +104,49 @@ const INTEGER_RANGES: Record<string, { min: bigint; max: bigint }> = {
  * because `Number.isFinite` only knows binary64:
  *
  * - `Edm.Single` is IEEE-754 binary32, whose maximum finite value is
- *   2^128 - 2^104 = 3.4028234663852886e38. `1e39` parses to a perfectly
- *   finite double, so the old check accepted it and the service rejected
- *   the query.
- * - `Edm.Decimal` has no digit cap in the ABNF (decimalLiteral), but every
- *   mainstream OData persistence layer (SQL Server, Oracle, .NET SqlDecimal)
- *   tops out at 38 digits of precision. A value with <= 38 significant digits
- *   always has magnitude < 1e38, so the bound below is a *necessary*
- *   condition: it rejects only literals no precision-<=38 service can store
- *   and never one it could. Before it, the limit was an accident of binary64:
- *   values up to ~1.797e308 slipped through while a 400-digit integer
- *   overflowed to Infinity and was rejected as "not a finite number".
- *   The check runs on the decimal digits rather than on `Number(...)`:
- *   `Number('999…9')` (38 nines) rounds to the same double as `1e38`, so a
- *   float comparison would reject the largest legal 38-digit integer.
+ *   2^128 - 2^104 = 3.4028234663852886e38. `Math.fround` is the right oracle:
+ *   it accepts exactly the literals that binary32 can hold, including
+ *   `3.4028235e38` (how .NET prints float.MaxValue, which rounds to the
+ *   finite maximum) while `1e39` and `3.4028236e38` round to Infinity. The
+ *   previous comparison against binary64 magnitude accepted the first as
+ *   finite and rejected the last two — but also rejected the round-trippable
+ *   float.MaxValue spelling, so a value a service returns could not be sent
+ *   back. `1e39` parses to a perfectly finite double, which is why the old
+ *   check needed replacing in both directions.
+ * - `Edm.Decimal` has no digit cap in the ABNF (decimalLiteral), and CSDL
+ *   imposes no general digit limit: `Precision` is optional and its default
+ *   is service-defined, and `Precision="floating"` explicitly permits values
+ *   like `9.999999e96`. The 38-digit bound below is therefore a *deliberate
+ *   product cap*, not a necessary condition derived from the spec: it matches
+ *   what mainstream fixed-precision stores can hold (SQL Server decimal(38,x);
+ *   .NET's SqlDecimal carries 28 digits of *scale*, not 38 digits of
+ *   precision) and keeps the builder from emitting queries most services will
+ *   reject. It is applied without consulting the property's `Precision`/`Scale`
+ *   facets, which this module does not carry, so a value beyond it may still
+ *   be legal for a service that declares floating precision. Before the cap
+ *   the limit was an accident of binary64: values up to ~1.797e308 slipped
+ *   through while a 400-digit integer overflowed to Infinity and was rejected
+ *   as "not a finite number". The check runs on the decimal digits rather
+ *   than on `Number(...)`: `Number('999…9')` (38 nines) rounds to the same
+ *   double as `1e38`, so a float comparison would reject the largest
+ *   in-cap 38-digit integer.
  * - `Edm.Double` keeps the binary64 finiteness check below: its range *is*
  *   binary64, so that check is the right oracle for it.
  *
  * INF/-INF/NaN are not part of these bounds: they are spelled nanInfinity in
  * the ABNF and handled before the numeric parse.
  */
-const SINGLE_MAX = 3.4028234663852886e38;
 const DECIMAL_MAX_DIGITS = 38;
 
 /**
- * Is |numeric| < 1e38, decided exactly on the decimal digits?
+ * Is the decimal within the deliberate 38-digit product cap, decided exactly
+ * on the decimal digits?
  *
  * A decimal literal is `m_int * 10^(exp - fracLen)` where m_int is the digit
  * string without leading zeros, which is below 1e38 precisely when
  * `digits(m_int) + exp - fracLen <= 38`. Pure integer arithmetic, so the
- * boundary is not blurred by binary64 rounding.
+ * boundary is not blurred by binary64 rounding. A zero mantissa is zero
+ * whatever the exponent says: `0e1000` is accepted.
  */
 function decimalIsWithinBound(numeric: string): boolean {
   const unsigned = numeric.replace(/^[+-]/, '');
@@ -161,7 +174,23 @@ const DATE_PATTERNS: Record<string, RegExp> = {
   'Edm.Duration': /^-?P(?!$)(\d+Y)?(\d+M)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+(\.\d+)?S)?)?$/,
 };
 
-/** Reject values like 2024-13-45 or "yesterday" that a service would refuse. */
+/**
+ * Does the calendar actually have this date? `Date` rolls 2024-02-31 over to
+ * 2024-03-02, so comparing the fields after the round-trip catches 31-day
+ * months, non-leap February 29ths and month 13 alike. `setUTCFullYear` is used
+ * rather than `Date.UTC(year, ...)`, which maps years 0-99 into the 1900s.
+ */
+function isRealCalendarDate(year: string, month: string, day: string): boolean {
+  const date = new Date(0);
+  date.setUTCFullYear(Number(year), Number(month) - 1, Number(day));
+  return (
+    date.getUTCFullYear() === Number(year) &&
+    date.getUTCMonth() === Number(month) - 1 &&
+    date.getUTCDate() === Number(day)
+  );
+}
+
+/** Reject values like 2024-13-45, 2024-02-31 or "yesterday" that a service would refuse. */
 function isPlausibleDateTime(type: string, raw: string): boolean {
   const pattern = DATE_PATTERNS[type];
   if (!pattern) return true;
@@ -170,16 +199,8 @@ function isPlausibleDateTime(type: string, raw: string): boolean {
   if (type === 'Edm.Duration') return true;
 
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw.trim());
-  if (match) {
-    const [, year, month, day] = match;
-    const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
-    if (
-      date.getUTCFullYear() !== Number(year) ||
-      date.getUTCMonth() !== Number(month) - 1 ||
-      date.getUTCDate() !== Number(day)
-    ) {
-      return false;
-    }
+  if (match && !isRealCalendarDate(match[1], match[2], match[3])) {
+    return false;
   }
 
   const time = /T(\d{2}):(\d{2}):(\d{2})/.exec(raw.trim());
@@ -254,8 +275,11 @@ export function formatV4Literal(value: string, edmType?: string): string {
       throw new Error(`Invalid ${type} value: ${raw}`);
     }
     if (type === 'Edm.Single') {
-      if (Math.abs(Number(numeric)) > SINGLE_MAX) {
-        throw new Error(`Invalid Edm.Single value: ${raw} (out of range +/-${SINGLE_MAX})`);
+      // The oracle is binary32, not binary64: `3.4028235e38` is .NET's
+      // float.MaxValue spelling and rounds back to the finite maximum, while
+      // `3.4028236e38` and `1e39` round to Infinity.
+      if (!Number.isFinite(Math.fround(Number(numeric)))) {
+        throw new Error(`Invalid Edm.Single value: ${raw} (not a finite binary32 value)`);
       }
     } else if (type === 'Edm.Decimal') {
       if (!decimalIsWithinBound(numeric)) {
@@ -356,25 +380,28 @@ const SELECT_ITEM =
  * quoted value allows only characters that are legal raw *or* a well-formed
  * percent escape. `/` and `\` are excluded even though both are legal inside an
  * OData string: they are the path separator, and WHATWG URL normalizes `\` to
- * `/`, so `Parts('a/b')` would address a different resource. `%XX` is allowed
- * so a value that genuinely needs a space or a slash can be spelled legibly —
- * which is also what the MCP key builder emits.
+ * `/`, so `Parts('a/b')` would address a different resource. `%20`-`%26` and
+ * `%28`-`%2F` are allowed so a value that genuinely needs a space or a slash
+ * can be spelled legibly — which is also what the MCP key builder emits — but
+ * `%27` is not content: `SQUOTE = "'" / "%27"` makes it a quote, so the
+ * predicate is normalised before parsing and the quoted-value matcher accepts
+ * only `pct-encoded-no-SQUOTE` (which also excludes `%70`-`%7F`).
  *
  * The predicate is validated by a small parser instead of one regex, because
  * the ABNF rules (oasis-tcs/odata-abnf: `compoundKey = OPEN keyValuePair *(
  * COMMA keyValuePair )`) are structural: once a comma appears, *every*
  * element must be `name=value`, and `keyPropertyValue` is a choice of
- * literal shapes — no `null` alternative, and a bare integer is
- * `int64Literal = [ SIGN ] 1*19DIGIT` with the int64 range as a semantic
- * restriction. Each value is checked against those shapes rather than
- * against a permissive character class.
+ * literal shapes — no `null` alternative. Each value is checked against those
+ * shapes rather than against a permissive character class; numeric tokens may
+ * be `int64Literal = [ SIGN ] 1*19DIGIT` (range-restricted) or the uncapped
+ * `decimalLiteral`.
  */
 
 /** An OData key property name: `odataIdentifier` in the ABNF. */
 const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // prettier-ignore
-const KEY_QUOTED_INNER = /^(?:[^'%/\\?#&\s\p{Cc}]|%[0-9A-Fa-f]{2}|'')*$/u;
+const KEY_QUOTED_INNER = /^(?:[^'%/\\?#&\s\p{Cc}]|%(?:[01345689A-Fa-f][0-9A-Fa-f]|2[01345689A-Fa-f])|'')*$/u;
 
 const KEY_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -403,8 +430,8 @@ function inRange(digitPair: string, min: number, max: number): boolean {
   return n >= min && n <= max;
 }
 
-function validDateFields(month: string, day: string): boolean {
-  return inRange(month, 1, 12) && inRange(day, 1, 31);
+function validDateFields(year: string, month: string, day: string): boolean {
+  return isRealCalendarDate(year, month, day);
 }
 
 function validTimeFields(hour: string, minute: string, second?: string): boolean {
@@ -419,11 +446,11 @@ function isValidKeyTemporal(value: string): boolean {
   // Groups: [1] sign, [2] year, [3] month, [4] day, [5] hour, [6] minute,
   // [7] second, [8] zone.
   const date = KEY_DATE.exec(value);
-  if (date) return validDateFields(date[3], date[4]);
+  if (date) return validDateFields(date[2], date[3], date[4]);
 
   const dateTime = KEY_DATE_TIME.exec(value);
   if (dateTime) {
-    if (!validDateFields(dateTime[3], dateTime[4])) return false;
+    if (!validDateFields(dateTime[2], dateTime[3], dateTime[4])) return false;
     if (!validTimeFields(dateTime[5], dateTime[6], dateTime[7])) return false;
     const offset = dateTime[8];
     if (offset === 'Z') return true;
@@ -443,15 +470,19 @@ function isValidKeyUnquotedValue(value: string): boolean {
   if (value === 'NaN' || value === 'INF' || value === '-INF') return true;
   if (KEY_GUID.test(value)) return true;
 
-  if (KEY_BARE_INTEGER.test(value)) {
-    // int64Literal = [ SIGN ] 1*19DIGIT plus the int64 range. Every 20+ digit
-    // token is out of range anyway; the digit cap mirrors the ABNF rule.
-    if (value.replace(/^[+-]/, '').length > 19) return false;
+  if (KEY_BARE_INTEGER.test(value) && value.replace(/^[+-]/, '').length <= 19) {
+    // A token of at most 19 digits has the int64Literal shape, so it is held
+    // to the ABNF rule's semantic restriction, the int64 range. A longer
+    // token is not an int64Literal at all and falls through instead.
     const range = INTEGER_RANGES['Edm.Int64'];
     const parsed = BigInt(value);
-    return parsed >= range.min && parsed <= range.max;
+    if (parsed < range.min || parsed > range.max) return false;
   }
 
+  // decimalLiteral = [ SIGN ] 1*DIGIT has no digit cap and no range, so every
+  // bare integer that is not rejected as an out-of-range int64Literal — and
+  // that includes 27-digit spellings of small values like
+  // `000000000000000000000000001` — is accepted here.
   if (KEY_DECIMAL.test(value)) return true;
 
   return isValidKeyTemporal(value);
@@ -534,9 +565,17 @@ function indexOfUnquoted(text: string, target: string): number {
 
 /** Validate `(...)` against `keyPredicate = simpleKey / compoundKey`. */
 function isValidKeyPredicate(predicate: string): boolean {
-  if (predicate.length < 3 || !predicate.startsWith('(') || !predicate.endsWith(')')) return false;
+  // SQUOTE = "'" / "%27": the ABNF makes the two spellings one token, so a
+  // `%27` can open, close, or (doubled) escape a quoted value. Normalising
+  // first makes the quote-aware scanner see the tokens the decoder will:
+  // `Parts('a%27b')` becomes `Parts('a'b')` and is rejected as unbalanced,
+  // while `Parts('O%27%27Brien')` becomes `Parts('O''Brien')`.
+  const normalized = predicate.replace(/%27/g, "'");
+  if (normalized.length < 3 || !normalized.startsWith('(') || !normalized.endsWith(')')) {
+    return false;
+  }
 
-  const elements = splitKeyElements(predicate.slice(1, -1));
+  const elements = splitKeyElements(normalized.slice(1, -1));
   if (elements === null || elements.length === 0) return false;
 
   for (const element of elements) {
