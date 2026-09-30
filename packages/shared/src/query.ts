@@ -278,19 +278,36 @@ const SELECT_ITEM =
 
 /**
  * A key predicate appended to a resource segment: `('P1')`, `(1)`,
- * `(A=1,B='x')`, `(ID=guid')`.
+ * `(A=1,B='x')`, `(ID='a%20b')`.
  *
- * Values must stay URL-safe, so whitespace, `%`, `?`, `#` and `&` are rejected
- * even inside quotes — this path is concatenated into the URL rather than
- * encoded, and a stray space or `#` would corrupt the request.
+ * Values must survive being concatenated into a URL rather than encoded, so a
+ * quoted value allows only characters that are legal raw *or* a well-formed
+ * percent escape. `/` and `\` are excluded even though both are legal inside an
+ * OData string: they are the path separator, and WHATWG URL normalizes `\` to
+ * `/`, so `Parts('a/b')` would address a different resource. `%XX` is allowed
+ * so a value that genuinely needs a space or a slash can be spelled legibly —
+ * which is also what the MCP key builder emits.
  */
+// prettier-ignore
 const KEY_PREDICATE =
-  /^\((?:[A-Za-z_][A-Za-z0-9_]*=)?(?:'(?:[^'%?#&\s]|'')*'|[A-Za-z0-9_.:+-]+)(?:,(?:[A-Za-z_][A-Za-z0-9_]*=)?(?:'(?:[^'%?#&\s]|'')*'|[A-Za-z0-9_.:+-]+))*\)$/;
+  /^\((?:[A-Za-z_][A-Za-z0-9_]*=)?(?:'(?:[^'%/\\?#&\s\p{Cc}]|%[0-9A-Fa-f]{2}|'')*'|[A-Za-z0-9_.:+-]+)(?:,(?:[A-Za-z_][A-Za-z0-9_]*=)?(?:'(?:[^'%/\\?#&\s\p{Cc}]|%[0-9A-Fa-f]{2}|'')*'|[A-Za-z0-9_.:+-]+))*\)$/u;
 
 /**
  * Validate the single resource path segment the URL is built from (an entity
  * set name, or the entity type name the builder UI previews with).
  */
+/**
+ * The path part of a resource segment, without a key predicate.
+ *
+ * `/Parts('P1')` and `/Parts` address the same entity set, so metadata lookups
+ * must use the path — otherwise a key predicate resolves to nothing and every
+ * literal falls back to an inferred type.
+ */
+export function resourcePathOf(entitySet: string): string {
+  const predicateStart = entitySet.indexOf('(');
+  return predicateStart === -1 ? entitySet : entitySet.slice(0, predicateStart);
+}
+
 function assertResourceSegment(entitySet: string): string {
   if (!entitySet || entitySet.trim().length === 0) {
     throw new Error('entitySet is required');
@@ -305,9 +322,8 @@ function assertResourceSegment(entitySet: string): string {
 
   // Split the path from an optional key predicate: `/Parts('P1')` addresses one
   // entity, and is the most common URL anyone types into an OData tool.
-  const predicateStart = entitySet.indexOf('(');
-  const path = predicateStart === -1 ? entitySet : entitySet.slice(0, predicateStart);
-  const predicate = predicateStart === -1 ? '' : entitySet.slice(predicateStart);
+  const path = resourcePathOf(entitySet);
+  const predicate = entitySet.slice(path.length);
 
   if (!path || path.startsWith('/') || path.endsWith('/')) throw rejection();
 
@@ -533,6 +549,9 @@ export function buildQueryUrl(options: QueryOptions): string {
   const warn = options.onWarning;
   const checkProperty = (property: string): void => {
     if (!warn || !rootEntity || !options.metadata) return;
+    // `*`, `NS.*` and structural paths name something other than a single
+    // property on the root type, so the exact-name check cannot apply to them.
+    if (property.includes('*') || property.includes('/')) return;
     const entity = findEntityByName(options.metadata.entities, rootEntity);
     if (!entity) return;
     const known = getEffectiveProperties(entity, options.metadata.entities).some(
@@ -802,7 +821,10 @@ function resolveRootEntity(options: QueryOptions): string | undefined {
     if (direct) return direct.qualifiedName ?? direct.name;
   }
 
-  const set = findEntitySet(options.metadata, options.entitySet);
+  // Look the set up by its *path*: a key predicate addresses one entity of the
+  // same set, so `/Parts('P1')` must resolve exactly like `/Parts` or every
+  // literal degrades to an inferred type and property warnings stop firing.
+  const set = findEntitySet(options.metadata, resourcePathOf(options.entitySet));
   if (!set) return undefined;
   return set.entityTypeQualified ?? set.entityType;
 }
