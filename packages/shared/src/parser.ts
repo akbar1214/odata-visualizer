@@ -131,7 +131,11 @@ function parseEdmxDocument(xmlContent: string): EdmxDocument {
   }
 
   const schemas = ensureArray(dataServices['Schema'] || dataServices['edm:Schema'] || []);
+  // Per CSDL, `edmx:Reference` is a child of `edmx:Edmx`. It is also accepted
+  // inside `DataServices` (and on a `Schema`), which is where this used to look
+  // only — so a reference in its standard position was ignored entirely.
   const references = [
+    ...ensureArray(edmx['Reference'] || edmx['edmx:Reference'] || []),
     ...ensureArray(dataServices['Reference'] || dataServices['edmx:Reference'] || []),
     ...schemas.flatMap((s) => ensureArray(s['Reference'] || s['edmx:Reference'] || [])),
   ];
@@ -159,23 +163,37 @@ function resolveReferenceUri(uri: string, baseUri: string | undefined): string {
 /**
  * Replace an `Alias.Type` reference with `Namespace.Type` using the aliases
  * declared by edmx:Include elements.
+ *
+ * A prefix that names an actual schema is treated as a namespace, not an alias.
+ * An alias is only valid within the document that declares it (CSDL 4.01 §4.2),
+ * so a document-local alias must never rewrite a reference into a *different*
+ * document's namespace — which is what a single document-global alias map would
+ * otherwise do.
  */
-function expandAlias(type: string, aliases: Map<string, string>): string {
+function expandAlias(type: string, aliases: Map<string, string>, namespaces?: Set<string>): string {
   const collection = /^Collection\((.*)\)$/.exec(type);
-  if (collection) return `Collection(${expandAlias(collection[1], aliases)})`;
+  if (collection) return `Collection(${expandAlias(collection[1], aliases, namespaces)})`;
   if (type.startsWith('Edm.')) return type;
 
   const dot = type.indexOf('.');
   if (dot <= 0) return type;
-  const namespace = aliases.get(type.slice(0, dot));
+
+  const prefix = type.slice(0, dot);
+  if (namespaces?.has(prefix.toLowerCase())) return type;
+
+  const namespace = aliases.get(prefix);
   return namespace ? `${namespace}${type.slice(dot)}` : type;
 }
 
-function expandAliasesInMetadata(metadata: ODataMetadata, aliases: Map<string, string>): void {
+function expandAliasesInMetadata(
+  metadata: ODataMetadata,
+  aliases: Map<string, string>,
+  namespaces: Set<string>,
+): void {
   if (aliases.size === 0) return;
 
   const expand = (value: string | undefined): string | undefined =>
-    value === undefined ? undefined : expandAlias(value, aliases);
+    value === undefined ? undefined : expandAlias(value, aliases, namespaces);
 
   for (const entity of metadata.entities) {
     entity.baseType = expand(entity.baseType);
@@ -189,12 +207,25 @@ function expandAliasesInMetadata(metadata: ODataMetadata, aliases: Map<string, s
         : expand(nav.targetType);
     }
   }
+
+  // Relationship endpoints carry their own copy of the type reference. Leaving
+  // them unexpanded made a relationship disagree with the navigation property
+  // it was derived from, and `layout.ts` prefers `entityQualified`, so the
+  // diagram could not match the edge to a node.
+  for (const relationship of metadata.relationships) {
+    relationship.from.entityQualified = expand(relationship.from.entityQualified);
+    relationship.to.entityQualified = expand(relationship.to.entityQualified);
+  }
+
   for (const container of metadata.entityContainers) {
     for (const set of container.entitySets) {
       set.entityTypeQualified = expand(set.entityTypeQualified);
       set.entityType = set.entityTypeQualified
         ? shortName(set.entityTypeQualified)
         : set.entityType;
+      for (const binding of set.navigationPropertyBindings ?? []) {
+        binding.target = expand(binding.target) ?? binding.target;
+      }
     }
   }
   for (const item of [...metadata.actions, ...metadata.functions]) {
@@ -203,10 +234,22 @@ function expandAliasesInMetadata(metadata: ODataMetadata, aliases: Map<string, s
       param.type = expand(param.type) ?? param.type;
     }
   }
+  for (const typeDefinition of metadata.typeDefinitions) {
+    typeDefinition.underlyingType =
+      expand(typeDefinition.underlyingType) ?? typeDefinition.underlyingType;
+  }
+  for (const enumType of metadata.enumTypes) {
+    if (enumType.underlyingType) {
+      enumType.underlyingType = expand(enumType.underlyingType);
+    }
+  }
   for (const importRecord of metadata.actionImports) {
     if (importRecord.qualifiedActionName) {
       importRecord.qualifiedActionName = expand(importRecord.qualifiedActionName);
     }
+    // The import snapshots the definition's return type during parsing, before
+    // aliases are known, so it has to be expanded too or it stays stale.
+    importRecord.returnType = expand(importRecord.returnType);
     for (const param of importRecord.parameter ?? []) {
       param.type = expand(param.type) ?? param.type;
     }
@@ -215,6 +258,7 @@ function expandAliasesInMetadata(metadata: ODataMetadata, aliases: Map<string, s
     if (importRecord.qualifiedFunctionName) {
       importRecord.qualifiedFunctionName = expand(importRecord.qualifiedFunctionName);
     }
+    importRecord.returnType = expand(importRecord.returnType);
     for (const param of importRecord.parameter ?? []) {
       param.type = expand(param.type) ?? param.type;
     }
@@ -270,6 +314,17 @@ export async function parseCSDL(
   };
 
   const registerAliases = (owner: XmlElement): void => {
+    // A schema may alias its own namespace — `<Schema Namespace="N" Alias="Self">`
+    // — and every generator that writes `Self.Type` references relies on it.
+    // Reading only `Include` here left those references unexpanded, so
+    // `BaseType="Self.Base"` produced no inheritance chain and `getEffectiveKeys`
+    // returned nothing.
+    const ownerNamespace = str(owner['@_Namespace']);
+    const ownerAlias = str(owner['@_Alias']);
+    if (ownerNamespace && ownerAlias && !aliases.has(ownerAlias)) {
+      aliases.set(ownerAlias, ownerNamespace);
+    }
+
     for (const include of includesOf(owner)) {
       const namespace = str(include['@_Namespace']);
       const alias = str(include['@_Alias']);
@@ -465,7 +520,11 @@ export async function parseCSDL(
     typeDefinitions,
   };
 
-  expandAliasesInMetadata(metadata, aliases);
+  expandAliasesInMetadata(
+    metadata,
+    aliases,
+    new Set([...registry.keys()].map((ns) => ns.toLowerCase())),
+  );
 
   // Derived types often omit <Key> (it is inherited). Backfill keys from
   // the base-type chain so consumers (and the complex-type heuristic) work.
