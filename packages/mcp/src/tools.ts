@@ -357,6 +357,50 @@ function sampleScalar(type: string, metadata: ODataMetadata): unknown {
   return 'string';
 }
 
+/**
+ * Characters that cannot appear raw in a URL path segment (RFC 3986 §3.3) and
+ * would corrupt the request rather than travel as data.
+ *
+ * Encoding is deliberately narrow. `'`, `:`, `(`, `)`, `,` and `=` are all
+ * legal in a path, and leaving them readable keeps OData structure legible
+ * (`Parts('OR:wt.part:1')/NS.Action`). A raw space or `#`, by contrast, makes
+ * the whole request unusable: `curl` reports `URL rejected: Malformed input to
+ * a URL function`, and `#` silently truncates the URL at a fragment boundary.
+ */
+const PATH_UNSAFE = new Set([
+  ' ',
+  '"',
+  '<',
+  '>',
+  '\\',
+  '^',
+  '`',
+  '{',
+  '|',
+  '}',
+  '?',
+  '#',
+  '[',
+  ']',
+  '%',
+]);
+
+/** Percent-encode a rendered OData literal for use inside a URL path segment. */
+function encodeLiteralForUrl(literal: string): string {
+  let encoded = '';
+  for (const char of literal) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code > 0x7e) {
+      encoded += encodeURIComponent(char);
+    } else if (code < 0x20 || code === 0x7f || PATH_UNSAFE.has(char)) {
+      encoded += `%${code.toString(16).toUpperCase().padStart(2, '0')}`;
+    } else {
+      encoded += char;
+    }
+  }
+  return encoded;
+}
+
 function buildKeySegment(
   entity: ODataEntity,
   metadata: ODataMetadata,
@@ -372,12 +416,12 @@ function buildKeySegment(
   if (keyNames.length === 1) {
     const name = keyNames[0];
     const type = properties.find((p) => p.name === name)?.type;
-    return `(${formatV4Literal(keys[name], type)})`;
+    return `(${encodeLiteralForUrl(formatV4Literal(keys[name], type))})`;
   }
   return `(${keyNames
     .map((name) => {
       const type = properties.find((p) => p.name === name)?.type;
-      return `${name}=${formatV4Literal(keys[name], type)}`;
+      return `${name}=${encodeLiteralForUrl(formatV4Literal(keys[name], type))}`;
     })
     .join(',')})`;
 }
@@ -1034,7 +1078,10 @@ function formatInlineParams(
   if (entries.length === 0) return '';
   const rendered = entries.map(([name, value]) => {
     const type = declaredParameterType(item, name);
-    return `${name}=${type ? formatFunctionParamLiteral(type, value) : formatV4Literal(String(value))}`;
+    const literal = type ? formatFunctionParamLiteral(type, value) : formatV4Literal(String(value));
+    // Only the value is encoded; the `name=` and the joining commas are OData
+    // syntax, not data.
+    return `${name}=${encodeLiteralForUrl(literal)}`;
   });
   return `(${rendered.join(',')})`;
 }
