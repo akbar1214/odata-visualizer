@@ -5,7 +5,12 @@ import { PathFinder } from './query/PathFinder';
 import { FunctionImportSelector } from './query/FunctionImportSelector';
 import { QueryPreview } from './query/QueryPreview';
 import { QueryCanvas } from './query/QueryCanvas';
-import { buildODataQuery, getQueryableEntities, type QueryState } from '../utils/queryResolver';
+import {
+  buildODataQuery,
+  getEntitySelectionValue,
+  getQueryableEntities,
+  type QueryState,
+} from '../utils/queryResolver';
 import {
   createRootNode,
   expandPath,
@@ -26,8 +31,10 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
     [metadata.entities],
   );
 
-  const [selectedEntity, setSelectedEntity] = useState<string>(
-    queryableEntities.length > 0 ? queryableEntities[0].name : '',
+  const [selectedEntity, setSelectedEntity] = useState<string>(() =>
+    queryableEntities.length > 0
+      ? getEntitySelectionValue(queryableEntities[0], queryableEntities)
+      : '',
   );
 
   const [graphNodes, setGraphNodes] = useState<GraphNodeState[]>(() =>
@@ -97,13 +104,23 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
     return buildODataQuery(query, metadata);
   }, [functionQuery, query, metadata]);
 
+  // An entity type with no entity set anywhere in its inheritance chain has no
+  // resource path, so `buildODataQuery` returns ''. Saying "select an entity"
+  // when one is already selected reads as a bug.
+  const emptyMessage = useMemo(() => {
+    if (functionQuery || queryString) return undefined;
+    return selectedEntity && selectedEntity.length > 0
+      ? `"${selectedEntity}" is not exposed as an entity set, so it has no resource path.`
+      : undefined;
+  }, [functionQuery, queryString, selectedEntity]);
+
   return (
     <div className="flex h-[calc(100vh-64px)]">
       {/* Left: Panel */}
       <div className="w-72 flex-shrink-0 border-r border-engineering-200 bg-white overflow-y-auto flex flex-col">
         <div className="p-4 space-y-4 flex-1">
           <EntitySelector
-            entities={metadata.entities}
+            entities={queryableEntities}
             selected={selectedEntity}
             onSelect={handleEntitySelect}
           />
@@ -160,7 +177,7 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
         </div>
 
         <div className="border-t border-engineering-200 bg-engineering-100 p-3">
-          <QueryPreview query={queryString} />
+          <QueryPreview query={queryString} emptyMessage={emptyMessage} />
         </div>
       </div>
 

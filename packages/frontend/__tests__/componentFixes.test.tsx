@@ -91,6 +91,28 @@ describe('EntityNode property budget', () => {
   });
 });
 
+describe('QueryPreview empty state', () => {
+  afterEach(() => cleanup());
+
+  it('falls back to the generic prompt when no message is given', () => {
+    render(<QueryPreview query="" />);
+    expect(screen.getByText('Select an entity to generate a query')).toBeDefined();
+  });
+
+  it('shows a caller-supplied message when there is no query', () => {
+    // An entity that has no entity set produces no URL; saying "select an
+    // entity" while one is selected reads as a bug.
+    render(<QueryPreview query="" emptyMessage='"Part" is not exposed as an entity set.' />);
+    expect(screen.getByText('"Part" is not exposed as an entity set.')).toBeDefined();
+  });
+
+  it('ignores the empty message once there is a query', () => {
+    render(<QueryPreview query="/Orders?$top=25" emptyMessage="unused" />);
+    expect(screen.getByText('/Orders?$top=25')).toBeDefined();
+    expect(screen.queryByText('unused')).toBeNull();
+  });
+});
+
 describe('QueryPreview copy feedback', () => {
   afterEach(() => {
     cleanup();

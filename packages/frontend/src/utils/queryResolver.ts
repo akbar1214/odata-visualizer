@@ -1,15 +1,19 @@
 import type {
   ODataMetadata,
   ODataEntity,
+  ODataEntitySet,
   ODataProperty,
   ODataNavigationProperty,
 } from '@odata-visualizer/shared';
 import {
   buildQueryUrl,
+  findEntitiesByName,
   findEntityByName,
+  findEntitySet,
   formatV4Literal,
   getEffectiveNavigationProperties,
   getEffectiveProperties,
+  getAllEntitySets,
   resolveInheritanceChain,
   type ExpandNode,
 } from '@odata-visualizer/shared';
@@ -201,18 +205,110 @@ function toExpandNode(item: ExpandItem): ExpandNode {
   };
 }
 
+/** The entity set that owns a given type, if one exists. */
+function setForType(entity: ODataEntity, metadata: ODataMetadata): ODataEntitySet | undefined {
+  const sets = getAllEntitySets(metadata);
+  const typeRef = (set: ODataEntitySet) => set.entityTypeQualified ?? set.entityType;
+
+  // A set whose type reference names exactly one type — this very entity.
+  // An ambiguous short reference matches nothing, because a wrong match would
+  // silently bind the type to another namespace's set. The repo's Windchill
+  // fixture has two `Part` types, so this is the common case, not a corner one.
+  const byTypeRef = sets.find((set) => {
+    const matches = findEntitiesByName(metadata.entities, typeRef(set));
+    return matches.length === 1 && matches[0] === entity;
+  });
+  if (byTypeRef) return byTypeRef;
+
+  // The parser derives `entityType` as the short name of the raw reference, so
+  // this recovers an alias-qualified reference (`self.Widget`) that the parser
+  // does not expand. Guarded the same way, so it cannot capture across
+  // namespaces either.
+  return sets.find((set) => {
+    if (set.entityType.toLowerCase() !== entity.name.toLowerCase()) return false;
+    const matches = findEntitiesByName(metadata.entities, set.entityType);
+    return matches.length === 1 && matches[0] === entity;
+  });
+}
+
+/**
+ * The value the entity selector uses for a type.
+ *
+ * Short names are used while they are unique — that is what the graph and the
+ * rest of the UI speak. When two types share a short name (the Windchill
+ * fixture ships two `Part` types) the qualified name is used instead, because
+ * otherwise both dropdown entries emit the same string and the selection
+ * silently resolves to whichever one the parser saw first. That turned a loud
+ * 404 into a query against the wrong collection.
+ */
+export function getEntitySelectionValue(entity: ODataEntity, entities: ODataEntity[]): string {
+  const ambiguous = entities.some((other) => other !== entity && other.name === entity.name);
+  return ambiguous ? (entity.qualifiedName ?? entity.name) : entity.name;
+}
+
+/** The URL segment an entity type is addressed by, or `undefined` when it has no
+ * addressable resource path at all.
+ *
+ * An OData resource path uses the **entity set** name from the entity
+ * container, not the type name: the type `Shop.Order` is reached at `/Orders`.
+ * Using the type name produced URLs that 404 against any service whose set name
+ * differs from its type name, which is the common case (`Products`/`Product`).
+ *
+ * A derived type has no set of its own; V4 addresses it through the base type's
+ * set with a cast (`/Products/ODataDemo.FeaturedProduct`), which is what the
+ * repo's own demo model needs for `FeaturedProduct`, `Customer` and `Employee`.
+ *
+ * Returning `undefined` rather than a plausible-looking path is deliberate: a
+ * path that cannot be resolved is worse than none, because the preview then
+ * looks like a working query.
+ */
+export function resolveResourcePath(
+  entityName: string,
+  metadata: ODataMetadata,
+): string | undefined {
+  const entity = findEntityByName(metadata.entities, entityName);
+
+  if (!entity) {
+    // Not a type this model knows; accept an entity set named directly.
+    return findEntitySet(metadata, entityName)?.name;
+  }
+
+  const ownSet = setForType(entity, metadata);
+  if (ownSet) return ownSet.name;
+
+  // Walk up the inheritance chain: the nearest base type with a set wins, and
+  // the selected type is appended as a cast. V4 requires the *qualified* name
+  // there (`/Products/ODataDemo.FeaturedProduct`), so an unqualified type has
+  // no valid cast to emit.
+  const cast = entity.qualifiedName;
+  if (cast && cast.includes('.')) {
+    for (const base of resolveInheritanceChain(entity, metadata.entities).slice(1)) {
+      const baseSet = setForType(base, metadata);
+      if (baseSet) return `${baseSet.name}/${cast}`;
+    }
+  }
+
+  return undefined;
+}
+
 /**
  * Build the OData V4 query for the builder UI. The shared builder is used so
  * literals, encoding, and expansion syntax stay identical to the MCP server.
  *
- * The UI addresses the resource by entity type name (`/Part?...`), so the root
- * type is passed explicitly for literal typing. Filter rows that are still
- * being typed (empty or not yet a valid literal for their property) are left
- * out instead of discarding the whole query.
+ * The UI picks an entity *type*; `resolveResourcePath` turns it into the entity
+ * *set* the URL has to use, while the type is still passed as `rootEntityName`
+ * so property lookup and literal typing resolve against the selected shape
+ * rather than the set's.
+ *
+ * Filter rows that are still being typed (empty or not yet a valid literal for
+ * their property) are left out instead of discarding the whole query.
  */
 export function buildODataQuery(query: QueryState, metadata: ODataMetadata): string {
   const resolved = getResolvedEntity(query.entityName, metadata.entities);
   if (!resolved) return '';
+
+  const resourcePath = resolveResourcePath(query.entityName, metadata);
+  if (!resourcePath) return '';
 
   const filters = query.filters.filter((filter) => {
     const value = filter.value.trim();
@@ -229,7 +325,7 @@ export function buildODataQuery(query: QueryState, metadata: ODataMetadata): str
 
   try {
     return buildQueryUrl({
-      entitySet: query.entityName,
+      entitySet: resourcePath,
       rootEntityName: query.entityName,
       metadata,
       filters: filters.length > 0 ? filters : undefined,
@@ -242,8 +338,10 @@ export function buildODataQuery(query: QueryState, metadata: ODataMetadata): str
     });
   } catch {
     // Invalid values while the user is editing: show the bare resource path
-    // rather than an error state in the preview.
-    return `/${query.entityName}`;
+    // rather than an error state in the preview. This must use the resolved
+    // entity *set* — returning the type name here would reintroduce the very
+    // bug this function exists to fix.
+    return `/${resourcePath}`;
   }
 }
 
