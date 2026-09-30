@@ -1,11 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { fileURLToPath } from 'node:url';
-import {
-  createToolHandler,
-  handleToolCall,
-  getMetadata,
-  resetMetadata,
-} from '../src/tools.js';
+import { createToolHandler, handleToolCall, getMetadata, resetMetadata } from '../src/tools.js';
 import { createMetadataStore } from '../src/store.js';
 
 const minimalCSDL = `<?xml version="1.0" encoding="utf-8"?>
@@ -177,7 +172,9 @@ describe('Windchill-like model tools', () => {
     expect(text).toContain('ElectricalPart -> Part -> WindchillEntity');
     expect(text).toContain('ID: Edm.String [KEY, non-nullable] (from WindchillEntity)');
     expect(text).toContain('voltageRating: Edm.Double');
-    expect(text).toContain('state: PTC.ProdMgmt.LifeCycleState (enum: INWORK | RELEASED | OBSOLETE)');
+    expect(text).toContain(
+      'state: PTC.ProdMgmt.LifeCycleState (enum: INWORK | RELEASED | OBSOLETE)',
+    );
     expect(text).toContain('number: PTC.ProdMgmt.PartNumber (type definition of Edm.String)');
     expect(text).toContain('weight: PTC.ProdMgmt.Quantity');
   });
@@ -219,7 +216,9 @@ describe('Windchill-like model tools', () => {
   it('lists enums and type definitions', async () => {
     const result = await handleToolCall('list_enums', {});
     const text = result.content[0].text;
-    expect(text).toContain('PTC.ProdMgmt.LifeCycleState (Edm.String): INWORK=0, RELEASED=1, OBSOLETE=2');
+    expect(text).toContain(
+      'PTC.ProdMgmt.LifeCycleState (Edm.String): INWORK=0, RELEASED=1, OBSOLETE=2',
+    );
     expect(text).toContain('PTC.ProdMgmt.PartNumber: Edm.String');
   });
 
@@ -499,7 +498,7 @@ describe('invocation builders', () => {
     });
 
     expect(result.content[0].text).toContain(
-      "GET <serviceRoot>/GetWindchillMetaInfo(EntityName=null,IncludeAncestorProperty=true)",
+      'GET <serviceRoot>/GetWindchillMetaInfo(EntityName=null,IncludeAncestorProperty=true)',
     );
   });
 
@@ -708,7 +707,8 @@ describe('error handling and pagination', () => {
     const { parseCSDL } = await import('@odata-visualizer/shared');
     const manyEntities = Array.from(
       { length: 300 },
-      (_, i) => `<EntityType Name="E${i}"><Key><PropertyRef Name="Id"/></Key><Property Name="Id" Type="Edm.Int32"/></EntityType>`,
+      (_, i) =>
+        `<EntityType Name="E${i}"><Key><PropertyRef Name="Id"/></Key><Property Name="Id" Type="Edm.Int32"/></EntityType>`,
     ).join('');
     const csdl = `<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
@@ -746,11 +746,12 @@ describe('load_metadata from backend server', () => {
     const { readFileSync } = await import('node:fs');
     const metadata = await parseCSDL(readFileSync(windchillFixture, 'utf-8'));
 
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ success: true, metadata }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ success: true, metadata }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
     );
     vi.stubGlobal('fetch', fetchMock);
 
@@ -771,11 +772,12 @@ describe('load_metadata from backend server', () => {
   it('errors clearly when the backend has no metadata', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(JSON.stringify({ success: true, metadata: null }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ success: true, metadata: null }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
       ),
     );
 
@@ -819,3 +821,218 @@ describe('load_metadata from backend server', () => {
   });
 });
 
+/**
+ * The tool's deliverable is a URL the caller copies into a request. An
+ * unencoded space, `#`, `?` or `%` in an inline parameter or key value makes
+ * that URL either unparseable (`curl: (3) URL rejected`) or silently truncated
+ * at a fragment boundary.
+ */
+describe('inline parameter encoding', () => {
+  beforeEach(async () => {
+    resetMetadata();
+    await loadWindchill();
+  });
+
+  /** The `<METHOD> <url>` line the tool prints. Actions emit POST, functions GET. */
+  function emittedUrl(text: string): string {
+    const line = text.split('\n').find((l) => l.startsWith('GET ') || l.startsWith('POST '));
+    return (line ?? '').replace(/^(GET|POST) /, '');
+  }
+
+  it('percent-encodes a string parameter containing a space', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      parameters: { EntityName: 'ball bearing' },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    const url = emittedUrl(result.content[0].text);
+    expect(url).toContain('ball%20bearing');
+    // A raw space is what made `curl` reject the whole request.
+    expect(url).not.toContain(' ');
+  });
+
+  it('percent-encodes a slash so the value stays one path segment', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      parameters: { EntityName: 'a/b' },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    const url = emittedUrl(result.content[0].text);
+    // A raw slash would split the value into two path segments, addressing a
+    // different resource entirely — and `curl` would still accept the URL.
+    expect(url).toContain('a%2Fb');
+    expect(new URL(url).pathname).toBe(
+      "/Windchill/servlet/odata/ProdMgmt/GetWindchillMetaInfo(EntityName='a%2Fb')",
+    );
+  });
+
+  it('percent-encodes a value that would otherwise smuggle an encoded slash', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      parameters: { EntityName: 'a%2Fb' },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    // Values are raw data, never pre-encoded URL text, so `%` is escaped too.
+    expect(emittedUrl(result.content[0].text)).toContain('a%252Fb');
+  });
+
+  it('percent-encodes characters that would truncate the URL', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      parameters: { EntityName: 'a#b?c%d' },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    const url = emittedUrl(result.content[0].text);
+    const parsed = new URL(url);
+    // `#` would start a fragment and `?` a query string; neither is part of the
+    // resource path, so the path must still carry the whole value.
+    expect(parsed.hash).toBe('');
+    expect(parsed.search).toBe('');
+    expect(decodeURIComponent(parsed.pathname)).toContain("'a#b?c%d'");
+  });
+
+  it('percent-encodes non-ASCII and emoji as UTF-8', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      parameters: { EntityName: 'café 🎉' },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    const url = emittedUrl(result.content[0].text);
+    expect(url).toContain('caf%C3%A9');
+    // One code point, encoded as four UTF-8 bytes, not two surrogate halves.
+    expect(url).toContain('%F0%9F%8E%89');
+    expect(decodeURIComponent(url)).toContain("'café 🎉'");
+  });
+
+  it('percent-encodes control characters', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      parameters: { EntityName: 'a\nb\tc' },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    const url = emittedUrl(result.content[0].text);
+    expect(url).toContain('a%0Ab%09c');
+    expect(url).not.toMatch(/[\n\t]/);
+  });
+
+  it('reports an unpaired surrogate clearly instead of "URI malformed"', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      parameters: { EntityName: '\ud800' },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('unpaired surrogate');
+    expect(result.content[0].text).not.toContain('URI malformed');
+  });
+
+  it('escapes the OData literal and URL-encodes it independently', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      // Both a character OData escapes (') and one the URL must encode (space),
+      // so the test fails if either step stops happening.
+      parameters: { EntityName: "O'Brien Smith" },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    const url = emittedUrl(result.content[0].text);
+    // OData doubles the apostrophe; the space is the part the URL must encode.
+    // Either step stopping would fail this.
+    expect(url).toContain("'O''Brien%20Smith'");
+    expect(decodeURIComponent(url)).toContain("'O''Brien Smith'");
+  });
+
+  it('percent-encodes a key value containing a space or fragment', async () => {
+    const result = await handleToolCall('build_action_invocation', {
+      actionName: 'GetPartStructure',
+      entitySet: 'Parts',
+      keys: { ID: 'OR:wt part#1' },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    const url = emittedUrl(result.content[0].text);
+    expect(url).not.toContain(' ');
+    const parsed = new URL(url);
+    expect(parsed.hash).toBe('');
+    expect(decodeURIComponent(parsed.pathname)).toContain("'OR:wt part#1'");
+  });
+
+  it('still emits the plain form when nothing needs encoding', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'GetPartEstimate',
+      entitySet: 'Parts',
+      keys: { ID: 'OR:wt.part.WTPart:123' },
+      parameters: { Quantity: 12.5 },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    // Colons in a key are legal in a path segment and must not be mangled.
+    expect(result.content[0].text).toContain(
+      "/Parts('OR:wt.part.WTPart:123')/PTC.ProdMgmt.GetPartEstimate(Quantity=12.5)",
+    );
+  });
+});
+
+/**
+ * A composite key takes the `(A=...,B=...)` form, a different branch from the
+ * single-key `(...)`. No fixture in the repo has a composite key, so this
+ * builds one — the branch was previously uncovered, and a mutation removing its
+ * encoding survived the whole suite.
+ */
+describe('composite key encoding', () => {
+  const compositeCsdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Pair">
+        <Key>
+          <PropertyRef Name="A" />
+          <PropertyRef Name="B" />
+        </Key>
+        <Property Name="A" Type="Edm.String" Nullable="false" />
+        <Property Name="B" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Action Name="Touch" IsBound="true">
+        <Parameter Name="it" Type="N.Pair" />
+        <Parameter Name="Note" Type="Edm.String" />
+      </Action>
+      <EntityContainer Name="Container">
+        <EntitySet Name="Pairs" EntityType="N.Pair" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  async function compositeHandler() {
+    const { parseCSDL } = await import('@odata-visualizer/shared');
+    const store = createMetadataStore();
+    store.set(await parseCSDL(compositeCsdl), { sourceName: 'composite.xml', sourceType: 'file' });
+    return createToolHandler(store, { allowLoadMetadata: false });
+  }
+
+  it('encodes each key value in the A=...,B=... form', async () => {
+    const handler = await compositeHandler();
+    const result = await handler('build_action_invocation', {
+      actionName: 'Touch',
+      entitySet: 'Pairs',
+      keys: { A: 'x y', B: 'p#q' },
+      baseUrl: 'https://host/svc',
+    });
+
+    const url = result.content[0].text
+      .split('\n')
+      .find((l) => l.startsWith('POST ') || l.startsWith('GET '))!
+      .replace(/^(POST|GET) /, '');
+
+    // Both names and both separators stay raw; only the values are encoded.
+    expect(url).toContain("(A='x%20y',B='p%23q')");
+    expect(new URL(url).hash).toBe('');
+  });
+});
