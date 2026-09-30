@@ -68,6 +68,8 @@ export interface ODataRelationship {
 /** Entity container with entity sets */
 export interface ODataEntityContainer {
   name: string;
+  /** Namespace the container is declared in; targets may qualify the name. */
+  namespace?: string;
   entitySets: ODataEntitySet[];
 }
 

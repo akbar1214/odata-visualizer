@@ -117,3 +117,123 @@ describe('schema-level Annotations Target', () => {
     expect(model.entities[0].annotations).toBeUndefined();
   });
 });
+
+/**
+ * The spec form of a set target is the *qualified* container name
+ * (`ODataDemo.DemoService/Suppliers`), which is what the repo's own
+ * `odata-demo-metadata.xml` uses. Only an unqualified `Container/Set` was
+ * matched, so the fixture that motivated this change stayed half-broken.
+ */
+describe('qualified container targets', () => {
+  const csdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityContainer Name="Container">
+        <EntitySet Name="Widgets" EntityType="N.Widget" />
+      </EntityContainer>
+      <Annotations Target="N.Container/Widgets">
+        <Annotation Term="Core.Description" String="Qualified container" />
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('matches a namespace-qualified container name', async () => {
+    const model = await parseCSDL(csdl);
+    const set = model.entityContainers[0]!.entitySets[0];
+
+    expect(set.annotations?.['Core.Description']).toBe('Qualified container');
+    expect(set.label).toBe('Qualified container');
+  });
+});
+
+/**
+ * A schema child is always namespace-qualified, so an unqualified first segment
+ * cannot be a type. Without that rule `C/Widgets` matched a *property* named
+ * `Widgets` on a type `C` and the annotation landed on the wrong element.
+ */
+describe('two-segment target disambiguation', () => {
+  const csdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="C">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Widgets" Type="Edm.String" />
+      </EntityType>
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityContainer Name="C">
+        <EntitySet Name="Widgets" EntityType="N.Widget" />
+      </EntityContainer>
+      <Annotations Target="C/Widgets">
+        <Annotation Term="Core.Description" String="For the set" />
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('resolves an unqualified pair to the entity set, not the property', async () => {
+    const model = await parseCSDL(csdl);
+    const set = model.entityContainers[0]!.entitySets[0];
+    const typeC = model.entities.find((e) => e.name === 'C')!;
+    const property = typeC.properties.find((p) => p.name === 'Widgets')!;
+
+    expect(set.annotations?.['Core.Description']).toBe('For the set');
+    expect(property.annotations).toBeUndefined();
+  });
+});
+
+/** Annotations apply to navigation properties too, not only structural ones. */
+describe('navigation property targets', () => {
+  it('annotates a navigation property', async () => {
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Parts" Type="Collection(N.Widget)" />
+      </EntityType>
+      <Annotations Target="N.Widget/Parts">
+        <Annotation Term="Core.Description" String="The parts" />
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    const nav = model.entities[0].navigationProperties[0];
+
+    expect(nav.annotations?.['Core.Description']).toBe('The parts');
+  });
+});
+
+/** The repo's own demo document is the fixture that exposed the qualified form. */
+describe('odata-demo-metadata.xml', () => {
+  it('applies every one of its targeted annotations', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const xml = readFileSync(
+      fileURLToPath(new URL('../../../odata-demo-metadata.xml', import.meta.url)),
+      'utf-8',
+    );
+    const model = await parseCSDL(xml);
+
+    const suppliers = model.entityContainers[0]!.entitySets.find(
+      (s) => s.name === 'Suppliers',
+    )!;
+    // `Target="ODataDemo.DemoService/Suppliers"` — the qualified container form.
+    expect(suppliers.annotations).toBeDefined();
+
+    const product = model.entities.find((e) => e.qualifiedName === 'ODataDemo.Product')!;
+    expect(product.annotations).toBeDefined();
+  });
+});

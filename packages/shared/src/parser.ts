@@ -417,7 +417,7 @@ export async function parseCSDL(
         }
       }
       if (containerName || parsedEntitySets.length > 0) {
-        entityContainers.push({ name: containerName, entitySets: parsedEntitySets });
+        entityContainers.push({ name: containerName, namespace, entitySets: parsedEntitySets });
       }
 
       const funcImports = ensureArray(
@@ -588,14 +588,21 @@ function applyTargetedAnnotations(
   ): Record<string, string> => ({ ...extra, ...current });
 
   for (const { target, annotations } of targeted) {
+    // Two arguments deliberately: the namespace guard that `expandAlias` gains
+    // in #25 is additive, so this call stays valid either way.
     const expanded = expandAlias(target, aliases);
     const segments = expanded.split('/');
 
-    // `NS.Type/Prop` — a property of an entity or complex type.
-    if (segments.length === 2) {
+    // `NS.Type/Prop`. Per CSDL a schema child must be namespace-qualified, so
+    // an unqualified first segment cannot be a type — requiring the dot keeps
+    // `C/Widgets` from matching a property named `Widgets` on some type `C`.
+    if (segments.length === 2 && segments[0].includes('.')) {
       const owner = findEntityByName(metadata.entities, segments[0]);
       if (owner) {
-        const property = owner.properties.find((p) => p.name === segments[1]);
+        // Annotations apply to structural *or* navigation properties.
+        const property =
+          owner.properties.find((p) => p.name === segments[1]) ??
+          owner.navigationProperties.find((p) => p.name === segments[1]);
         if (property) {
           property.annotations = merge(property.annotations, annotations);
           property.label = labelFromAnnotations(property.annotations) ?? property.label;
@@ -604,9 +611,14 @@ function applyTargetedAnnotations(
       }
     }
 
-    // `Container/Set` — an entity set.
+    // `NS.Container/Set` — the spec form, and what `odata-demo-metadata.xml`
+    // uses (`ODataDemo.DemoService/Suppliers`). The unqualified `Container/Set`
+    // is accepted too, because it costs nothing and appears in hand-written
+    // documents.
     if (segments.length === 2) {
-      const container = metadata.entityContainers.find((c) => c.name === segments[0]);
+      const container = metadata.entityContainers.find(
+        (c) => c.name === segments[0] || `${c.namespace ?? ''}.${c.name}` === segments[0],
+      );
       const set = container?.entitySets.find((s) => s.name === segments[1]);
       if (set) {
         set.annotations = merge(set.annotations, annotations);
