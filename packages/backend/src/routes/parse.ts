@@ -4,7 +4,12 @@ import { parseCSDL } from '@odata-visualizer/shared';
 import { metadataStore, sanitizeModelId } from '../services/metadataStore.js';
 import { createHttpReferenceLoader } from '../services/referenceLoader.js';
 import { validateMetadataUrl, UrlPolicyError } from '../services/urlPolicy.js';
-import { fetchWithPolicy, readLimitedText, RedirectLimitError, urlPolicyFromEnv } from '../services/safeFetch.js';
+import {
+  fetchWithPolicy,
+  readLimitedText,
+  RedirectLimitError,
+  urlPolicyFromEnv,
+} from '../services/safeFetch.js';
 import { ClientError, statusForError } from '../services/errors.js';
 import type { ParseRequest, ParseResponse } from '@odata-visualizer/shared';
 

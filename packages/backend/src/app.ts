@@ -1,9 +1,4 @@
-import express, {
-  type Express,
-  type NextFunction,
-  type Request,
-  type Response,
-} from 'express';
+import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -100,7 +95,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
     const mcpToken =
       options.mcpToken === null
         ? undefined
-        : (options.mcpToken ?? process.env['MCP_TOKEN'] ?? options.apiToken ?? process.env['API_TOKEN']);
+        : (options.mcpToken ??
+          process.env['MCP_TOKEN'] ??
+          options.apiToken ??
+          process.env['API_TOKEN']);
 
     mountMcp(app, metadataStore.accessors, {
       token: mcpToken,
