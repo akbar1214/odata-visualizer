@@ -56,6 +56,16 @@ export interface QueryState {
   skip: number;
 }
 
+/**
+ * Receives a user-facing warning for the built query.
+ *
+ * `omittedFilter` is true when the message reports a filter row that is absent
+ * from the query (the preview has to say what it silently dropped). It is
+ * false/absent for advisory messages about rows that were kept, such as the
+ * shared builder reporting a property the model does not have.
+ */
+export type QueryWarningHandler = (message: string, omittedFilter?: boolean) => void;
+
 /** Find an entity by short or namespace-qualified name. */
 export function findEntity(entityName: string, entities: ODataEntity[]): ODataEntity | undefined {
   return findEntityByName(entities, entityName);
@@ -292,6 +302,99 @@ export function resolveResourcePath(
 }
 
 /**
+ * The longest raw value echoed inside a warning. A 3000-character value in a
+ * 288px panel measured `scrollWidth=24000` before this cap; the row is still
+ * dropped, the note just does not repeat the whole paste.
+ */
+const MAX_WARNING_VALUE_LENGTH = 40;
+
+/** Shorten a value for display, keeping enough to recognise what was typed. */
+function truncateValue(value: string): string {
+  return value.length > MAX_WARNING_VALUE_LENGTH
+    ? `${value.slice(0, MAX_WARNING_VALUE_LENGTH)}…`
+    : value;
+}
+
+/**
+ * The formatter's reason, with the raw value shortened. `formatV4Literal`
+ * embeds the value it rejected (`Invalid Edm.Int32 value: <value>…`), so the
+ * reason is the other place a paste-sized value could reach the panel.
+ */
+function summarizeValueError(error: unknown, value: string): string {
+  const reason = error instanceof Error ? error.message : String(error);
+  const shortened = truncateValue(value);
+  // `split/join` rather than `replace`: the value is data, not a replacement
+  // pattern, and all of its occurrences are the same rejected literal.
+  return shortened === value ? reason : reason.split(value).join(shortened);
+}
+
+/**
+ * Rows whose value cannot be formatted as a literal for the resolved property
+ * are left out (the preview must stay buildable while editing) and reported.
+ * The message names the row by property path and operator — two rows on the
+ * same property with different operators must not collapse into one note —
+ * and the `pathPrefix` identifies which expand node owns the row.
+ *
+ * A row whose property is not in the resolved shape is kept: the shared
+ * builder can still format it and may have a better diagnosis of its own.
+ */
+function filterRows(
+  filters: QueryFilter[],
+  properties: ODataProperty[],
+  pathPrefix: string,
+  onWarning?: QueryWarningHandler,
+): QueryFilter[] {
+  return filters.filter((filter) => {
+    const value = filter.value.trim();
+    if (!value) return false;
+    const type = properties.find((p) => p.name === filter.property)?.type;
+    if (!type) return true;
+    try {
+      formatV4Literal(value, type);
+      return true;
+    } catch (error) {
+      const path = pathPrefix ? `${pathPrefix}/${filter.property}` : filter.property;
+      onWarning?.(
+        `Filter on "${path}" (${filter.operator}) was left out of the query: ${summarizeValueError(error, value)}`,
+        true,
+      );
+      return false;
+    }
+  });
+}
+
+/**
+ * Recursively pre-validate every expand node's filter rows.
+ *
+ * Without this, one bad child value reached `buildQueryUrl` unchecked, the
+ * `buildFilter` throw escaped it, and the outer catch collapsed the whole
+ * preview to the bare resource path — losing `$filter`, `$select`, `$orderby`,
+ * `$top` and `$expand` with no warning. The target is resolved the same way
+ * the graph resolved it (`getTargetEntityName`), so the types validated here
+ * are the types the shared builder will use.
+ */
+function filterExpandItems(
+  items: ExpandItem[],
+  parentEntityName: string | undefined,
+  metadata: ODataMetadata,
+  pathPrefix: string,
+  onWarning?: QueryWarningHandler,
+): ExpandItem[] {
+  return items.map((item) => {
+    const path = pathPrefix ? `${pathPrefix}/${item.navProperty}` : item.navProperty;
+    const parent = parentEntityName ? findEntity(parentEntityName, metadata.entities) : undefined;
+    const targetName = parent ? getTargetEntityName(item.navProperty, parent, metadata) : undefined;
+    const target = targetName ? getResolvedEntity(targetName, metadata.entities) : undefined;
+
+    return {
+      ...item,
+      filters: filterRows(item.filters, target?.allProperties ?? [], path, onWarning),
+      expand: filterExpandItems(item.expand, targetName, metadata, path, onWarning),
+    };
+  });
+}
+
+/**
  * Build the OData V4 query for the builder UI. The shared builder is used so
  * literals, encoding, and expansion syntax stay identical to the MCP server.
  *
@@ -300,47 +403,66 @@ export function resolveResourcePath(
  * so property lookup and literal typing resolve against the selected shape
  * rather than the set's.
  *
- * Filter rows that are still being typed (empty or not yet a valid literal for
- * their property) are left out instead of discarding the whole query.
+ * Filter rows whose value cannot be formatted as a literal for their property
+ * are left out instead of discarding the whole query, at every level: the root
+ * `filters` and each expand node's `filters` recursively. Each left-out row
+ * with a value is reported through `onWarning` (marked `omittedFilter`),
+ * naming the property path, the operator and the formatter's reason, so a
+ * *complete* but invalid value (`2147483648` on `Edm.Int32`, `1.5` on an
+ * integer) cannot disappear from the preview without an explanation. An empty
+ * row is left out silently: a freshly added row is not a problem to report.
+ *
+ * `onWarning` is also handed to `buildQueryUrl`, which reports rows it can
+ * format but cannot resolve (a property the model does not have). Those
+ * messages are advisory: the row is *kept*. The UI's property and navigation
+ * dropdowns are all model-derived, so no UI interaction produces that channel
+ * today; it is wired for programmatic callers of this function.
+ *
+ * If the shared builder still throws (a state the pre-checks could not fix),
+ * the catch reports why the preview fell back to the bare resource path rather
+ * than dropping every option silently.
  */
-export function buildODataQuery(query: QueryState, metadata: ODataMetadata): string {
+export function buildODataQuery(
+  query: QueryState,
+  metadata: ODataMetadata,
+  onWarning?: QueryWarningHandler,
+): string {
   const resolved = getResolvedEntity(query.entityName, metadata.entities);
   if (!resolved) return '';
 
   const resourcePath = resolveResourcePath(query.entityName, metadata);
   if (!resourcePath) return '';
 
-  const filters = query.filters.filter((filter) => {
-    const value = filter.value.trim();
-    if (!value) return false;
-    const type = resolved.allProperties.find((p) => p.name === filter.property)?.type;
-    if (!type) return true;
-    try {
-      formatV4Literal(value, type);
-      return true;
-    } catch {
-      return false;
-    }
-  });
+  const filters = filterRows(query.filters, resolved.allProperties, '', onWarning);
+  const expand =
+    query.expand.length > 0
+      ? filterExpandItems(query.expand, query.entityName, metadata, '', onWarning)
+      : [];
 
   try {
     return buildQueryUrl({
       entitySet: resourcePath,
       rootEntityName: query.entityName,
       metadata,
+      onWarning,
       filters: filters.length > 0 ? filters : undefined,
       filterLogic: query.filterLogic,
       select: query.select.length > 0 ? query.select : undefined,
-      expand: query.expand.length > 0 ? query.expand.map(toExpandNode) : undefined,
+      expand: expand.length > 0 ? expand.map(toExpandNode) : undefined,
       orderBy: query.sort ? `${query.sort} ${query.sortDirection}` : undefined,
       top: query.top > 0 ? query.top : undefined,
       skip: query.skip > 0 ? query.skip : undefined,
     });
-  } catch {
-    // Invalid values while the user is editing: show the bare resource path
-    // rather than an error state in the preview. This must use the resolved
+  } catch (error) {
+    // Invalid state while the user is editing: show the bare resource path
+    // rather than an error state in the preview, but say so — silently losing
+    // every other option is worse than the note. This must use the resolved
     // entity *set* — returning the type name here would reintroduce the very
     // bug this function exists to fix.
+    const reason = error instanceof Error ? error.message : String(error);
+    onWarning?.(
+      `The full query could not be built, so the preview shows only the resource path: ${reason}`,
+    );
     return `/${resourcePath}`;
   }
 }
