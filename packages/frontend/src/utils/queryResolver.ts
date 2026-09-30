@@ -300,10 +300,24 @@ export function resolveResourcePath(
  * so property lookup and literal typing resolve against the selected shape
  * rather than the set's.
  *
- * Filter rows that are still being typed (empty or not yet a valid literal for
- * their property) are left out instead of discarding the whole query.
+ * Filter rows whose value cannot be formatted as a literal for their property
+ * are left out instead of discarding the whole query. Each left-out row with a
+ * value is reported through `onWarning`, naming the property and the
+ * formatter's reason, so a *complete* but invalid value (`2147483648` on
+ * `Edm.Int32`, `1.5` on an integer) cannot disappear from the preview without
+ * an explanation. An empty row is left out silently: a freshly added row is
+ * not a problem to report.
+ *
+ * `onWarning` is also handed to `buildQueryUrl`, which reports rows it can
+ * format but cannot resolve (a property the model does not have); neither
+ * channel could see the other's rows, so both are needed for the preview to
+ * explain itself.
  */
-export function buildODataQuery(query: QueryState, metadata: ODataMetadata): string {
+export function buildODataQuery(
+  query: QueryState,
+  metadata: ODataMetadata,
+  onWarning?: (message: string) => void,
+): string {
   const resolved = getResolvedEntity(query.entityName, metadata.entities);
   if (!resolved) return '';
 
@@ -318,7 +332,9 @@ export function buildODataQuery(query: QueryState, metadata: ODataMetadata): str
     try {
       formatV4Literal(value, type);
       return true;
-    } catch {
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      onWarning?.(`Filter on "${filter.property}" was left out of the query: ${reason}`);
       return false;
     }
   });
@@ -328,6 +344,7 @@ export function buildODataQuery(query: QueryState, metadata: ODataMetadata): str
       entitySet: resourcePath,
       rootEntityName: query.entityName,
       metadata,
+      onWarning,
       filters: filters.length > 0 ? filters : undefined,
       filterLogic: query.filterLogic,
       select: query.select.length > 0 ? query.select : undefined,

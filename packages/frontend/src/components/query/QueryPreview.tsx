@@ -4,13 +4,19 @@ interface QueryPreviewProps {
   query: string;
   /** Shown in place of the query when there is nothing to build. */
   emptyMessage?: string;
+  /** Why a row was left out of `query`, listed under the preview. */
+  warnings?: string[];
 }
 
 const COPIED_FEEDBACK_MS = 2000;
 
 const DEFAULT_EMPTY_MESSAGE = 'Select an entity to generate a query';
 
-export function QueryPreview({ query, emptyMessage = DEFAULT_EMPTY_MESSAGE }: QueryPreviewProps) {
+export function QueryPreview({
+  query,
+  emptyMessage = DEFAULT_EMPTY_MESSAGE,
+  warnings = [],
+}: QueryPreviewProps) {
   const [copied, setCopied] = useState(false);
   // Held so repeated clicks reuse one timer instead of stacking one per click
   // (a stale timer reset the "Copied" state early) and so unmount can clear it.
@@ -87,6 +93,23 @@ export function QueryPreview({ query, emptyMessage = DEFAULT_EMPTY_MESSAGE }: Qu
       <pre className="bg-engineering-600 text-primary-200 rounded p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all min-h-[60px]">
         {query || emptyMessage}
       </pre>
+
+      {/* Kept mounted (empty when there is nothing to say) so assistive
+          technology announces rows appearing while the user types. Identical
+          messages (two rows dropped for the same reason) are shown once, which
+          is less noise and keeps the key data-derived rather than positional. */}
+      <ul
+        aria-live="polite"
+        className={
+          warnings.length > 0
+            ? 'mt-2 space-y-1 text-xs text-amber-600 bg-amber-50 p-2 rounded'
+            : undefined
+        }
+      >
+        {[...new Set(warnings)].map((warning) => (
+          <li key={warning}>{warning}</li>
+        ))}
+      </ul>
     </div>
   );
 }
