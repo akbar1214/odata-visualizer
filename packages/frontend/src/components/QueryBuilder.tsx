@@ -99,12 +99,20 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
 
   // One pass: the warnings describe *this* query, so they are collected while
   // it is built rather than recomputed separately (which could show reasons
-  // for a different query than the one on screen).
-  const { queryString, warnings } = useMemo(() => {
-    if (functionQuery) return { queryString: functionQuery, warnings: [] as string[] };
+  // for a different query than the one on screen). `omittedFilterCount` counts
+  // only the rows missing from the query — the shared builder's advisory
+  // messages are not omissions.
+  const { queryString, warnings, omittedFilterCount } = useMemo(() => {
+    if (functionQuery) {
+      return { queryString: functionQuery, warnings: [] as string[], omittedFilterCount: 0 };
+    }
     const warnings: string[] = [];
-    const queryString = buildODataQuery(query, metadata, (message) => warnings.push(message));
-    return { queryString, warnings };
+    let omittedFilterCount = 0;
+    const queryString = buildODataQuery(query, metadata, (message, omittedFilter) => {
+      warnings.push(message);
+      if (omittedFilter) omittedFilterCount += 1;
+    });
+    return { queryString, warnings, omittedFilterCount };
   }, [functionQuery, query, metadata]);
 
   // An entity type with no entity set anywhere in its inheritance chain has no
@@ -180,7 +188,12 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
         </div>
 
         <div className="border-t border-engineering-200 bg-engineering-100 p-3">
-          <QueryPreview query={queryString} emptyMessage={emptyMessage} warnings={warnings} />
+          <QueryPreview
+            query={queryString}
+            emptyMessage={emptyMessage}
+            warnings={warnings}
+            omittedFilterCount={omittedFilterCount}
+          />
         </div>
       </div>
 

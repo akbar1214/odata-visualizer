@@ -1,21 +1,44 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface QueryPreviewProps {
   query: string;
   /** Shown in place of the query when there is nothing to build. */
   emptyMessage?: string;
-  /** Why a row was left out of `query`, listed under the preview. */
+  /**
+   * Problems the builder reported for `query`, listed under the preview.
+   * Messages marked as omitted rows describe filters that are missing from the
+   * query; the shared builder also reports rows it *kept* but could not
+   * resolve (a property the model does not have), which the UI's
+   * model-derived dropdowns cannot produce today.
+   */
   warnings?: string[];
+  /** Filter rows left out of `query`; the Copy label has to say so. */
+  omittedFilterCount?: number;
 }
 
 const COPIED_FEEDBACK_MS = 2000;
 
 const DEFAULT_EMPTY_MESSAGE = 'Select an entity to generate a query';
 
+/**
+ * The part of a warning that is stable while the user types.
+ *
+ * Each visible message ends with the formatter's reason, which embeds the raw
+ * value (`…: Invalid Edm.Guid value: abc`). A live region bound to the full
+ * text announced a new message for every keystroke, so the announcement keeps
+ * only the prefix (property, operator, problem) and leaves the changing value
+ * and reason to the visible list.
+ */
+function announcementFor(warning: string): string {
+  const separator = warning.indexOf(': ');
+  return separator === -1 ? warning : warning.slice(0, separator);
+}
+
 export function QueryPreview({
   query,
   emptyMessage = DEFAULT_EMPTY_MESSAGE,
   warnings = [],
+  omittedFilterCount = 0,
 }: QueryPreviewProps) {
   const [copied, setCopied] = useState(false);
   // Held so repeated clicks reuse one timer instead of stacking one per click
@@ -53,6 +76,17 @@ export function QueryPreview({
     }
   }, [query, showCopied]);
 
+  // Unique per message, and derived from data rather than position, so the
+  // same warning keeps its DOM node when the list is reordered.
+  const uniqueWarnings = useMemo(() => [...new Set(warnings)], [warnings]);
+
+  // A user copying the query copies a valid query that silently omits rows;
+  // the Copy affordance is where that has to be visible.
+  const omittedSuffix =
+    omittedFilterCount > 0
+      ? ` (${omittedFilterCount} filter${omittedFilterCount === 1 ? '' : 's'} omitted)`
+      : '';
+
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
@@ -72,7 +106,7 @@ export function QueryPreview({
                   d="M5 13l4 4L19 7"
                 />
               </svg>
-              Copied
+              Copied{omittedSuffix}
             </>
           ) : (
             <>
@@ -84,7 +118,7 @@ export function QueryPreview({
                   d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"
                 />
               </svg>
-              Copy
+              Copy{omittedSuffix}
             </>
           )}
         </button>
@@ -95,18 +129,23 @@ export function QueryPreview({
       </pre>
 
       {/* Kept mounted (empty when there is nothing to say) so assistive
-          technology announces rows appearing while the user types. Identical
-          messages (two rows dropped for the same reason) are shown once, which
-          is less noise and keeps the key data-derived rather than positional. */}
+          technology announces rows appearing and disappearing. The list below
+          carries the full reasons; this region carries only their stable
+          prefixes, so typing inside a bad value does not re-announce. */}
+      <p aria-live="polite" aria-label="Query warnings" className="sr-only">
+        {uniqueWarnings.map(announcementFor).join('; ')}
+      </p>
+
+      {/* amber-600 on amber-50 is 3.07:1 at this size; amber-700 is 4.84:1.
+          `break-all` keeps a long unbroken value from widening the panel. */}
       <ul
-        aria-live="polite"
         className={
-          warnings.length > 0
-            ? 'mt-2 space-y-1 text-xs text-amber-600 bg-amber-50 p-2 rounded'
+          uniqueWarnings.length > 0
+            ? 'mt-2 space-y-1 text-xs text-amber-700 bg-amber-50 p-2 rounded break-all'
             : undefined
         }
       >
-        {[...new Set(warnings)].map((warning) => (
+        {uniqueWarnings.map((warning) => (
           <li key={warning}>{warning}</li>
         ))}
       </ul>
