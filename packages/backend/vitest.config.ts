@@ -6,12 +6,10 @@ import { fileURLToPath } from 'node:url';
  *
  * The package's `exports` map points at `./dist`, which is a gitignored build
  * artifact. Nothing built it before `pnpm test`, so on a fresh clone the entry
- * could not be resolved at all and 183 of the 368 tests silently failed to
- * load (`Failed to resolve entry for package "@odata-visualizer/shared"`), and
- * on an existing clone the suite happily ran against a stale build.
- *
- * Tests should exercise the source they are sitting next to; the build output
- * is only needed by the compiled `dist` consumers.
+ * could not be resolved and 9 of 11 backend test files failed to load
+ * (`Failed to resolve entry for package "@odata-visualizer/shared"`), while an
+ * existing clone silently ran against whatever stale build happened to be on
+ * disk.
  */
 const sharedSrc = fileURLToPath(new URL('../shared/src/index.ts', import.meta.url));
 const sharedLoadSrc = fileURLToPath(new URL('../shared/src/load.ts', import.meta.url));
@@ -28,9 +26,5 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['__tests__/**/*.test.ts'],
-    coverage: {
-      provider: 'v8',
-      reporter: ['text', 'json', 'html'],
-    },
   },
 });
