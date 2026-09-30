@@ -86,6 +86,21 @@ const NUMERIC_TYPES = new Set([
   'Edm.Double',
   'Edm.Single',
 ]);
+
+/** Integral EDM types take an optional sign and digits only — no fraction, no exponent. */
+const INTEGER_TYPES = new Set(['Edm.Byte', 'Edm.SByte', 'Edm.Int16', 'Edm.Int32', 'Edm.Int64']);
+
+/** Inclusive bounds, as BigInt so `Edm.Int64` survives 64-bit values. */
+const INTEGER_RANGES: Record<string, { min: bigint; max: bigint }> = {
+  'Edm.Byte': { min: 0n, max: 255n },
+  'Edm.SByte': { min: -128n, max: 127n },
+  'Edm.Int16': { min: -32768n, max: 32767n },
+  'Edm.Int32': { min: -2147483648n, max: 2147483647n },
+  'Edm.Int64': { min: -9223372036854775808n, max: 9223372036854775807n },
+};
+
+/** Floating types that must not be emitted as an infinite literal. */
+const FLOATING_TYPES = new Set(['Edm.Decimal', 'Edm.Double', 'Edm.Single']);
 const DATE_TYPES = new Set(['Edm.Date', 'Edm.DateTimeOffset', 'Edm.DateTime']);
 
 /** Shape checks for the ISO 8601 forms OData V4 uses. */
@@ -154,10 +169,32 @@ export function formatV4Literal(value: string, edmType?: string): string {
   }
 
   if (NUMERIC_TYPES.has(type)) {
-    if (!isNumericLiteral(raw)) {
+    const numeric = raw.trim();
+
+    // Integral types take `[sign] 1*10DIGIT` (OData ABNF). The floating-point
+    // pattern used here previously accepted `1.5` and `1e5` for `Edm.Int32` and
+    // emitted them verbatim, so the service rejected a query the builder had
+    // presented as valid.
+    if (INTEGER_TYPES.has(type)) {
+      if (!/^[+-]?\d+$/.test(numeric)) {
+        throw new Error(`Invalid ${type} value: ${raw} (expected an integer)`);
+      }
+      const range = INTEGER_RANGES[type];
+      const asBigInt = BigInt(numeric);
+      if (asBigInt < range.min || asBigInt > range.max) {
+        throw new Error(`Invalid ${type} value: ${raw} (out of range ${range.min}..${range.max})`);
+      }
+      return numeric;
+    }
+
+    if (!isNumericLiteral(numeric)) {
       throw new Error(`Invalid ${type} value: ${raw}`);
     }
-    return raw;
+    if (FLOATING_TYPES.has(type) && !Number.isFinite(Number(numeric))) {
+      // `1e999` parses to Infinity: a number syntactically, not a usable literal.
+      throw new Error(`Invalid ${type} value: ${raw} (not a finite number)`);
+    }
+    return numeric;
   }
 
   if (DATE_TYPES.has(type) || type in DATE_PATTERNS) {
@@ -226,29 +263,86 @@ const PROPERTY_PATH = /^[A-Za-z_][A-Za-z0-9_]*(?:\/[A-Za-z_][A-Za-z0-9_]*)*$/;
 const RESOURCE_SEGMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 
 /**
+ * A `$select` item (OData V4 ABNF `selectItem`): a star, an all-operations star
+ * for a schema, or a property path optionally prefixed with the type it is
+ * selected from.
+ *
+ *   `*`                  `NS.*`                 `Name`
+ *   `Address/City`       `NS.Part/Name`         `A/B/C`
+ *
+ * This previously used the plain-identifier matcher, which rejected `*` and
+ * every structural path — the two most common shapes in practice.
+ */
+const SELECT_ITEM =
+  /^(?:\*|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\.\*|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*(?:\/[A-Za-z_][A-Za-z0-9_]*)*)$/;
+
+/**
+ * A key predicate appended to a resource segment: `('P1')`, `(1)`,
+ * `(A=1,B='x')`, `(ID='a%20b')`.
+ *
+ * Values must survive being concatenated into a URL rather than encoded, so a
+ * quoted value allows only characters that are legal raw *or* a well-formed
+ * percent escape. `/` and `\` are excluded even though both are legal inside an
+ * OData string: they are the path separator, and WHATWG URL normalizes `\` to
+ * `/`, so `Parts('a/b')` would address a different resource. `%XX` is allowed
+ * so a value that genuinely needs a space or a slash can be spelled legibly —
+ * which is also what the MCP key builder emits.
+ */
+// prettier-ignore
+const KEY_PREDICATE =
+  /^\((?:[A-Za-z_][A-Za-z0-9_]*=)?(?:'(?:[^'%/\\?#&\s\p{Cc}]|%[0-9A-Fa-f]{2}|'')*'|[A-Za-z0-9_.:+-]+)(?:,(?:[A-Za-z_][A-Za-z0-9_]*=)?(?:'(?:[^'%/\\?#&\s\p{Cc}]|%[0-9A-Fa-f]{2}|'')*'|[A-Za-z0-9_.:+-]+))*\)$/u;
+
+/**
  * Validate the single resource path segment the URL is built from (an entity
  * set name, or the entity type name the builder UI previews with).
  */
+/**
+ * The path part of a resource segment, without a key predicate.
+ *
+ * `/Parts('P1')` and `/Parts` address the same entity set, so metadata lookups
+ * must use the path — otherwise a key predicate resolves to nothing and every
+ * literal falls back to an inferred type.
+ */
+export function resourcePathOf(entitySet: string): string {
+  const predicateStart = entitySet.indexOf('(');
+  return predicateStart === -1 ? entitySet : entitySet.slice(0, predicateStart);
+}
+
 function assertResourceSegment(entitySet: string): string {
   if (!entitySet || entitySet.trim().length === 0) {
     throw new Error('entitySet is required');
   }
-  if (entitySet.startsWith('/') || entitySet.endsWith('/')) {
-    throw new Error(
-      `Invalid entitySet: ${JSON.stringify(entitySet)}. Expected a resource path without leading or trailing "/".`,
+
+  const rejection = () =>
+    new Error(
+      `Invalid entitySet: ${JSON.stringify(entitySet)}. Expected a resource path of OData ` +
+        'identifiers, optionally with a key predicate, e.g. "Parts", "Container/Parts" or ' +
+        `"Parts('P1')".`,
     );
-  }
+
+  // Split the path from an optional key predicate: `/Parts('P1')` addresses one
+  // entity, and is the most common URL anyone types into an OData tool.
+  const path = resourcePathOf(entitySet);
+  const predicate = entitySet.slice(path.length);
+
+  if (!path || path.startsWith('/') || path.endsWith('/')) throw rejection();
+
   // A container-qualified path (Container/EntitySet) is legitimate, so each
   // segment is checked on its own rather than rejecting "/" outright.
-  for (const segment of entitySet.split('/')) {
-    if (!RESOURCE_SEGMENT.test(segment)) {
-      throw new Error(
-        `Invalid entitySet: ${JSON.stringify(entitySet)}. ` +
-          'Expected a resource path of OData identifiers, e.g. "Parts" or "Container/Parts".',
-      );
-    }
+  for (const segment of path.split('/')) {
+    if (!RESOURCE_SEGMENT.test(segment)) throw rejection();
   }
+
+  if (predicate && !KEY_PREDICATE.test(predicate)) throw rejection();
+
   return entitySet;
+}
+
+function assertSelectItem(value: string): string {
+  if (!SELECT_ITEM.test(value)) {
+    throw new Error(`Invalid $select: ${JSON.stringify(value)}`);
+  }
+  return value;
 }
 
 function assertIdentifier(value: string, label: string): string {
@@ -408,7 +502,7 @@ function validateExpand(expands: ExpandNode[]): void {
   for (const item of expands) {
     assertIdentifier(item.navProperty, 'navigation property');
     for (const selected of item.select ?? []) {
-      assertIdentifier(selected, '$select');
+      assertSelectItem(selected);
     }
     for (const clause of item.filters ?? []) {
       assertPropertyPath(clause.property, 'property');
@@ -455,6 +549,9 @@ export function buildQueryUrl(options: QueryOptions): string {
   const warn = options.onWarning;
   const checkProperty = (property: string): void => {
     if (!warn || !rootEntity || !options.metadata) return;
+    // `*`, `NS.*` and structural paths name something other than a single
+    // property on the root type, so the exact-name check cannot apply to them.
+    if (property.includes('*') || property.includes('/')) return;
     const entity = findEntityByName(options.metadata.entities, rootEntity);
     if (!entity) return;
     const known = getEffectiveProperties(entity, options.metadata.entities).some(
@@ -471,7 +568,7 @@ export function buildQueryUrl(options: QueryOptions): string {
   }
 
   for (const selected of options.select ?? []) {
-    assertIdentifier(selected, '$select');
+    assertSelectItem(selected);
   }
   validateExpand(options.expand ?? []);
 
@@ -724,7 +821,10 @@ function resolveRootEntity(options: QueryOptions): string | undefined {
     if (direct) return direct.qualifiedName ?? direct.name;
   }
 
-  const set = findEntitySet(options.metadata, options.entitySet);
+  // Look the set up by its *path*: a key predicate addresses one entity of the
+  // same set, so `/Parts('P1')` must resolve exactly like `/Parts` or every
+  // literal degrades to an inferred type and property warnings stop firing.
+  const set = findEntitySet(options.metadata, resourcePathOf(options.entitySet));
   if (!set) return undefined;
   return set.entityTypeQualified ?? set.entityType;
 }

@@ -18,6 +18,7 @@ import {
   getEffectiveNavigationProperties,
   getEffectiveProperties,
   resolveInheritanceChain,
+  resourcePathOf,
   suggestNames,
   type ExpandNode,
   type FilterClause,
@@ -859,9 +860,9 @@ export function createToolHandler(
             onWarning: (message) => warnings.push(message),
           });
 
-          if (!findEntitySet(metadata, entitySet)) {
+          if (!findEntitySet(metadata, resourcePathOf(entitySet))) {
             const suggestions = suggestNames(
-              entitySet,
+              resourcePathOf(entitySet),
               getAllEntitySets(metadata).map((s) => s.name),
             );
             warnings.push(

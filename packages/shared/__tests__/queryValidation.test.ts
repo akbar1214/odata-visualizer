@@ -80,7 +80,7 @@ describe('buildQueryUrl input validation', () => {
 
     it('rejects $select entries that inject another parameter', () => {
       expect(() => buildQueryUrl({ entitySet: 'Parts', select: ['ID&$top=1'] })).toThrow(/\$select/);
-      expect(() => buildQueryUrl({ entitySet: 'Parts', select: ['ID/Name'] })).toThrow(/\$select/);
+      expect(() => buildQueryUrl({ entitySet: 'Parts', select: ['ID?$top=1'] })).toThrow(/\$select/);
     });
 
     it('rejects a sort field that injects filter logic', () => {
