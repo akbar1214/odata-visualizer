@@ -137,7 +137,11 @@ export function validateMetadataUrl(
     );
   }
 
-  if (options.blockPrivate && isPrivateAddress(parsed.hostname) && !isAllowlisted(parsed, allowlist)) {
+  if (
+    options.blockPrivate &&
+    isPrivateAddress(parsed.hostname) &&
+    !isAllowlisted(parsed, allowlist)
+  ) {
     throw new UrlPolicyError(
       `Refusing to fetch a private or loopback address (${parsed.hostname}); set METADATA_URL_BLOCK_PRIVATE=0 to allow`,
     );
