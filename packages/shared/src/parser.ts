@@ -131,7 +131,11 @@ function parseEdmxDocument(xmlContent: string): EdmxDocument {
   }
 
   const schemas = ensureArray(dataServices['Schema'] || dataServices['edm:Schema'] || []);
+  // Per CSDL, `edmx:Reference` is a child of `edmx:Edmx`. It is also accepted
+  // inside `DataServices` (and on a `Schema`), which is where this used to look
+  // only — so a reference in its standard position was ignored entirely.
   const references = [
+    ...ensureArray(edmx['Reference'] || edmx['edmx:Reference'] || []),
     ...ensureArray(dataServices['Reference'] || dataServices['edmx:Reference'] || []),
     ...schemas.flatMap((s) => ensureArray(s['Reference'] || s['edmx:Reference'] || [])),
   ];
@@ -270,6 +274,17 @@ export async function parseCSDL(
   };
 
   const registerAliases = (owner: XmlElement): void => {
+    // A schema may alias its own namespace — `<Schema Namespace="N" Alias="Self">`
+    // — and every generator that writes `Self.Type` references relies on it.
+    // Reading only `Include` here left those references unexpanded, so
+    // `BaseType="Self.Base"` produced no inheritance chain and `getEffectiveKeys`
+    // returned nothing.
+    const ownerNamespace = str(owner['@_Namespace']);
+    const ownerAlias = str(owner['@_Alias']);
+    if (ownerNamespace && ownerAlias && !aliases.has(ownerAlias)) {
+      aliases.set(ownerAlias, ownerNamespace);
+    }
+
     for (const include of includesOf(owner)) {
       const namespace = str(include['@_Namespace']);
       const alias = str(include['@_Alias']);
