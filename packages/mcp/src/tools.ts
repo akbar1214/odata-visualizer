@@ -358,14 +358,27 @@ function sampleScalar(type: string, metadata: ODataMetadata): unknown {
 }
 
 /**
- * Characters that cannot appear raw in a URL path segment (RFC 3986 §3.3) and
- * would corrupt the request rather than travel as data.
+ * Characters that cannot appear raw in a URL path segment (RFC 3986 §3.3:
+ * `pchar` is unreserved, pct-encoded, sub-delims, `:` and `@` — it excludes
+ * `/`) and would corrupt the request rather than travel as data.
  *
  * Encoding is deliberately narrow. `'`, `:`, `(`, `)`, `,` and `=` are all
  * legal in a path, and leaving them readable keeps OData structure legible
- * (`Parts('OR:wt.part:1')/NS.Action`). A raw space or `#`, by contrast, makes
- * the whole request unusable: `curl` reports `URL rejected: Malformed input to
- * a URL function`, and `#` silently truncates the URL at a fragment boundary.
+ * (`Parts('OR:wt.part:1')/NS.Action`) — which matters because the caller copies
+ * this URL by hand. A raw space, `#` or `/`, by contrast, changes where the
+ * request goes: `curl` rejects the first outright (`URL rejected: Malformed
+ * input to a URL function`), `#` silently truncates the URL at a fragment
+ * boundary, and `/` splits the value across extra path segments so a different
+ * resource is addressed.
+ *
+ * `/` becomes `%2F`. Most OData servers decode that back correctly; Tomcat
+ * rejects encoded slashes by default (`encodedSolidusHandling`), so a value
+ * containing a slash may have to be sent as a key rather than an inline
+ * parameter.
+ *
+ * Values are treated as raw data, never as pre-encoded URL text: a literal `%`
+ * becomes `%25`. Accepting a caller's `%2F` would otherwise smuggle a path
+ * separator through.
  */
 const PATH_UNSAFE = new Set([
   ' ',
@@ -383,6 +396,7 @@ const PATH_UNSAFE = new Set([
   '[',
   ']',
   '%',
+  '/',
 ]);
 
 /** Percent-encode a rendered OData literal for use inside a URL path segment. */
@@ -391,6 +405,12 @@ function encodeLiteralForUrl(literal: string): string {
   for (const char of literal) {
     const code = char.codePointAt(0) ?? 0;
     if (code > 0x7e) {
+      if (code >= 0xd800 && code <= 0xdfff) {
+        // `for...of` yields a lone surrogate as its own code point, and
+        // `encodeURIComponent` throws `URIError` on it. Say so plainly instead
+        // of surfacing "URI malformed".
+        throw new Error('Value contains an unpaired surrogate and cannot be encoded for a URL.');
+      }
       encoded += encodeURIComponent(char);
     } else if (code < 0x20 || code === 0x7f || PATH_UNSAFE.has(char)) {
       encoded += `%${code.toString(16).toUpperCase().padStart(2, '0')}`;

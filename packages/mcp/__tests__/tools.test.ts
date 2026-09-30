@@ -852,6 +852,33 @@ describe('inline parameter encoding', () => {
     expect(url).not.toContain(' ');
   });
 
+  it('percent-encodes a slash so the value stays one path segment', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      parameters: { EntityName: 'a/b' },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    const url = emittedUrl(result.content[0].text);
+    // A raw slash would split the value into two path segments, addressing a
+    // different resource entirely — and `curl` would still accept the URL.
+    expect(url).toContain('a%2Fb');
+    expect(new URL(url).pathname).toBe(
+      "/Windchill/servlet/odata/ProdMgmt/GetWindchillMetaInfo(EntityName='a%2Fb')",
+    );
+  });
+
+  it('percent-encodes a value that would otherwise smuggle an encoded slash', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      parameters: { EntityName: 'a%2Fb' },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    // Values are raw data, never pre-encoded URL text, so `%` is escaped too.
+    expect(emittedUrl(result.content[0].text)).toContain('a%252Fb');
+  });
+
   it('percent-encodes characters that would truncate the URL', async () => {
     const result = await handleToolCall('build_function_invocation', {
       functionName: 'GetWindchillMetaInfo',
@@ -868,16 +895,58 @@ describe('inline parameter encoding', () => {
     expect(decodeURIComponent(parsed.pathname)).toContain("'a#b?c%d'");
   });
 
-  it('keeps the OData literal escaping and the URL encoding independent', async () => {
+  it('percent-encodes non-ASCII and emoji as UTF-8', async () => {
     const result = await handleToolCall('build_function_invocation', {
       functionName: 'GetWindchillMetaInfo',
-      parameters: { EntityName: "O'Brien" },
+      parameters: { EntityName: 'café 🎉' },
       baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
     });
 
     const url = emittedUrl(result.content[0].text);
-    // OData escapes the apostrophe by doubling it; the URL then encodes both.
-    expect(decodeURIComponent(url)).toContain("'O''Brien'");
+    expect(url).toContain('caf%C3%A9');
+    // One code point, encoded as four UTF-8 bytes, not two surrogate halves.
+    expect(url).toContain('%F0%9F%8E%89');
+    expect(decodeURIComponent(url)).toContain("'café 🎉'");
+  });
+
+  it('percent-encodes control characters', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      parameters: { EntityName: 'a\nb\tc' },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    const url = emittedUrl(result.content[0].text);
+    expect(url).toContain('a%0Ab%09c');
+    expect(url).not.toMatch(/[\n\t]/);
+  });
+
+  it('reports an unpaired surrogate clearly instead of "URI malformed"', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      parameters: { EntityName: '\ud800' },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('unpaired surrogate');
+    expect(result.content[0].text).not.toContain('URI malformed');
+  });
+
+  it('escapes the OData literal and URL-encodes it independently', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'GetWindchillMetaInfo',
+      // Both a character OData escapes (') and one the URL must encode (space),
+      // so the test fails if either step stops happening.
+      parameters: { EntityName: "O'Brien Smith" },
+      baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
+    });
+
+    const url = emittedUrl(result.content[0].text);
+    // OData doubles the apostrophe; the space is the part the URL must encode.
+    // Either step stopping would fail this.
+    expect(url).toContain("'O''Brien%20Smith'");
+    expect(decodeURIComponent(url)).toContain("'O''Brien Smith'");
   });
 
   it('percent-encodes a key value containing a space or fragment', async () => {
@@ -908,5 +977,62 @@ describe('inline parameter encoding', () => {
     expect(result.content[0].text).toContain(
       "/Parts('OR:wt.part.WTPart:123')/PTC.ProdMgmt.GetPartEstimate(Quantity=12.5)",
     );
+  });
+});
+
+/**
+ * A composite key takes the `(A=...,B=...)` form, a different branch from the
+ * single-key `(...)`. No fixture in the repo has a composite key, so this
+ * builds one — the branch was previously uncovered, and a mutation removing its
+ * encoding survived the whole suite.
+ */
+describe('composite key encoding', () => {
+  const compositeCsdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Pair">
+        <Key>
+          <PropertyRef Name="A" />
+          <PropertyRef Name="B" />
+        </Key>
+        <Property Name="A" Type="Edm.String" Nullable="false" />
+        <Property Name="B" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Action Name="Touch" IsBound="true">
+        <Parameter Name="it" Type="N.Pair" />
+        <Parameter Name="Note" Type="Edm.String" />
+      </Action>
+      <EntityContainer Name="Container">
+        <EntitySet Name="Pairs" EntityType="N.Pair" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  async function compositeHandler() {
+    const { parseCSDL } = await import('@odata-visualizer/shared');
+    const store = createMetadataStore();
+    store.set(await parseCSDL(compositeCsdl), { sourceName: 'composite.xml', sourceType: 'file' });
+    return createToolHandler(store, { allowLoadMetadata: false });
+  }
+
+  it('encodes each key value in the A=...,B=... form', async () => {
+    const handler = await compositeHandler();
+    const result = await handler('build_action_invocation', {
+      actionName: 'Touch',
+      entitySet: 'Pairs',
+      keys: { A: 'x y', B: 'p#q' },
+      baseUrl: 'https://host/svc',
+    });
+
+    const url = result.content[0].text
+      .split('\n')
+      .find((l) => l.startsWith('POST ') || l.startsWith('GET '))!
+      .replace(/^(POST|GET) /, '');
+
+    // Both names and both separators stay raw; only the values are encoded.
+    expect(url).toContain("(A='x%20y',B='p%23q')");
+    expect(new URL(url).hash).toBe('');
   });
 });
