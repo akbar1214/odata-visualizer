@@ -99,8 +99,57 @@ const INTEGER_RANGES: Record<string, { min: bigint; max: bigint }> = {
   'Edm.Int64': { min: -9223372036854775808n, max: 9223372036854775807n },
 };
 
-/** Floating types that must not be emitted as an infinite literal. */
-const FLOATING_TYPES = new Set(['Edm.Decimal', 'Edm.Double', 'Edm.Single']);
+/**
+ * Per-type magnitude caps for the non-integer types, checked explicitly
+ * because `Number.isFinite` only knows binary64:
+ *
+ * - `Edm.Single` is IEEE-754 binary32, whose maximum finite value is
+ *   2^128 - 2^104 = 3.4028234663852886e38. `1e39` parses to a perfectly
+ *   finite double, so the old check accepted it and the service rejected
+ *   the query.
+ * - `Edm.Decimal` has no digit cap in the ABNF (decimalLiteral), but every
+ *   mainstream OData persistence layer (SQL Server, Oracle, .NET SqlDecimal)
+ *   tops out at 38 digits of precision. A value with <= 38 significant digits
+ *   always has magnitude < 1e38, so the bound below is a *necessary*
+ *   condition: it rejects only literals no precision-<=38 service can store
+ *   and never one it could. Before it, the limit was an accident of binary64:
+ *   values up to ~1.797e308 slipped through while a 400-digit integer
+ *   overflowed to Infinity and was rejected as "not a finite number".
+ *   The check runs on the decimal digits rather than on `Number(...)`:
+ *   `Number('999…9')` (38 nines) rounds to the same double as `1e38`, so a
+ *   float comparison would reject the largest legal 38-digit integer.
+ * - `Edm.Double` keeps the binary64 finiteness check below: its range *is*
+ *   binary64, so that check is the right oracle for it.
+ *
+ * INF/-INF/NaN are not part of these bounds: they are spelled nanInfinity in
+ * the ABNF and handled before the numeric parse.
+ */
+const SINGLE_MAX = 3.4028234663852886e38;
+const DECIMAL_MAX_DIGITS = 38;
+
+/**
+ * Is |numeric| < 1e38, decided exactly on the decimal digits?
+ *
+ * A decimal literal is `m_int * 10^(exp - fracLen)` where m_int is the digit
+ * string without leading zeros, which is below 1e38 precisely when
+ * `digits(m_int) + exp - fracLen <= 38`. Pure integer arithmetic, so the
+ * boundary is not blurred by binary64 rounding.
+ */
+function decimalIsWithinBound(numeric: string): boolean {
+  const unsigned = numeric.replace(/^[+-]/, '');
+  let mantissa = unsigned;
+  let exp = 0;
+  const eIndex = unsigned.search(/[eE]/);
+  if (eIndex !== -1) {
+    mantissa = unsigned.slice(0, eIndex);
+    exp = Number(unsigned.slice(eIndex + 1));
+  }
+  const dotIndex = mantissa.indexOf('.');
+  const fracLen = dotIndex === -1 ? 0 : mantissa.length - dotIndex - 1;
+  const digits = mantissa.replace(/\./g, '').replace(/^0+/, '');
+  if (digits.length === 0) return true; // zero mantissa: 0 * 10^k = 0
+  return digits.length + exp - fracLen <= DECIMAL_MAX_DIGITS;
+}
 const DATE_TYPES = new Set(['Edm.Date', 'Edm.DateTimeOffset', 'Edm.DateTime']);
 
 /** Shape checks for the ISO 8601 forms OData V4 uses. */
@@ -187,11 +236,34 @@ export function formatV4Literal(value: string, edmType?: string): string {
       return numeric;
     }
 
+    // nanInfinity = "NaN" / "-INF" / "INF" is an alternative of
+    // decimalLiteral, which the ABNF shares between doubleLiteral and
+    // singleLiteral: these are legal literals for the binary floating types
+    // and refusing them was the same defect as accepting too much elsewhere.
+    // Edm.Decimal cannot represent them (no decimal implementation has a NaN
+    // or an infinity) and the integer rules do not admit them, so they are
+    // rejected there with a message that says why.
+    if (numeric === 'NaN' || numeric === 'INF' || numeric === '-INF') {
+      if (type === 'Edm.Double' || type === 'Edm.Single') return numeric;
+      throw new Error(
+        `Invalid ${type} value: ${raw} (${numeric} is only valid for Edm.Double or Edm.Single)`,
+      );
+    }
+
     if (!isNumericLiteral(numeric)) {
       throw new Error(`Invalid ${type} value: ${raw}`);
     }
-    if (FLOATING_TYPES.has(type) && !Number.isFinite(Number(numeric))) {
-      // `1e999` parses to Infinity: a number syntactically, not a usable literal.
+    if (type === 'Edm.Single') {
+      if (Math.abs(Number(numeric)) > SINGLE_MAX) {
+        throw new Error(`Invalid Edm.Single value: ${raw} (out of range +/-${SINGLE_MAX})`);
+      }
+    } else if (type === 'Edm.Decimal') {
+      if (!decimalIsWithinBound(numeric)) {
+        throw new Error(`Invalid Edm.Decimal value: ${raw} (out of range, magnitude < 1e38)`);
+      }
+    } else if (!Number.isFinite(Number(numeric))) {
+      // Edm.Double: `1e999` parses to Infinity — a number syntactically, not
+      // a usable literal.
       throw new Error(`Invalid ${type} value: ${raw} (not a finite number)`);
     }
     return numeric;
@@ -287,10 +359,202 @@ const SELECT_ITEM =
  * `/`, so `Parts('a/b')` would address a different resource. `%XX` is allowed
  * so a value that genuinely needs a space or a slash can be spelled legibly —
  * which is also what the MCP key builder emits.
+ *
+ * The predicate is validated by a small parser instead of one regex, because
+ * the ABNF rules (oasis-tcs/odata-abnf: `compoundKey = OPEN keyValuePair *(
+ * COMMA keyValuePair )`) are structural: once a comma appears, *every*
+ * element must be `name=value`, and `keyPropertyValue` is a choice of
+ * literal shapes — no `null` alternative, and a bare integer is
+ * `int64Literal = [ SIGN ] 1*19DIGIT` with the int64 range as a semantic
+ * restriction. Each value is checked against those shapes rather than
+ * against a permissive character class.
  */
+
+/** An OData key property name: `odataIdentifier` in the ABNF. */
+const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 // prettier-ignore
-const KEY_PREDICATE =
-  /^\((?:[A-Za-z_][A-Za-z0-9_]*=)?(?:'(?:[^'%/\\?#&\s\p{Cc}]|%[0-9A-Fa-f]{2}|'')*'|[A-Za-z0-9_.:+-]+)(?:,(?:[A-Za-z_][A-Za-z0-9_]*=)?(?:'(?:[^'%/\\?#&\s\p{Cc}]|%[0-9A-Fa-f]{2}|'')*'|[A-Za-z0-9_.:+-]+))*\)$/u;
+const KEY_QUOTED_INNER = /^(?:[^'%/\\?#&\s\p{Cc}]|%[0-9A-Fa-f]{2}|'')*$/u;
+
+const KEY_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/** `[ SIGN ] 1*DIGIT`: a bare integer token, i.e. int64Literal in a URL. */
+const KEY_BARE_INTEGER = /^[+-]?\d+$/;
+
+/**
+ * decimalLiteral = [ SIGN ] 1*DIGIT [ "." 1*DIGIT ] [ "e" [ SIGN ] 1*DIGIT ],
+ * shared with doubleLiteral/singleLiteral. `E` is accepted next to the ABNF's
+ * lowercase `e`, matching `isNumericLiteral` elsewhere in this module.
+ */
+const KEY_DECIMAL = /^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+
+/** date = year "-" month "-" day, with ABNF month/day ranges. */
+const KEY_DATE = /^(-?)(\d{4})-(\d{2})-(\d{2})$/;
+
+/** dateTimeOffsetLiteral = date "T" timeOfDayLiteral ( "Z" / SIGN hour COLON minute ). */
+// prettier-ignore
+const KEY_DATE_TIME = /^(-?)(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+
+/** timeOfDayLiteral = hour COLON minute [ COLON second [ "." 1*DIGIT ] ]. */
+const KEY_TIME = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/;
+
+function inRange(digitPair: string, min: number, max: number): boolean {
+  const n = Number(digitPair);
+  return n >= min && n <= max;
+}
+
+function validDateFields(month: string, day: string): boolean {
+  return inRange(month, 1, 12) && inRange(day, 1, 31);
+}
+
+function validTimeFields(hour: string, minute: string, second?: string): boolean {
+  if (!inRange(hour, 0, 23) || !inRange(minute, 0, 59)) return false;
+  // The ABNF allows second = 60 for leap seconds.
+  if (second !== undefined && !inRange(second, 0, 60)) return false;
+  return true;
+}
+
+/** Shape plus field ranges for bare date, date-time and time-of-day tokens. */
+function isValidKeyTemporal(value: string): boolean {
+  // Groups: [1] sign, [2] year, [3] month, [4] day, [5] hour, [6] minute,
+  // [7] second, [8] zone.
+  const date = KEY_DATE.exec(value);
+  if (date) return validDateFields(date[3], date[4]);
+
+  const dateTime = KEY_DATE_TIME.exec(value);
+  if (dateTime) {
+    if (!validDateFields(dateTime[3], dateTime[4])) return false;
+    if (!validTimeFields(dateTime[5], dateTime[6], dateTime[7])) return false;
+    const offset = dateTime[8];
+    if (offset === 'Z') return true;
+    return inRange(offset.slice(1, 3), 0, 23) && inRange(offset.slice(4, 6), 0, 59);
+  }
+
+  const time = KEY_TIME.exec(value);
+  if (time) return validTimeFields(time[1], time[2], time[3]);
+
+  return false;
+}
+
+/** An unquoted value must be one of the keyPropertyValue alternatives. */
+function isValidKeyUnquotedValue(value: string): boolean {
+  if (value === 'true' || value === 'false') return true;
+  // nanInfinity, exactly these three spellings (the ABNF has no `+INF`).
+  if (value === 'NaN' || value === 'INF' || value === '-INF') return true;
+  if (KEY_GUID.test(value)) return true;
+
+  if (KEY_BARE_INTEGER.test(value)) {
+    // int64Literal = [ SIGN ] 1*19DIGIT plus the int64 range. Every 20+ digit
+    // token is out of range anyway; the digit cap mirrors the ABNF rule.
+    if (value.replace(/^[+-]/, '').length > 19) return false;
+    const range = INTEGER_RANGES['Edm.Int64'];
+    const parsed = BigInt(value);
+    return parsed >= range.min && parsed <= range.max;
+  }
+
+  if (KEY_DECIMAL.test(value)) return true;
+
+  return isValidKeyTemporal(value);
+}
+
+function isValidKeyValue(value: string): boolean {
+  if (value.startsWith("'")) {
+    return value.length >= 2 && value.endsWith("'") && KEY_QUOTED_INNER.test(value.slice(1, -1));
+  }
+  return isValidKeyUnquotedValue(value);
+}
+
+/**
+ * Split predicate content on top-level commas. Quotes are tracked (with `''`
+ * as an escaped quote); a structural paren outside quotes or an unbalanced
+ * quote makes the predicate invalid, signalled by null.
+ */
+function splitKeyElements(content: string): string[] | null {
+  const elements: string[] = [];
+  let current = '';
+  let inQuote = false;
+
+  for (let i = 0; i < content.length; i += 1) {
+    const char = content[i];
+    if (inQuote) {
+      if (char === "'") {
+        if (content[i + 1] === "'") {
+          current += "''";
+          i += 1;
+          continue;
+        }
+        inQuote = false;
+      }
+      current += char;
+      continue;
+    }
+    if (char === "'") {
+      inQuote = true;
+      current += char;
+      continue;
+    }
+    // Parens are legal inside a quoted value (sub-delims) but outside them
+    // they would be URL structure the predicate does not own.
+    if (char === '(' || char === ')') return null;
+    if (char === ',') {
+      elements.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (inQuote) return null;
+  elements.push(current);
+  return elements;
+}
+
+/** Index of `target` outside quotes, or -1 (also -1 for an odd quote count). */
+function indexOfUnquoted(text: string, target: string): number {
+  let inQuote = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (inQuote) {
+      if (char === "'") {
+        if (text[i + 1] === "'") {
+          i += 1;
+          continue;
+        }
+        inQuote = false;
+      }
+      continue;
+    }
+    if (char === "'") {
+      inQuote = true;
+      continue;
+    }
+    if (char === target) return i;
+  }
+  return -1;
+}
+
+/** Validate `(...)` against `keyPredicate = simpleKey / compoundKey`. */
+function isValidKeyPredicate(predicate: string): boolean {
+  if (predicate.length < 3 || !predicate.startsWith('(') || !predicate.endsWith(')')) return false;
+
+  const elements = splitKeyElements(predicate.slice(1, -1));
+  if (elements === null || elements.length === 0) return false;
+
+  for (const element of elements) {
+    if (element.length === 0) return false;
+    const eq = indexOfUnquoted(element, '=');
+    if (eq === -1) {
+      // simpleKey: one positional value. compoundKey admits no positional
+      // element, so with a comma present every element must be name=value —
+      // positional and named cannot be mixed.
+      if (elements.length > 1) return false;
+      if (!isValidKeyValue(element)) return false;
+      continue;
+    }
+    if (eq === 0 || !KEY_NAME.test(element.slice(0, eq))) return false;
+    if (!isValidKeyValue(element.slice(eq + 1))) return false;
+  }
+  return true;
+}
 
 /**
  * Validate the single resource path segment the URL is built from (an entity
@@ -333,7 +597,7 @@ function assertResourceSegment(entitySet: string): string {
     if (!RESOURCE_SEGMENT.test(segment)) throw rejection();
   }
 
-  if (predicate && !KEY_PREDICATE.test(predicate)) throw rejection();
+  if (predicate && !isValidKeyPredicate(predicate)) throw rejection();
 
   return entitySet;
 }
