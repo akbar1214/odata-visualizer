@@ -457,6 +457,20 @@ function coerceBodyValue(type: string, value: unknown, metadata: ODataMetadata):
   return coerceScalar(type, value, metadata);
 }
 
+/**
+ * EDM types that hold whole numbers. Mirrors `INTEGER_TYPES` in
+ * `@odata-visualizer/shared`'s query module (which is not exported): these
+ * take `[sign] 1*10DIGIT` only, are range-checked against their EDM bounds,
+ * and must survive the trip through `Number` exactly.
+ */
+const INTEGER_BODY_TYPES = new Set([
+  'Edm.Byte',
+  'Edm.SByte',
+  'Edm.Int16',
+  'Edm.Int32',
+  'Edm.Int64',
+]);
+
 function coerceScalar(type: string, value: unknown, metadata: ODataMetadata): unknown {
   if (value === null || value === undefined) return value;
 
@@ -482,9 +496,26 @@ function coerceScalar(type: string, value: unknown, metadata: ODataMetadata): un
     type === 'Edm.Byte' ||
     type === 'Edm.SByte'
   ) {
-    const num = Number(value);
-    if (Number.isNaN(num)) {
-      throw new Error(`Invalid ${type} value: ${String(value)}`);
+    // Syntax and EDM range checks come from the shared literal formatter —
+    // the same `[sign] 1*10DIGIT` pattern and BigInt bounds #23 fixed for
+    // query literals — so the body and the URL cannot disagree about what is
+    // valid. The JSON body needs the number behind that literal, so convert
+    // only after validation, and only when the conversion is exact: `Number`
+    // would otherwise turn `1e999` into `Infinity` (JSON `null`) and silently
+    // round Int64 values past 2^53.
+    const literal = formatV4Literal(String(value), type);
+    const num = Number(literal);
+    if (!Number.isFinite(num)) {
+      // `formatV4Literal` maps the string "null" to a null literal; in a JSON
+      // body null is the value, never the string.
+      throw new Error(`Invalid ${type} value: ${String(value)} (expected a number)`);
+    }
+    if (INTEGER_BODY_TYPES.has(type) && BigInt(literal) !== BigInt(num)) {
+      // A JS number cannot carry every Edm.Int64; emitting the rounded value
+      // would send a different number than the caller asked for.
+      throw new Error(
+        `Invalid ${type} value: ${String(value)} (cannot be represented exactly as a JSON number)`,
+      );
     }
     return num;
   }

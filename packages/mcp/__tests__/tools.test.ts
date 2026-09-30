@@ -1036,3 +1036,173 @@ describe('composite key encoding', () => {
     expect(new URL(url).hash).toBe('');
   });
 });
+
+/**
+ * Action request bodies are JSON, not URL literals: `coerceScalar` must turn a
+ * raw input into the exact number `JSON.stringify` will emit. No fixture in the
+ * repo declares an action with a bounded integer parameter, so this one pins
+ * Edm.Byte/SByte/Int16/Int32/Int64/Double body coercion at and past their limits.
+ */
+const numericCSDL = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Num" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Item">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.Int32" Nullable="false" />
+      </EntityType>
+      <Action Name="Adjust">
+        <Parameter Name="Count" Type="Edm.Int32" />
+        <Parameter Name="Big" Type="Edm.Int64" />
+        <Parameter Name="Small" Type="Edm.Byte" />
+        <Parameter Name="Tiny" Type="Edm.SByte" />
+        <Parameter Name="Short" Type="Edm.Int16" />
+        <Parameter Name="Ratio" Type="Edm.Double" />
+        <Parameter Name="Grade" Type="Num.Score" />
+        <Parameter Name="Counts" Type="Collection(Edm.Int32)" />
+      </Action>
+      <TypeDefinition Name="Score" UnderlyingType="Edm.Int32" />
+      <EntityContainer Name="Container">
+        <EntitySet Name="Items" EntityType="Num.Item" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+/** Calls `build_action_invocation` on an unbound action with numeric parameters. */
+async function adjust(parameters: Record<string, unknown>) {
+  const { parseCSDL } = await import('@odata-visualizer/shared');
+  const store = createMetadataStore();
+  store.set(await parseCSDL(numericCSDL), { sourceName: 'numeric.xml', sourceType: 'file' });
+  const handler = createToolHandler(store, { allowLoadMetadata: false });
+  return handler('build_action_invocation', { actionName: 'Adjust', parameters });
+}
+
+describe('numeric action body coercion', () => {
+  it('rejects 1e999 for Edm.Int64 instead of shipping JSON null', async () => {
+    const result = await adjust({ Big: '1e999' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Invalid Edm.Int64');
+  });
+
+  it('rejects 1e999 for Edm.Double instead of shipping JSON null', async () => {
+    const result = await adjust({ Ratio: '1e999' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Invalid Edm.Double');
+  });
+
+  it('rejects empty and whitespace-only strings for a numeric parameter', async () => {
+    for (const empty of ['', '   ']) {
+      const result = await adjust({ Count: empty });
+      expect(result.isError, `input ${JSON.stringify(empty)} must be rejected`).toBe(true);
+      expect(result.content[0].text).toContain('Edm.Int32');
+    }
+  });
+
+  it('rejects hex, fractional and exponent strings for an integer type', async () => {
+    for (const bad of ['0x1F', '1.5', 1.5, '1e3']) {
+      const result = await adjust({ Count: bad });
+      expect(result.isError, `input ${JSON.stringify(bad)} must be rejected`).toBe(true);
+      expect(result.content[0].text).toContain('Invalid Edm.Int32');
+    }
+  });
+
+  it('rejects out-of-range values for every bounded integer type', async () => {
+    const cases = [
+      { param: 'Small', type: 'Edm.Byte', value: '256' },
+      { param: 'Small', type: 'Edm.Byte', value: -1 },
+      { param: 'Small', type: 'Edm.Byte', value: 9999 },
+      { param: 'Tiny', type: 'Edm.SByte', value: '128' },
+      { param: 'Short', type: 'Edm.Int16', value: '32768' },
+      { param: 'Count', type: 'Edm.Int32', value: '2147483648' },
+    ];
+    for (const { param, type, value } of cases) {
+      const result = await adjust({ [param]: value });
+      expect(result.isError, `${type}=${JSON.stringify(value)} must be rejected`).toBe(true);
+      expect(result.content[0].text).toContain(`Invalid ${type}`);
+      expect(result.content[0].text).toContain('out of range');
+    }
+  });
+
+  it('rejects an Int64 literal that a JSON number cannot carry exactly', async () => {
+    // 2^53 + 1: in EDM Int64 range, but Number() rounds it to 2^53.
+    const result = await adjust({ Big: '9007199254740993' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Invalid Edm.Int64');
+    expect(result.content[0].text).toContain('exact');
+  });
+
+  it('rejects Edm.Int64 MAX for the same reason', async () => {
+    const result = await adjust({ Big: '9223372036854775807' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Invalid Edm.Int64');
+    expect(result.content[0].text).toContain('exact');
+  });
+
+  it('accepts an Int64 value that survives the round trip through a number', async () => {
+    const result = await adjust({ Big: '9007199254740992' }); // 2^53
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain('"Big": 9007199254740992');
+  });
+
+  it('rejects Int64 input past the EDM 64-bit range', async () => {
+    const result = await adjust({ Big: '99999999999999999999' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Invalid Edm.Int64');
+    expect(result.content[0].text).toContain('out of range');
+  });
+
+  it('still emits plain numbers for valid values', async () => {
+    const result = await adjust({
+      Count: '42',
+      Big: '-5',
+      Small: 200,
+      Tiny: -128,
+      Short: '32767',
+      Ratio: 12.5,
+    });
+    expect(result.isError).toBeUndefined();
+    const text = result.content[0].text;
+    expect(text).toContain('"Count": 42');
+    expect(text).toContain('"Big": -5');
+    expect(text).toContain('"Small": 200');
+    expect(text).toContain('"Tiny": -128');
+    expect(text).toContain('"Short": 32767');
+    expect(text).toContain('"Ratio": 12.5');
+  });
+
+  it('trims surrounding whitespace around numeric body values', async () => {
+    const result = await adjust({ Count: ' 42 ' });
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain('"Count": 42');
+  });
+
+  it('keeps an explicit null parameter as JSON null', async () => {
+    const result = await adjust({ Count: null });
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain('"Count": null');
+  });
+
+  it('rejects the string "null" for a numeric parameter (JSON null is null, the value)', async () => {
+    const result = await adjust({ Ratio: 'null' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Invalid Edm.Double');
+  });
+
+  it('validates a body parameter through a type definition to its underlying type', async () => {
+    const result = await adjust({ Grade: '1.5' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Invalid Edm.Int32');
+  });
+
+  it('validates each element of a numeric collection body parameter', async () => {
+    const ok = await adjust({ Counts: ['1', '2'] });
+    expect(ok.isError).toBeUndefined();
+    expect(ok.content[0].text).toContain('"Counts": [');
+    expect(ok.content[0].text).toMatch(/\[\s*1,\s*2\s*\]/);
+
+    const bad = await adjust({ Counts: ['1', 'x'] });
+    expect(bad.isError).toBe(true);
+    expect(bad.content[0].text).toContain('Invalid Edm.Int32');
+  });
+});
