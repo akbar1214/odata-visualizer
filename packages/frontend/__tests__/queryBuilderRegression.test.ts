@@ -32,7 +32,7 @@ describe('buildODataQuery resilience while editing', () => {
   it('keeps the rest of the query when a new filter has an empty value', async () => {
     const metadata = await model();
     // FilterBuilder adds a row with value: '' — a numeric property must not
-    // make the whole preview collapse to /Order.
+    // make the whole preview collapse to the bare resource path.
     const result = buildODataQuery(
       {
         ...getDefaultQuery('Order'),
@@ -45,7 +45,7 @@ describe('buildODataQuery resilience while editing', () => {
 
     expect(result).toContain('$select=Id,Number');
     expect(result).toContain('$top=10');
-    expect(result).not.toBe('/Order');
+    expect(result).not.toBe('/Orders');
   });
 
   it('keeps the rest of the query while a numeric value is half-typed', async () => {
@@ -88,9 +88,9 @@ describe('buildODataQuery resilience while editing', () => {
 
   it('quotes numeric-looking values on string properties', async () => {
     const metadata = await model();
-    // The UI addresses the type name (/Order) rather than the entity set, so
-    // literal typing must not depend on resolving an entity set. A part
-    // number like "100" must stay a string.
+    // Literal typing resolves the selected type, not the entity set: the path
+    // is `/Orders` while the type is `Shop.Order`. A part number like "100"
+    // must stay a string.
     const result = buildODataQuery(
       {
         ...getDefaultQuery('Order'),

@@ -2,11 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface QueryPreviewProps {
   query: string;
+  /** Shown in place of the query when there is nothing to build. */
+  emptyMessage?: string;
 }
 
 const COPIED_FEEDBACK_MS = 2000;
 
-export function QueryPreview({ query }: QueryPreviewProps) {
+const DEFAULT_EMPTY_MESSAGE = 'Select an entity to generate a query';
+
+export function QueryPreview({ query, emptyMessage = DEFAULT_EMPTY_MESSAGE }: QueryPreviewProps) {
   const [copied, setCopied] = useState(false);
   // Held so repeated clicks reuse one timer instead of stacking one per click
   // (a stale timer reset the "Copied" state early) and so unmount can clear it.
@@ -81,7 +85,7 @@ export function QueryPreview({ query }: QueryPreviewProps) {
       </div>
 
       <pre className="bg-engineering-600 text-primary-200 rounded p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all min-h-[60px]">
-        {query || 'Select an entity to generate a query'}
+        {query || emptyMessage}
       </pre>
     </div>
   );
