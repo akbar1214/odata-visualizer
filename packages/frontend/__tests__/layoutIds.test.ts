@@ -61,14 +61,14 @@ describe('layoutDiagram node ids', () => {
     expect(data?.entity.qualifiedName).toBe('B.Part');
   });
 
-  it('gives ELK one child per node, so the layout is computed for the real graph', async () => {
+  it('gives ELK one child per node, so every node gets a real position', async () => {
     const model = await collidingModel();
     const { nodes } = await layoutDiagram(model);
 
-    // Every node must have received a position; a duplicate ELK child id would
-    // leave one of them stranded at (0,0).
+    // A duplicate ELK child id leaves one node stranded at the origin. Asserting
+    // "fewer than all" passed even with the bug, because one node still moved.
     const atOrigin = nodes.filter((n) => n.position.x === 0 && n.position.y === 0);
-    expect(atOrigin.length).toBeLessThan(nodes.length);
+    expect(atOrigin).toHaveLength(0);
   });
 });
 
@@ -78,7 +78,9 @@ describe('layoutDiagram edge ids', () => {
     const { edges } = await layoutDiagram(model);
 
     const ids = edges.map((e) => e.id);
-    expect(new Set(ids).size).toBe(ids.length);
+    // Length alone is true by construction; the collapse happens when React Flow
+    // de-duplicates ids, so assert on uniqueness.
+    expect(new Set(ids).size).toBe(model.relationships.length);
   });
 
   it('does not collapse relationships whose endpoints merely share a short name', async () => {
@@ -112,17 +114,16 @@ describe('filterMetadata identity', () => {
     expect(filtered.entities.map((e) => e.qualifiedName)).toEqual(['B.Part']);
   });
 
-  it('does not pull in the other namespace when expanding neighbours', async () => {
+  it('does not expand neighbours across namespaces', async () => {
     const model = await collidingModel();
-    // `B.Part` relates only to `A.Doc`; `A.Part` must not be dragged in just
-    // because it shares the short name.
-    const filtered = filterMetadata(model, { search: 'Part', includeNeighbours: false });
+    // `B.Part` relates only to `A.Doc`. The exact set matters: asserting "one of
+    // the two Parts" would pass even if the wrong namespace leaked in.
+    const filtered = filterMetadata(model, { search: 'B.Part' });
 
-    const names = filtered.entities.map((e) => e.qualifiedName);
-    expect(names.length).toBeGreaterThan(0);
-    for (const name of names) {
-      expect(name === 'A.Part' || name === 'B.Part').toBe(true);
-    }
+    expect(filtered.entities.map((e) => e.qualifiedName).sort()).toEqual([
+      'A.Doc',
+      'B.Part',
+    ]);
   });
 
   it('keeps only relationships whose endpoints survived the filter', async () => {
@@ -131,5 +132,65 @@ describe('filterMetadata identity', () => {
 
     // B.Part -> A.Doc, but A.Doc was filtered out.
     expect(filtered.relationships).toHaveLength(0);
+  });
+
+  it('does not rebind a relationship to a survivor that merely shares its name', async () => {
+    const model = await collidingModel();
+    // Only `B.Part` and `A.Doc` survive, so only `B.Part`'s own relationship
+    // belongs on the diagram. Indexing the *survivors* would make the short name
+    // `Part` unique, rebind `A.Part`'s two relationships to `B.Part`, and draw
+    // edges for a type that was filtered out.
+    const filtered = filterMetadata(model, { entityNames: ['B.Part', 'A.Doc'] });
+
+    expect(filtered.relationships.map((r) => r.name)).toEqual(['Part_Docs']);
+  });
+});
+
+/**
+ * Relationships record the declaring schema's namespace, which is the *source*
+ * type's — applying it to the target picks the wrong type whenever the target
+ * lives elsewhere and the short name also exists locally. The parser keeps the
+ * qualified target, so resolution should use it rather than guess.
+ */
+describe('cross-namespace relationship targets', () => {
+  const crossCsdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="A" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Part">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Docs" Type="Collection(B.Doc)" />
+      </EntityType>
+      <EntityType Name="Doc">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="B" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Doc">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('resolves the target in its own namespace, not the declaring one', async () => {
+    const model = await parseCSDL(crossCsdl);
+    const { edges } = await layoutDiagram(model);
+
+    // `A.Part.Docs` targets `B.Doc`. Namespace A also has a `Doc`, so guessing
+    // from the relationship's namespace drew a self-consistent but wrong edge.
+    expect(edges).toHaveLength(1);
+    expect(edges[0].source).toBe('A.Part');
+    expect(edges[0].target).toBe('B.Doc');
+  });
+
+  it('records the qualified target on the relationship', async () => {
+    const model = await parseCSDL(crossCsdl);
+    const [relationship] = model.relationships;
+    expect(relationship.to.entityQualified).toBe('B.Doc');
+    expect(relationship.from.entityQualified).toBe('A.Part');
   });
 });

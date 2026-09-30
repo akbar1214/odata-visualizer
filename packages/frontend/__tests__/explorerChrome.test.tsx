@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import type { ODataEntity, ODataMetadata } from '@odata-visualizer/shared';
 import { MetadataExplorer } from '../src/components/MetadataExplorer';
+import { layoutDiagram } from '../src/utils/layout';
 
 function makeEntity(index: number, namespace = 'Shop'): ODataEntity {
   return {
@@ -65,5 +66,29 @@ describe('MetadataExplorer chrome', () => {
     await waitFor(() => {
       expect(screen.getByText('Primary Keys')).toBeDefined();
     });
+  });
+});
+
+/**
+ * The explorer used to emit short type names on select, but the diagram keys its
+ * nodes by qualified name, so clicking any card highlighted nothing. That was a
+ * regression introduced by the diagram id change, and nothing covered it.
+ */
+describe('explorer selection identity', () => {
+  afterEach(() => cleanup());
+
+  it('emits a value the diagram can match to a node', async () => {
+    const metadata = makeMetadata(3, ['A', 'B', 'C']);
+    const onEntitySelect = vi.fn();
+    render(<MetadataExplorer metadata={metadata} onEntitySelect={onEntitySelect} />);
+
+    fireEvent.click(screen.getByText('Type1'));
+    expect(onEntitySelect).toHaveBeenCalled();
+
+    const { nodes } = await layoutDiagram(metadata);
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    for (const [emitted] of onEntitySelect.mock.calls) {
+      expect(nodeIds.has(emitted), `emitted "${emitted}" matches no node id`).toBe(true);
+    }
   });
 });

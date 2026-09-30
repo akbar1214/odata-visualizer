@@ -21,48 +21,80 @@ export function entityNodeId(entity: ODataEntity): string {
 }
 
 interface EndpointIndex {
-  /** Lowercased qualified or short name of a type that exists on the diagram. */
+  /** Exact-case id, so a genuinely qualified name resolves unambiguously. */
   byId: Map<string, string>;
-  /** Lowercased short name to every node carrying it. */
+  /** Short name (exact case) to every node carrying it. */
   byShort: Map<string, Array<{ id: string; namespace?: string }>>;
+  /** Same, case-folded, used only as a fallback. */
+  byShortFolded: Map<string, Array<{ id: string; namespace?: string }>>;
 }
 
 function buildEndpointIndex(entities: ODataEntity[]): EndpointIndex {
   const byId = new Map<string, string>();
   const byShort = new Map<string, Array<{ id: string; namespace?: string }>>();
+  const byShortFolded = new Map<string, Array<{ id: string; namespace?: string }>>();
 
   for (const entity of entities) {
     const id = entityNodeId(entity);
-    byId.set(id.toLowerCase(), id);
-    const key = entity.name.toLowerCase();
-    const candidates = byShort.get(key) ?? [];
-    candidates.push({ id, namespace: entity.namespace });
-    byShort.set(key, candidates);
+    byId.set(id, id);
+
+    const candidate = { id, namespace: entity.namespace };
+    for (const [map, key] of [
+      [byShort, entity.name],
+      [byShortFolded, entity.name.toLowerCase()],
+    ] as const) {
+      const list = map.get(key) ?? [];
+      list.push(candidate);
+      map.set(key, list);
+    }
   }
 
-  return { byId, byShort };
+  return { byId, byShort, byShortFolded };
 }
 
 /**
  * Map a relationship endpoint to a diagram node id.
  *
- * Relationships record the *short* type name, which is not unique across
- * namespaces, so an ambiguous one is resolved against the namespace that
- * declared the relationship. Returning `undefined` rather than guessing keeps a
- * bad match from drawing an edge between the wrong pair of types.
+ * Relationships store the *short* type name, which is not unique across
+ * namespaces, so resolution happens in order of decreasing certainty:
+ *
+ *   1. the qualified endpoint the parser recorded, if any;
+ *   2. an exact-case short name that names exactly one type;
+ *   3. a case-folded short name that names exactly one type;
+ *   4. among several, the one declared in the relationship's own namespace.
+ *
+ * `undefined` means "cannot tell", and the caller drops the edge rather than
+ * drawing it between the wrong pair of types.
  */
 function resolveEndpoint(
   index: EndpointIndex,
-  name: string,
+  endpoint: { entity: string; entityQualified?: string },
   namespace: string | undefined,
 ): string | undefined {
-  const direct = index.byId.get(name.toLowerCase());
-  if (direct) return direct;
+  if (endpoint.entityQualified) {
+    const qualified = index.byId.get(endpoint.entityQualified);
+    if (qualified) return qualified;
+  }
 
-  const candidates = index.byShort.get(name.toLowerCase());
-  if (!candidates || candidates.length === 0) return undefined;
+  // A dotted endpoint is already qualified, so trust it — but only if it names
+  // a node. Falling through to the short-name maps here would let a
+  // namespace-less node whose id happens to equal the string win instead.
+  if (endpoint.entity.includes('.')) {
+    return index.byId.get(endpoint.entity);
+  }
+
+  const exact = index.byShort.get(endpoint.entity);
+  if (exact && exact.length > 0) return pickCandidate(exact, namespace);
+
+  const folded = index.byShortFolded.get(endpoint.entity.toLowerCase());
+  return folded ? pickCandidate(folded, namespace) : undefined;
+}
+
+function pickCandidate(
+  candidates: Array<{ id: string; namespace?: string }>,
+  namespace: string | undefined,
+): string | undefined {
   if (candidates.length === 1) return candidates[0].id;
-
   return candidates.find((candidate) => candidate.namespace === namespace)?.id;
 }
 
@@ -111,11 +143,21 @@ export async function layoutDiagram(
   // resolved to a node (an ambiguous short name with no namespace match).
   const resolvedEdges = metadata.relationships
     .map((rel, position) => {
-      const source = resolveEndpoint(endpoints, rel.from.entity, rel.namespace);
-      const target = resolveEndpoint(endpoints, rel.to.entity, rel.namespace);
+      const source = resolveEndpoint(endpoints, rel.from, rel.namespace);
+      const target = resolveEndpoint(endpoints, rel.to, rel.namespace);
       return source && target ? { rel, source, target, id: edgeId(rel, position) } : undefined;
     })
     .filter((edge): edge is NonNullable<typeof edge> => edge !== undefined);
+
+  // Dropping is better than drawing an edge between the wrong pair of types,
+  // but it must not be invisible: the UI counts relationships elsewhere.
+  const dropped = metadata.relationships.length - resolvedEdges.length;
+  if (dropped > 0) {
+    console.warn(
+      `[odata-visualizer] ${dropped} relationship(s) could not be placed on the diagram: ` +
+        'their endpoint types share a short name across namespaces and could not be told apart.',
+    );
+  }
 
   const edges: Edge[] = resolvedEdges.map(({ rel, source, target, id }) => ({
     id,
@@ -233,8 +275,8 @@ export function filterMetadata(
     const seeds = new Set(filteredEntities.map(entityNodeId));
     const selected = new Set(seeds);
     for (const rel of metadata.relationships) {
-      const source = resolveEndpoint(endpoints, rel.from.entity, rel.namespace);
-      const target = resolveEndpoint(endpoints, rel.to.entity, rel.namespace);
+      const source = resolveEndpoint(endpoints, rel.from, rel.namespace);
+      const target = resolveEndpoint(endpoints, rel.to, rel.namespace);
       if (!source || !target) continue;
       if (seeds.has(source) && !seeds.has(target)) selected.add(target);
       if (seeds.has(target) && !seeds.has(source)) selected.add(source);
@@ -260,13 +302,18 @@ export function filterMetadata(
     filteredEntities = filteredEntities.slice(0, filter.maxEntities);
   }
 
-  const endpoints = buildEndpointIndex(filteredEntities);
+  // Index the **whole** model, not the survivors: a short name that is
+  // ambiguous in the model can become unique among the survivors, and
+  // `resolveEndpoint` would then bind a relationship to whichever type happens
+  // to share its name instead of its real owner. `keptIds` does the membership
+  // test instead.
+  const endpoints = buildEndpointIndex(metadata.entities);
   const keptIds = new Set(filteredEntities.map(entityNodeId));
 
   // Keep relationships that still have both endpoints on the diagram.
   const filteredRelationships = metadata.relationships.filter((rel) => {
-    const source = resolveEndpoint(endpoints, rel.from.entity, rel.namespace);
-    const target = resolveEndpoint(endpoints, rel.to.entity, rel.namespace);
+    const source = resolveEndpoint(endpoints, rel.from, rel.namespace);
+    const target = resolveEndpoint(endpoints, rel.to, rel.namespace);
     return (
       source !== undefined && target !== undefined && keptIds.has(source) && keptIds.has(target)
     );

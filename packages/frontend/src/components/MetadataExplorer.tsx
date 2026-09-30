@@ -115,29 +115,43 @@ export function MetadataExplorer({
 
   const clearSearch = useCallback(() => setRawQuery(''), []);
 
-  // Track the diagram selection. The explorer keys cards by qualified name
-  // while the diagram identifies nodes by short name, so resolve the match.
+  // Track the diagram selection. The diagram now identifies nodes by qualified
+  // name, and the explorer keys cards the same way, so this is an exact match
+  // first; a short name is still accepted for callers that pass one.
   useEffect(() => {
     if (!selectedEntity) return;
     const match = metadata.entities.find(
-      (entity) => entity.name === selectedEntity || entity.qualifiedName === selectedEntity,
+      (entity) => entity.qualifiedName === selectedEntity || entity.name === selectedEntity,
     );
     setExpandedEntity(match ? (match.qualifiedName ?? match.name) : selectedEntity);
   }, [selectedEntity, metadata.entities]);
 
+  /** The diagram's node id for an entity; short names are not unique. */
+  const nodeIdFor = useCallback(
+    (entityName: string) => {
+      const match = metadata.entities.find(
+        (entity) => entity.name === entityName || entity.qualifiedName === entityName,
+      );
+      return match ? (match.qualifiedName ?? match.name) : entityName;
+    },
+    [metadata.entities],
+  );
+
   const handleEntityToggle = useCallback(
-    (entityKey: string, entityName: string) => {
+    (entityKey: string) => {
       setExpandedEntity((current) => (current === entityKey ? null : entityKey));
-      onEntitySelect?.(entityName);
+      // Emit the *node id*, not the short name: the diagram compares against
+      // qualified ids, so a short name highlighted nothing.
+      onEntitySelect?.(entityKey);
     },
     [onEntitySelect],
   );
 
   const handleRelationshipClick = useCallback(
     (entityName: string) => {
-      onEntitySelect?.(entityName);
+      onEntitySelect?.(nodeIdFor(entityName));
     },
-    [onEntitySelect],
+    [nodeIdFor, onEntitySelect],
   );
 
   return (
@@ -267,8 +281,8 @@ export function MetadataExplorer({
                       selectedEntity === entity.name || selectedEntity === entity.qualifiedName
                     }
                     metadata={metadata}
-                    onToggle={() => handleEntityToggle(entityKey, entity.name)}
-                    onNavigate={onEntitySelect}
+                    onToggle={() => handleEntityToggle(entityKey)}
+                    onNavigate={(name) => onEntitySelect?.(nodeIdFor(name))}
                   />
                 );
               })}
@@ -287,7 +301,7 @@ export function MetadataExplorer({
             <div className="space-y-2">
               {relationshipMatches.map(({ relationship: rel }) => (
                 <div
-                  key={`${rel.name}-${rel.from.entity}-${rel.to.entity}`}
+                  key={`${rel.namespace ?? ''}.${rel.name}-${rel.from.entity}-${rel.to.entity}`}
                   className="p-3 bg-engineering-100 rounded hover:bg-engineering-200 cursor-pointer"
                   onClick={() => handleRelationshipClick(rel.from.entity)}
                 >
