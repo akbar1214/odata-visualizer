@@ -6,7 +6,6 @@ import request from 'supertest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createApp } from '../src/app.js';
-import { metadataStore } from '../src/services/metadataStore.js';
 
 let server: Server;
 let baseUrl: string;

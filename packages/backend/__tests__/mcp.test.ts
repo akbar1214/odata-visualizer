@@ -52,7 +52,13 @@ async function uploadWindchill(): Promise<void> {
   expect(response.ok).toBe(true);
 }
 
-function resultText(result: { content: unknown }): string {
+/**
+ * `callTool` returns a union: the standard result carries `content`, while the
+ * SDK's compatibility shape carries `toolResult` instead. Every call below
+ * expects content, so the helper narrows rather than casting the union away.
+ */
+function resultText(result: Awaited<ReturnType<Client['callTool']>>): string {
+  if (!('content' in result)) return '';
   const content = result.content as Array<{ type: string; text?: string }>;
   return content.map((c) => c.text ?? '').join('\n');
 }
