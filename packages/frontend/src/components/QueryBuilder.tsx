@@ -14,6 +14,7 @@ import {
 import {
   createRootNode,
   expandPath,
+  functionStepWarnings,
   layoutGraph,
   graphToQueryState,
   type GraphNodeState,
@@ -82,14 +83,17 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
     if (functionQuery) {
       return { queryString: functionQuery, warnings: [] as string[], omittedFilterCount: 0 };
     }
-    const warnings: string[] = [];
+    // Shapes the projection cannot carry — a function that is not the first
+    // hop, root options before a function segment — are reported here, next to
+    // the query that omits them.
+    const warnings = functionStepWarnings({ nodes: graphNodes, edges: graphEdges });
     let omittedFilterCount = 0;
     const queryString = buildODataQuery(query, metadata, (message, omittedFilter) => {
       warnings.push(message);
       if (omittedFilter) omittedFilterCount += 1;
     });
     return { queryString, warnings, omittedFilterCount };
-  }, [functionQuery, query, metadata]);
+  }, [functionQuery, query, graphNodes, graphEdges, metadata]);
 
   // An entity type with no entity set anywhere in its inheritance chain has no
   // resource path, so `buildODataQuery` returns ''. Saying "select an entity"

@@ -3,6 +3,7 @@ import { parseCSDL } from '@odata-visualizer/shared';
 import {
   expandPath,
   findPaths,
+  functionStepWarnings,
   graphToExpandItems,
   graphToQueryState,
   isComposablePath,
@@ -38,9 +39,24 @@ const FIXTURE = `<?xml version="1.0" encoding="utf-8"?>
         <Parameter Name="it" Type="Collection(N.A)" />
         <ReturnType Type="N.C" />
       </Function>
+      <EntityType Name="E"><Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.Int32" Nullable="false" /></EntityType>
+      <EntityType Name="M"><Key><PropertyRef Name="Num" /><PropertyRef Name="Code" /></Key>
+        <Property Name="Num" Type="Edm.Int32" Nullable="false" />
+        <Property Name="Code" Type="Edm.String" Nullable="false" /></EntityType>
+      <Function Name="FromE" IsBound="true">
+        <Parameter Name="it" Type="N.E" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="FromM" IsBound="true">
+        <Parameter Name="it" Type="N.M" />
+        <ReturnType Type="N.C" />
+      </Function>
       <EntityContainer Name="C1">
         <EntitySet Name="As" EntityType="N.A" />
         <EntitySet Name="Cs" EntityType="N.C" />
+        <EntitySet Name="Es" EntityType="N.E" />
+        <EntitySet Name="Ms" EntityType="N.M" />
       </EntityContainer>
     </Schema>
   </edmx:DataServices>
@@ -121,6 +137,43 @@ describe('the pathfinder offers bound-function steps', () => {
     expect(path.map((s) => s.edge.kind)).toEqual(['nav', 'boundFunction']);
     expect(isComposablePath(path)).toBe(false);
   });
+
+  it('reports a function step that is not the first hop as dropped', async () => {
+    // The UI cannot select this path, but a forced mixed state can still hold
+    // it; `graphToQueryState` only composes a function at the root, so the
+    // step is absent from the query and must be reported rather than lost.
+    const metadata = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="A"><Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="X" Type="N.X" /></EntityType>
+      <EntityType Name="X"><Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" /></EntityType>
+      <EntityType Name="C"><Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" /></EntityType>
+      <Function Name="FromX" IsBound="true">
+        <Parameter Name="it" Type="N.X" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <EntityContainer Name="C1">
+        <EntitySet Name="As" EntityType="N.A" />
+        <EntitySet Name="Cs" EntityType="N.C" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    const path = findPaths('A', 'C', metadata)[0];
+    const state = expandPath('A', path);
+
+    // The query keeps the navigation expansion and loses the function...
+    expect(buildODataQuery(graphToQueryState(state, 'A'), metadata)).toBe('/As?$expand=X&$top=25');
+    // ...and the projection says so instead of dropping it silently.
+    expect(functionStepWarnings(state)).toEqual([
+      'The bound function FromX() is not part of the query: a function can only be the first step of the resource path.',
+    ]);
+  });
 });
 
 describe('the query builder emits the function segment', () => {
@@ -197,6 +250,125 @@ describe('the query builder emits the function segment', () => {
     );
 
     expect(url).toBe('/As/N.AllOf()?$select=Id');
+  });
+
+  it('types the placeholder key from the key property, so an Int32 key is (1)', async () => {
+    const metadata = await model();
+    const warnings: string[] = [];
+    const url = buildODataQuery(
+      segmentQuery({
+        sourceEntity: 'E',
+        segment: {
+          name: 'FromE',
+          qualifiedName: 'N.FromE',
+          parameters: [],
+          bindingIsCollection: false,
+          returnsCollection: false,
+        },
+      }),
+      metadata,
+      (message) => warnings.push(message),
+    );
+
+    expect(url).toBe('/Es(1)/N.FromE()');
+    expect(warnings).toEqual([
+      "The preview uses key placeholder '1' on E; replace it with a real key.",
+    ]);
+  });
+
+  it('types every property of a composite key predicate', async () => {
+    const metadata = await model();
+    const url = buildODataQuery(
+      segmentQuery({
+        sourceEntity: 'M',
+        segment: {
+          name: 'FromM',
+          qualifiedName: 'N.FromM',
+          parameters: [],
+          bindingIsCollection: false,
+          returnsCollection: false,
+        },
+      }),
+      metadata,
+    );
+
+    expect(url).toBe("/Ms(Num=1,Code='1')/N.FromM()");
+  });
+
+  it('refuses an invalid qualified function name with a warning', async () => {
+    const metadata = await model();
+    const warnings: string[] = [];
+    const url = buildODataQuery(
+      segmentQuery({
+        segment: {
+          name: 'B',
+          qualifiedName: 'N.B?evil=1',
+          parameters: [],
+          bindingIsCollection: false,
+          returnsCollection: false,
+        },
+      }),
+      metadata,
+      (message) => warnings.push(message),
+    );
+
+    expect(url).toBe('');
+    expect(warnings.at(-1)).toContain('Invalid entitySet');
+  });
+
+  it('refuses a segment whose function needs parameter values', async () => {
+    // The UI gates this shape out, but `buildODataQuery` is public: a caller
+    // that hands over a `WithParam` state must be refused, not answered with
+    // a call that silently omits the required parameter.
+    const metadata = await model();
+    const warnings: string[] = [];
+    const url = buildODataQuery(
+      segmentQuery({
+        segment: {
+          name: 'WithParam',
+          qualifiedName: 'N.WithParam',
+          parameters: [{ name: 'limit', type: 'Edm.Int32' }],
+          bindingIsCollection: false,
+          returnsCollection: false,
+        },
+      }),
+      metadata,
+      (message) => warnings.push(message),
+    );
+
+    expect(url).toBe('');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('requires parameter values');
+  });
+
+  it('warns when root options are dropped because a function owns the path', async () => {
+    const metadata = await model();
+    const base = expandPath('A', functionPath(findPaths('A', 'C', metadata), 'B'));
+    const state = {
+      ...base,
+      nodes: base.nodes.map((n) =>
+        n.id === 'root'
+          ? { ...n, top: 7, filters: [{ property: 'Id', operator: 'eq', value: '1' }] }
+          : n,
+      ),
+    };
+
+    // The root options are not representable before the invocation...
+    expect(buildODataQuery(graphToQueryState(state, 'A'), metadata)).toBe("/As('1')/N.B()");
+    // ...so the projection reports them rather than dropping them silently.
+    expect(functionStepWarnings(state)).toEqual([
+      "The root card's options are not part of the query: the resource path invokes a bound function, so only the function result card's options apply.",
+    ]);
+  });
+
+  it('stays quiet about root options when the path has no function', () => {
+    const state = expandPath('A', []);
+    const withTop = {
+      ...state,
+      nodes: state.nodes.map((n) => (n.id === 'root' ? { ...n, top: 7 } : n)),
+    };
+
+    expect(functionStepWarnings(withTop)).toEqual([]);
   });
 
   it('keeps nav-only queries unchanged', async () => {

@@ -1,6 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { ODataMetadata } from '@odata-visualizer/shared';
-import { isComposableEdge } from '@odata-visualizer/shared';
 import {
   findPaths,
   getReachableEntities,
@@ -38,15 +37,17 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
   }, [currentEntity]);
 
   // The dropdown values are graph identities, exactly what `findPaths`
-  // compares. An edge whose bound function needs parameters this builder
-  // cannot supply is not offered as a target.
+  // compares. Every reachable target is offered, including one reachable only
+  // through a bound function whose parameters this builder cannot supply:
+  // filtering those out hid the target entirely, so the "path(s) hidden" note
+  // below could never explain why no path was selectable.
   const reachableEntities = useMemo(() => {
     if (!sourceEntity) return new Set<string>();
     const reachable = getReachableEntities(sourceEntity, metadata);
     const identities = new Set<string>();
     for (const steps of reachable.values()) {
       for (const step of steps) {
-        if (isComposableEdge(step.edge)) identities.add(step.to);
+        identities.add(step.to);
       }
     }
     return identities;

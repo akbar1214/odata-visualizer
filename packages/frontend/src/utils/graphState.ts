@@ -28,6 +28,9 @@ const elk = new ELK();
 const NODE_WIDTH = 260;
 const NODE_HEIGHT = 280;
 
+/** `$top` a fresh root card starts with; anything else is a user choice. */
+const DEFAULT_TOP = 25;
+
 export interface GraphNodeState {
   id: string;
   entityName: string;
@@ -80,7 +83,7 @@ export function createRootNode(entityName: string): GraphNodeState {
     filterLogic: 'and',
     sort: '',
     sortDirection: 'asc',
-    top: 25,
+    top: DEFAULT_TOP,
     skip: 0,
     expandedNavProps: [],
     position: { x: 0, y: 0 },
@@ -246,6 +249,51 @@ export function isComposablePath(path: TraversalPath): boolean {
   );
 }
 
+/** Does the card carry an option that would appear in the query? */
+function hasQueryOptions(node: GraphNodeState): boolean {
+  return (
+    node.filters.length > 0 ||
+    node.select.length > 0 ||
+    node.sort !== '' ||
+    node.top !== DEFAULT_TOP ||
+    node.skip !== 0 ||
+    node.expandedNavProps.length > 0
+  );
+}
+
+/**
+ * Notes about bound-function steps the query projection cannot carry.
+ *
+ * A function composes only as the *first* resource-path segment, and the root
+ * card's options cannot be expressed before the invocation (they would filter
+ * the source of the call, which a URL cannot say). Both shapes are reported to
+ * the caller — the builder renders them next to the preview — so a card whose
+ * options are absent from the query is never dropped silently.
+ */
+export function functionStepWarnings(state: GraphState): string[] {
+  const warnings: string[] = [];
+  const rootNode = state.nodes.find((n) => n.id === 'root');
+  const functionNode = state.nodes.find(
+    (n) => n.parentId === 'root' && n.step?.edge.kind === 'boundFunction',
+  );
+
+  if (functionNode && rootNode && hasQueryOptions(rootNode)) {
+    warnings.push(
+      "The root card's options are not part of the query: the resource path invokes a bound function, so only the function result card's options apply.",
+    );
+  }
+
+  for (const node of state.nodes) {
+    if (node.parentId !== 'root' && node.step?.edge.kind === 'boundFunction') {
+      warnings.push(
+        `The bound function ${node.step.edge.functionName}() is not part of the query: a function can only be the first step of the resource path.`,
+      );
+    }
+  }
+
+  return warnings;
+}
+
 export function graphToExpandItems(state: GraphState, nodeId: string): ExpandItem[] {
   // A bound-function step is a resource-path segment, not an expansion: it
   // must never reach `$expand`. The function segment is composed into the
@@ -273,7 +321,8 @@ export function graphToExpandItems(state: GraphState, nodeId: string): ExpandIte
  * function result, so the result node owns the query options and the function
  * name never reaches `$expand`. The root's own options are not representable
  * before the function (they would filter the source of the invocation, which a
- * URL cannot express), so they are not part of the query.
+ * URL cannot express), so they are not part of the query;
+ * `functionStepWarnings` reports them to the caller.
  */
 export function graphToQueryState(state: GraphState, fallbackEntity: string): QueryState {
   const rootNode = state.nodes.find((n) => n.id === 'root');
@@ -286,7 +335,7 @@ export function graphToQueryState(state: GraphState, fallbackEntity: string): Qu
       expand: [],
       sort: '',
       sortDirection: 'asc',
-      top: 25,
+      top: DEFAULT_TOP,
       skip: 0,
     };
   }

@@ -493,6 +493,41 @@ describe('buildODataQuery for unaddressable types', () => {
 });
 
 /**
+ * The resource path is concatenated with the query options, so it must be
+ * asserted before it is used. `buildODataQuery` used `buildQueryOptions`
+ * directly, which skipped the assertion `buildQueryUrl` performs: a set name
+ * such as `As?evil=1` was emitted with the options folded into the query string
+ * and no warning at all.
+ */
+describe('buildODataQuery asserts the resolved resource segment', () => {
+  const evilSetCsdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="A">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityContainer Name="C1">
+        <EntitySet Name="As?evil=1" EntityType="N.A" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('warns and drops the options when the set is not a resource path', async () => {
+    const model = await parseCSDL(evilSetCsdl);
+    const warnings: string[] = [];
+    const url = buildODataQuery(getDefaultQuery('A'), model, (message) => warnings.push(message));
+
+    expect(url).toBe('/As?evil=1');
+    expect(url).not.toContain('$top');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('Invalid entitySet');
+  });
+});
+
+/**
  * Two types can share a short name — the Windchill fixture ships two `Part`
  * types. The selector must not hand the builder the same string for both, or the
  * selection silently resolves to whichever type the parser saw first and queries

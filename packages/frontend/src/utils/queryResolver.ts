@@ -7,7 +7,9 @@ import type {
   ODataNavigationProperty,
 } from '@odata-visualizer/shared';
 import {
+  assertResourceSegment,
   buildQueryOptions,
+  buildQueryUrl,
   findEntitiesByName,
   findEntityByName,
   formatV4Literal,
@@ -418,30 +420,44 @@ export function buildODataQuery(
   const resolved = getResolvedEntity(query.entityName, metadata.entities);
   if (!resolved) return '';
 
-  const path = query.segment
-    ? functionSegmentPath(query, query.segment, metadata, onWarning)
-    : resolveSetPath(query.entityName, metadata);
-  if (!path) return '';
-
   const filters = filterRows(query.filters, resolved.allProperties, '', onWarning);
   const expand =
     query.expand.length > 0
       ? filterExpandItems(query.expand, query.entityName, metadata, '', onWarning)
       : [];
 
+  const options = {
+    rootEntityName: query.entityName,
+    metadata,
+    onWarning,
+    filters: filters.length > 0 ? filters : undefined,
+    filterLogic: query.filterLogic,
+    select: query.select.length > 0 ? query.select : undefined,
+    expand: expand.length > 0 ? expand.map(toExpandNode) : undefined,
+    orderBy: query.sort ? `${query.sort} ${query.sortDirection}` : undefined,
+    top: query.top > 0 ? query.top : undefined,
+    skip: query.skip > 0 ? query.skip : undefined,
+  };
+
+  // The resource path is also the fallback when the options cannot be built:
+  // the preview keeps addressing the resource rather than collapsing.
+  let path = '';
   try {
-    return `${path}${buildQueryOptions({
-      rootEntityName: query.entityName,
-      metadata,
-      onWarning,
-      filters: filters.length > 0 ? filters : undefined,
-      filterLogic: query.filterLogic,
-      select: query.select.length > 0 ? query.select : undefined,
-      expand: expand.length > 0 ? expand.map(toExpandNode) : undefined,
-      orderBy: query.sort ? `${query.sort} ${query.sortDirection}` : undefined,
-      top: query.top > 0 ? query.top : undefined,
-      skip: query.skip > 0 ? query.skip : undefined,
-    })}`;
+    if (query.segment) {
+      path = functionSegmentPath(query, query.segment, metadata, onWarning);
+      if (!path) return '';
+
+      return `${path}${buildQueryOptions(options)}`;
+    }
+
+    const entitySet = resolveResourcePath(query.entityName, metadata);
+    if (!entitySet) return '';
+    path = `/${entitySet}`;
+
+    // `buildQueryUrl` rather than `buildQueryOptions`: it asserts the set path
+    // first, so a set name that is not a resource path (`As?evil=1`) is
+    // reported instead of being concatenated into a URL with its options.
+    return buildQueryUrl({ ...options, entitySet });
   } catch (error) {
     // Invalid state while the user is editing: show the bare resource path
     // rather than an error state in the preview, but say so — silently losing
@@ -454,18 +470,27 @@ export function buildODataQuery(
   }
 }
 
-/** `/{set}`, or `''` when the type has no addressable resource path. */
-function resolveSetPath(entityName: string, metadata: ODataMetadata): string {
-  const resourcePath = resolveResourcePath(entityName, metadata);
-  return resourcePath ? `/${resourcePath}` : '';
-}
-
 /**
  * The placeholder key the preview puts on a single-entity binding. The builder
  * has no key input, so it says what it did rather than emitting a URL that
  * silently addresses the whole collection.
  */
 const PLACEHOLDER_KEY = "'1'";
+
+/**
+ * A placeholder literal for a key property, typed by the property's EDM type:
+ * an `Edm.Int32` key yields `1`, a string key `'1'`. A type the placeholder
+ * cannot represent (a guid, a date) falls back to the quoted form; the warning
+ * asks the user to replace the placeholder either way.
+ */
+function placeholderKeyLiteral(type: string | undefined): string {
+  if (!type) return PLACEHOLDER_KEY;
+  try {
+    return formatV4Literal('1', type);
+  } catch {
+    return PLACEHOLDER_KEY;
+  }
+}
 
 function placeholderKeySegment(
   entityName: string,
@@ -474,17 +499,23 @@ function placeholderKeySegment(
 ): string {
   const entity = findEntityByName(metadata.entities, entityName);
   const keys = entity ? getEffectiveKeys(entity, metadata.entities) : [];
+  const properties = entity ? getEffectiveProperties(entity, metadata.entities) : [];
+  const literalFor = (keyName: string) =>
+    placeholderKeyLiteral(properties.find((p) => p.name === keyName)?.type);
+
   onWarning?.(
     `The preview uses key placeholder ${PLACEHOLDER_KEY} on ${entityName}; replace it with a real key.`,
   );
-  if (keys.length <= 1) return `(${PLACEHOLDER_KEY})`;
-  return `(${keys.map((key) => `${key}=${PLACEHOLDER_KEY}`).join(',')})`;
+  if (keys.length === 0) return `(${PLACEHOLDER_KEY})`;
+  if (keys.length === 1) return `(${literalFor(keys[0])})`;
+  return `(${keys.map((key) => `${key}=${literalFor(key)}`).join(',')})`;
 }
 
 /**
  * Build the resource path of a bound-function step: the source set (with a key
  * when the function is bound to one entity) followed by the qualified function
- * segment. Returns `''` when the source has no resource path.
+ * segment. Returns `''` when the source has no resource path or the segment
+ * cannot be composed.
  */
 function functionSegmentPath(
   query: QueryState,
@@ -492,12 +523,22 @@ function functionSegmentPath(
   metadata: ODataMetadata,
   onWarning?: QueryWarningHandler,
 ): string {
+  // The UI only offers parameterless functions, but a programmatic caller can
+  // hand over an edge it could not compose: refuse rather than emit a call
+  // that silently omits a required parameter.
+  if (segment.parameters.length > 0) {
+    onWarning?.(
+      `The preview cannot call ${segment.qualifiedName}(): it requires parameter values, which this builder has no input for.`,
+    );
+    return '';
+  }
+
   const source = query.sourceEntity ?? '';
   const sourcePath = source ? resolveResourcePath(source, metadata) : undefined;
   if (!sourcePath) return '';
 
   const key = segment.bindingIsCollection ? '' : placeholderKeySegment(source, metadata, onWarning);
-  return `/${sourcePath}${key}/${segment.qualifiedName}()`;
+  return `/${assertResourceSegment(sourcePath)}${key}/${assertResourceSegment(segment.qualifiedName)}()`;
 }
 
 export function getDefaultQuery(entityName: string): QueryState {
