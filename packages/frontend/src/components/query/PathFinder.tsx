@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { ODataMetadata } from '@odata-visualizer/shared';
 import { findPaths, getReachableEntities, type EntityPath } from '../../utils/graphState';
+import { getEntitySelectionValue } from '../../utils/queryResolver';
 import { SearchableSelect } from './SearchableSelect';
 
 interface PathFinderProps {
@@ -25,20 +26,27 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
     setSearched(false);
   }, [currentEntity]);
 
+  // The dropdown values are graph identities, exactly what `findPaths`
+  // compares. Keying on `entity.name` collapsed the two `Part` entries to one
+  // string, so the chosen option could not say which namespace's type it meant.
   const reachableEntities = useMemo(() => {
     if (!sourceEntity) return new Set<string>();
     const reachable = getReachableEntities(sourceEntity, metadata);
-    const names = new Set<string>();
+    const identities = new Set<string>();
     for (const targets of reachable.values()) {
       for (const t of targets) {
-        names.add(t.entity.name);
+        identities.add(getEntitySelectionValue(t.entity, metadata.entities));
       }
     }
-    return names;
+    return identities;
   }, [sourceEntity, metadata]);
 
   const targetEntities = useMemo(
-    () => metadata.entities.filter((e) => e.name !== sourceEntity && reachableEntities.has(e.name)),
+    () =>
+      metadata.entities.filter((e) => {
+        const identity = getEntitySelectionValue(e, metadata.entities);
+        return identity !== sourceEntity && reachableEntities.has(identity);
+      }),
     [metadata.entities, sourceEntity, reachableEntities],
   );
 
@@ -82,6 +90,7 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
           <label className="text-[10px] text-engineering-400 block mb-0.5">To entity</label>
           <SearchableSelect
             entities={targetEntities}
+            identityEntities={metadata.entities}
             value={targetEntity}
             onChange={setTargetEntity}
             placeholder={sourceEntity ? 'Search target...' : 'Select source first...'}
