@@ -9,16 +9,20 @@ import type {
   ODataRelationship,
 } from '@odata-visualizer/shared';
 import {
+  buildQueryOptions,
   buildQueryUrl,
   findEntitiesByName,
   findEntityByName,
   findEntitySet,
+  findTypeInScope,
   formatV4Literal,
   getAllEntitySets,
   getEffectiveKeys,
   getEffectiveNavigationProperties,
   getEffectiveProperties,
+  getTraversalEdges,
   INTEGER_TYPES,
+  isFunctionEdge,
   normalizeBaseUrl,
   resolveInheritanceChain,
   resourcePathOf,
@@ -26,6 +30,7 @@ import {
   type ExpandNode,
   type FilterClause,
   type QueryOptions,
+  type TraversalFunctionEdge,
 } from '@odata-visualizer/shared';
 import { percentEncode } from '@odata-visualizer/shared';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -105,6 +110,28 @@ function formatEntitySummary(entity: ODataEntity, metadata: ODataMetadata): stri
 
 function formatRelationship(rel: ODataRelationship): string {
   return `${rel.name}: ${rel.from.entity} (${rel.from.multiplicity}) <-> ${rel.to.entity} (${rel.to.multiplicity})`;
+}
+
+/**
+ * Render one bound-function edge for `get_relationships`.
+ *
+ * The binding cardinality and the non-binding parameters are both part of the
+ * discovery answer: the first decides whether the composed path needs a key,
+ * the second decides whether the caller must supply values before the edge can
+ * be used at all.
+ */
+function formatOperationEdge(edge: TraversalFunctionEdge, metadata: ODataMetadata): string {
+  const qualified = (identity: string): string => {
+    const entity = findEntityByName(metadata.entities, identity);
+    return entity?.qualifiedName ?? entity?.name ?? identity;
+  };
+  const target = edge.returnsCollection ? `Collection(${qualified(edge.to)})` : qualified(edge.to);
+  const binding = edge.bindingIsCollection ? 'bound to the collection' : 'bound to one entity';
+  const requirements =
+    edge.parameters.length > 0
+      ? `requires: ${edge.parameters.map((p) => `${p.name}: ${p.type}`).join(', ')}`
+      : 'composable without parameters';
+  return `${edge.qualifiedName}(): ${qualified(edge.from)} -> ${target} [${requirements}; ${binding}]`;
 }
 
 /**
@@ -286,8 +313,12 @@ function formatParameter(
 
 function describeCallable(item: ODataAction | ODataFunction): string {
   const bound = item.isBound ? ' [bound]' : '';
+  // The binding type is what makes a bound function discoverable as an edge:
+  // `N.B [bound] -> N.C` alone never says the function is reachable from `A`.
+  const binding = item.isBound ? (item.parameters ?? []).find((p) => p.isBinding) : undefined;
+  const on = binding ? ` on ${binding.type}` : '';
   const ret = item.returnType ? ` -> ${item.returnType}` : '';
-  return `${item.qualifiedName ?? item.name}${bound}${ret}${item.label ? ` - ${item.label}` : ''}`;
+  return `${item.qualifiedName ?? item.name}${bound}${on}${ret}${item.label ? ` - ${item.label}` : ''}`;
 }
 
 function formatCallableDetails(
@@ -837,7 +868,25 @@ export function createToolHandler(
           );
         }
 
-        if (rels.length === 0) {
+        // Bound functions are not stored in `metadata.relationships`, so the
+        // one tool an agent would call to ask "what connects A to C" never
+        // mentioned them. They are edges in the traversal graph, and this is
+        // where that graph becomes visible.
+        const operationEdges = getTraversalEdges(metadata)
+          .filter(isFunctionEdge)
+          .filter((edge) => {
+            if (!entityName) return true;
+            const needle = entityName.toLowerCase();
+            const namesFor = (identity: string): string[] => {
+              const entity = findEntityByName(metadata.entities, identity);
+              return [identity, entity?.name ?? '', entity?.qualifiedName ?? ''].map((name) =>
+                name.toLowerCase(),
+              );
+            };
+            return namesFor(edge.from).includes(needle) || namesFor(edge.to).includes(needle);
+          });
+
+        if (rels.length === 0 && operationEdges.length === 0) {
           return textResult(
             entityName
               ? `No relationships found for "${entityName}".`
@@ -845,8 +894,17 @@ export function createToolHandler(
           );
         }
 
-        const { slice, note } = paginate(rels, args);
-        return textResult(`Relationships:\n\n${slice.map(formatRelationship).join('\n')}${note}`);
+        const sections: string[] = [];
+        if (rels.length > 0) {
+          const { slice, note } = paginate(rels, args);
+          sections.push(`Relationships:\n\n${slice.map(formatRelationship).join('\n')}${note}`);
+        }
+        if (operationEdges.length > 0) {
+          sections.push(
+            `Operation edges:\n\n${operationEdges.map((edge) => formatOperationEdge(edge, metadata)).join('\n')}`,
+          );
+        }
+        return textResult(sections.join('\n\n'));
       }
 
       case 'list_actions': {
@@ -1185,7 +1243,16 @@ function buildInvocationUnsafe(
   }
 
   const inline = isFunction ? formatInlineParams(item, parameters) : '';
-  const fullPath = `${path}${inline}`;
+  const queryWarnings: string[] = [];
+  const queryOptions = isFunction
+    ? buildFunctionQueryOptions(item, metadata, args, queryWarnings)
+    : '';
+  // A function with no parameters is emitted without parentheses today
+  // (`As('1')/N.B`). Once query options follow, the parentheses are added so
+  // the result is the unambiguous `As('1')/N.B()?$select=...` of the OData V4
+  // URL conventions — and so the terminal form stays byte-for-byte unchanged.
+  const segment = `${path}${inline}${queryOptions && !inline ? '()' : ''}`;
+  const fullPath = `${segment}${queryOptions}`;
 
   const lines: string[] = [];
   lines.push(`${method} ${root}/${fullPath}`);
@@ -1197,6 +1264,9 @@ function buildInvocationUnsafe(
     lines.push('');
     lines.push('Example:');
     lines.push(`curl '${shellEscape(`${root}/${fullPath}`)}'`);
+    if (queryWarnings.length > 0) {
+      lines.push('', ...queryWarnings);
+    }
     return textResult(lines.join('\n'));
   }
 
@@ -1235,6 +1305,70 @@ function formatInlineParams(
     return `${encodeIdentifierForUrl(name)}=${encodeLiteralForUrl(literal)}`;
   });
   return `(${rendered.join(',')})`;
+}
+
+/**
+ * The entity type a function returns, when it returns one; `undefined` for
+ * primitive or unresolved returns. Options on such a function are still
+ * rendered, just without model-typed literals or property warnings.
+ */
+function functionReturnEntityName(
+  item: ODataAction | ODataFunction,
+  metadata: ODataMetadata,
+): string | undefined {
+  const unwrapped = (item.returnType ?? '').replace(/^Collection\((.*)\)$/, '$1');
+  if (!unwrapped || unwrapped.startsWith('Edm.')) return undefined;
+  const entity = findTypeInScope(metadata.entities, unwrapped, item.namespace);
+  return entity ? (entity.qualifiedName ?? entity.name) : undefined;
+}
+
+/**
+ * Render the system query options a caller attached to a function invocation,
+ * or `''` when none were requested — so the terminal form is unchanged.
+ *
+ * A function segment is a resource path, and OData V4 allows
+ * `As('1')/N.B()?$select=...&$expand=...`; the options are typed against the
+ * function's return type through the same `buildQueryOptions` the query
+ * builder uses.
+ */
+function buildFunctionQueryOptions(
+  item: ODataAction | ODataFunction,
+  metadata: ODataMetadata,
+  args: Record<string, unknown>,
+  warnings: string[],
+): string {
+  const select = args['select'] as string[] | undefined;
+  const expand = args['expand'] as ExpandNode[] | undefined;
+  const filters = args['filters'] as FilterClause[] | undefined;
+  const filterLogic = args['filterLogic'] as 'and' | 'or' | undefined;
+  const orderBy = asString(args['orderBy']);
+  const top = asNumber(args['top']);
+  const skip = asNumber(args['skip']);
+  const count = typeof args['count'] === 'boolean' ? args['count'] : undefined;
+
+  const hasOptions =
+    (select?.length ?? 0) > 0 ||
+    (expand?.length ?? 0) > 0 ||
+    (filters?.length ?? 0) > 0 ||
+    orderBy !== undefined ||
+    top !== undefined ||
+    skip !== undefined ||
+    count === true;
+  if (!hasOptions) return '';
+
+  return buildQueryOptions({
+    rootEntityName: functionReturnEntityName(item, metadata),
+    metadata,
+    select,
+    expand,
+    filters,
+    filterLogic,
+    orderBy,
+    top,
+    skip,
+    count,
+    onWarning: (message) => warnings.push(message),
+  });
 }
 
 function buildBody(

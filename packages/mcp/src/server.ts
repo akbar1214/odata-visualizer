@@ -158,7 +158,7 @@ export function createMcpServer(
     'get_relationships',
     {
       description:
-        'List relationships between entities, optionally filtered to one entity. Useful for planning $expand.',
+        'List relationships between entities, optionally filtered to one entity. Useful for planning $expand. Also lists bound-function operation edges (e.g. "N.B(): A -> C"), which are resource-path segments rather than $expand targets.',
       inputSchema: {
         entityName: z.string().optional().describe('Only relationships touching this entity'),
         ...paginationSchema,
@@ -305,7 +305,7 @@ export function createMcpServer(
     'build_function_invocation',
     {
       description:
-        'Build a GET request URL to invoke a function with inline parameters. Bound functions require entitySet + keys. Returns the URL and curl example; it does not execute the request.',
+        'Build a GET request URL to invoke a function with inline parameters. Bound functions require entitySet + keys. Optional query options ($select, $expand, $filter, $orderby, $top, $skip, $count) are appended to the invocation and typed against the function return type. Returns the URL and curl example; it does not execute the request.',
       inputSchema: {
         functionName: z.string().describe('Function name, e.g. "GetWindchillMetaInfo"'),
         entitySet: z.string().optional().describe('Required for bound functions, e.g. "Parts"'),
@@ -314,6 +314,17 @@ export function createMcpServer(
           .optional()
           .describe('Key values for the bound resource, e.g. { "ID": "OR:wt.part.WTPart:123" }'),
         parameters: z.record(z.unknown()).optional().describe('Function parameter values'),
+        select: z.array(z.string()).optional().describe('$select on the function result'),
+        expand: z.array(expandNodeSchema).optional().describe('$expand on the function result'),
+        filters: z.array(filterSchema).optional().describe('$filter on the function result'),
+        filterLogic: z
+          .enum(['and', 'or'])
+          .optional()
+          .describe('How to join filters (default "and")'),
+        orderBy: z.string().optional().describe('$orderby on the function result, e.g. "Id desc"'),
+        top: z.number().int().nonnegative().optional(),
+        skip: z.number().int().nonnegative().optional(),
+        count: z.boolean().optional().describe('Append $count=true'),
         baseUrl: z.string().optional().describe('Service root'),
       },
     },
