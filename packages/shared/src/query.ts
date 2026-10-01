@@ -43,15 +43,14 @@ export interface AggregateNode {
   alias?: string;
 }
 
-/** Options for building an OData V4 query URL. */
-export interface QueryOptions {
-  entitySet: string;
+/** Options that render as system query options after a resource path. */
+export interface QueryOptionFields {
   /**
    * Entity type the query is *about*, used to resolve property types and
-   * `$expand` targets. Needed when `entitySet` is a derived-type cast
-   * (`Products/Model.FeaturedProduct`), where the path segment is the set but
-   * literals must still be typed from the derived type. Defaults to the type
-   * declared by `entitySet`.
+   * `$expand` targets. Needed when the resource path is not an entity set name
+   * (a derived-type cast, or a bound-function invocation), where literals must
+   * still be typed from the result type. Defaults to the type declared by
+   * `entitySet`.
    */
   rootEntityName?: string;
   filters?: FilterClause[];
@@ -65,12 +64,17 @@ export interface QueryOptions {
   skip?: number;
   count?: boolean;
   search?: string;
-  /** Optional base URL; when set an absolute URL is returned. */
-  baseUrl?: string;
   /** When provided, filter literals are typed from the model. */
   metadata?: ODataMetadata;
   /** Receives non-fatal problems, e.g. properties that are not in the model. */
   onWarning?: (message: string) => void;
+}
+
+/** Options for building an OData V4 query URL. */
+export interface QueryOptions extends QueryOptionFields {
+  entitySet: string;
+  /** Optional base URL; when set an absolute URL is returned. */
+  baseUrl?: string;
 }
 
 const COMPARISON_OPERATORS = new Set(['eq', 'ne', 'gt', 'ge', 'lt', 'le']);
@@ -936,12 +940,14 @@ export function normalizeBaseUrl(baseUrl: string): string {
 }
 
 /**
- * Build an OData V4 query URL (relative to the service root, or absolute
- * when baseUrl is given).
+ * Render the system query options for a resource, including the leading `?`,
+ * or `''` when none are requested.
+ *
+ * Shared by `buildQueryUrl` and by bound-function invocations: a function
+ * segment is a resource path, so `As('1')/N.B()?$expand=...` is a legal
+ * OData V4 URL and the options are typed against the function's return type.
  */
-export function buildQueryUrl(options: QueryOptions): string {
-  const entitySet = assertResourceSegment(options.entitySet);
-
+export function buildQueryOptions(options: QueryOptionFields): string {
   if (
     options.search &&
     (options.filters?.length || options.top !== undefined || options.skip !== undefined)
@@ -963,7 +969,7 @@ export function buildQueryUrl(options: QueryOptions): string {
     throw new Error('OData V4 does not allow $search together with $apply.');
   }
 
-  const rootEntity = resolveRootEntity(options);
+  const rootEntity = resolveRootEntity(options.rootEntityName, undefined, options.metadata);
   const params: string[] = [];
   const warn = options.onWarning;
   const checkProperty = (property: string): void => {
@@ -1056,7 +1062,19 @@ export function buildQueryUrl(options: QueryOptions): string {
     params.push(`$search=${encodeQueryValue(options.search)}`);
   }
 
-  const path = `/${entitySet}${params.length > 0 ? `?${params.join('&')}` : ''}`;
+  return params.length > 0 ? `?${params.join('&')}` : '';
+}
+
+/**
+ * Build an OData V4 query URL (relative to the service root, or absolute
+ * when baseUrl is given).
+ */
+export function buildQueryUrl(options: QueryOptions): string {
+  const entitySet = assertResourceSegment(options.entitySet);
+  const rootEntityName = resolveRootEntity(options.rootEntityName, entitySet, options.metadata);
+  const query = buildQueryOptions({ ...options, rootEntityName });
+
+  const path = `/${entitySet}${query}`;
   if (options.baseUrl) {
     return `${normalizeBaseUrl(options.baseUrl)}${path}`;
   }
@@ -1246,19 +1264,25 @@ function buildExpand(
     .join(',');
 }
 
-function resolveRootEntity(options: QueryOptions): string | undefined {
-  if (!options.metadata) return undefined;
+function resolveRootEntity(
+  rootEntityName: string | undefined,
+  entitySet: string | undefined,
+  metadata: ODataMetadata | undefined,
+): string | undefined {
+  if (!metadata) return undefined;
 
   // The caller may know the entity type even when the path is not a set name.
-  if (options.rootEntityName) {
-    const direct = findEntityByName(options.metadata.entities, options.rootEntityName);
+  if (rootEntityName) {
+    const direct = findEntityByName(metadata.entities, rootEntityName);
     if (direct) return direct.qualifiedName ?? direct.name;
   }
+
+  if (!entitySet) return undefined;
 
   // Look the set up by its *path*: a key predicate addresses one entity of the
   // same set, so `/Parts('P1')` must resolve exactly like `/Parts` or every
   // literal degrades to an inferred type and property warnings stop firing.
-  const set = findEntitySet(options.metadata, resourcePathOf(options.entitySet));
+  const set = findEntitySet(metadata, resourcePathOf(entitySet));
   if (!set) return undefined;
   return set.entityTypeQualified ?? set.entityType;
 }

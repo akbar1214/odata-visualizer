@@ -1,4 +1,5 @@
 import type {
+  ODataAssociationEnd,
   ODataEntity,
   ODataEntitySet,
   ODataMetadata,
@@ -249,4 +250,128 @@ function sharedPrefixLength(a: string, b: string): number {
   let i = 0;
   while (i < len && a[i] === b[i]) i++;
   return i;
+}
+
+/**
+ * The identity a UI graph (or a traversal result) uses for a type.
+ *
+ * Short names are used while they are unique — that is what the graph and the
+ * rest of the UI speak. When two types share a short name (the Windchill
+ * fixture ships two `Part` types) the qualified name is used instead, because
+ * otherwise both dropdown entries emit the same string and the selection
+ * silently resolves to whichever one the parser saw first. That turned a loud
+ * 404 into a query against the wrong collection.
+ *
+ * Always compute the ambiguity against the *whole* model. A filtered list can
+ * hide the colliding type, and the short value then resolves to it.
+ */
+export function getEntitySelectionValue(entity: ODataEntity, entities: ODataEntity[]): string {
+  // Case-insensitively, because `findEntityByName` matches that way: two types
+  // differing only by case would both emit the same short value, and every
+  // consumer would resolve it to whichever was parsed first.
+  const ambiguous = entities.some(
+    (other) => other !== entity && other.name.toLowerCase() === entity.name.toLowerCase(),
+  );
+  return ambiguous ? (entity.qualifiedName ?? entity.name) : entity.name;
+}
+
+/**
+ * Resolve the entity type a navigation property points at.
+ *
+ * Returns the target's **graph identity**, not its short name: the short name
+ * while it is unique in the model, and `Namespace.Name` when two types share
+ * the short name (`getEntitySelectionValue`). The query graph stores these
+ * values in nodes and path steps and compares them directly. Returning an
+ * ambiguous short name made every consumer resolve it with first-match-wins,
+ * so expanding a navigation property silently landed on whichever same-named
+ * type was parsed first.
+ *
+ * The value is always resolvable through `findEntityByName`, which prefers an
+ * exact qualified match over a short one. Ambiguity is judged the same way that
+ * resolver matches — case-insensitively — so a case-only collision is qualified
+ * too rather than resolving to the first of the pair.
+ */
+export function getTargetEntityName(
+  navProperty: string,
+  sourceEntity: ODataEntity,
+  metadata: ODataMetadata,
+): string | undefined {
+  const nav = getEffectiveNavigationProperties(sourceEntity, metadata.entities).find(
+    (n) => n.name === navProperty,
+  );
+  if (!nav) return undefined;
+
+  // OData V4: the navigation property points straight at the target type. The
+  // qualified reference is preferred over the short one even when it cannot be
+  // resolved: it names a type from an unloaded reference, and the short name
+  // may silently name a different type in this model.
+  if (nav.targetTypeQualified) {
+    const target = findEntityByName(metadata.entities, nav.targetTypeQualified);
+    if (target) return getEntitySelectionValue(target, metadata.entities);
+    return nav.targetTypeQualified;
+  }
+  if (nav.targetType) return nav.targetType;
+
+  // OData V3: resolve through the Association. The endpoint identity is
+  // resolved before it is compared, so both the endpoint lookup and the source
+  // comparison work on identities rather than short names.
+  if (!nav.relationship) return undefined;
+  // The association is stored under its *simple* name (`parseAssociation` keeps
+  // `@_Name` verbatim), but a namespaced generator writes `Self.R1` — or `N.R1`
+  // once the parser expands `Schema/@Alias`. Matching the two directly missed
+  // every such document, so the whole V3 pathfinder branch was dead.
+  //
+  // A qualified reference names the association's *namespace*, and that is what
+  // the qualifier is for: two namespaces may declare the same simple name.
+  // Preferring the source entity's namespace instead picked the wrong
+  // association whenever the two differed — which is the only case where a
+  // generator writes the qualified form at all.
+  const dot = nav.relationship.lastIndexOf('.');
+  const qualifier = dot > 0 ? nav.relationship.slice(0, dot) : undefined;
+  const localName = dot > 0 ? nav.relationship.slice(dot + 1) : nav.relationship;
+  const sameName = metadata.relationships.filter(
+    (r) => r.name === nav.relationship || r.name === localName,
+  );
+
+  // A qualifier that names a namespace in this model is authoritative: the
+  // reference is explicitly qualified, so an association outside that namespace
+  // is a dangling reference and stays unresolved. Guessing from the source
+  // entity's namespace instead silently followed an unrelated association that
+  // merely shared the simple name.
+  const modelNamespaces = new Set<string>();
+  for (const entity of metadata.entities) {
+    if (entity.namespace) modelNamespaces.add(entity.namespace);
+  }
+  for (const relationship of metadata.relationships) {
+    if (relationship.namespace) modelNamespaces.add(relationship.namespace);
+  }
+  const qualified = qualifier !== undefined && modelNamespaces.has(qualifier);
+
+  const rel = qualified
+    ? sameName.find((r) => r.namespace === qualifier)
+    : // An unrecognised qualifier is most likely an alias this layer cannot
+      // expand, so the source entity's own namespace is the better guess. There
+      // is no separate exact-name clause: `sameName` already matches both
+      // spellings, so it would only ever return an element of this list.
+      (sameName.find((r) => r.namespace === sourceEntity.namespace) ?? sameName[0]);
+  if (!rel) return undefined;
+
+  const endIdentity = (end: ODataAssociationEnd): string => {
+    const target = findEntityByName(metadata.entities, end.entityQualified ?? end.entity);
+    return target
+      ? getEntitySelectionValue(target, metadata.entities)
+      : (end.entityQualified ?? end.entity);
+  };
+
+  if (nav.toRole) {
+    // #35's both-ends check, wrapped so the result is an identity rather than
+    // a stored endpoint. Taking either side wholesale breaks the other's tests:
+    // #35's raw returns give qualified strings where callers expect identities,
+    // and #38's one-liner loses the neither-end fallthrough.
+    if (rel.from.role === nav.toRole) return endIdentity(rel.from);
+    if (rel.to.role === nav.toRole) return endIdentity(rel.to);
+  }
+  return endIdentity(rel.from) === getEntitySelectionValue(sourceEntity, metadata.entities)
+    ? endIdentity(rel.to)
+    : endIdentity(rel.from);
 }
