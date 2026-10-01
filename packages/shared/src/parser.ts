@@ -698,6 +698,11 @@ function relationshipFromNavigationProperty(
     nav.relationship && nav.relationship !== 'Collection'
       ? expand(nav.relationship)
       : `${entity.name}_${nav.name}`;
+  const targetReference = expand(nav.targetTypeQualified ?? nav.targetType) ?? nav.targetType;
+  const targetIdentity =
+    targetReference.includes('.') || targetReference.startsWith('Edm.')
+      ? targetReference
+      : `${namespace}.${targetReference}`;
   return {
     name: associationName,
     namespace,
@@ -712,14 +717,16 @@ function relationshipFromNavigationProperty(
       multiplicity: isCollection ? '*' : '1',
     },
     to: {
-      // Expanded *before* deduplication, which runs during parsing and compares
-      // stored identities. Leaving the alias unexpanded made two mirrored
-      // relationships over the same pair of types look distinct, because one
-      // said `self.Gadget` and the other `N.Gadget`.
-      entity: expand(nav.targetTypeQualified ?? nav.targetType) ?? nav.targetType,
+      // Expanded *and* qualified before deduplication, which runs during parsing
+      // and compares stored identities. An alias left unexpanded (`self.Gadget`)
+      // or an unqualified reference left short (`Gadget`) did not match the same
+      // type written `N.Gadget`, so the two mirrored halves of one association
+      // both survived. An unqualified reference means the enclosing namespace,
+      // so the parser can qualify it too.
+      entity: targetIdentity,
       // Kept for consumers written against the old shape; the parser no longer
       // discards the qualified target.
-      entityQualified: nav.targetTypeQualified ? expand(nav.targetTypeQualified) : undefined,
+      entityQualified: nav.targetTypeQualified ? expand(nav.targetTypeQualified) : targetIdentity,
       role: nav.toRole || nav.targetType,
       multiplicity: isCollection ? '1' : '*',
     },

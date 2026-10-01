@@ -191,3 +191,34 @@ describe('dedup compares expanded endpoints', () => {
     expect(model.relationships).toHaveLength(2);
   });
 });
+
+/**
+ * An unqualified type reference means the enclosing namespace, so the parser can
+ * qualify it too. Leaving it short made the two mirrored halves of one
+ * association compare unequal (`N.Widget -> Gadget` against
+ * `N.Gadget -> Widget`) and both survived dedup.
+ */
+describe('unqualified targets are qualified before dedup', () => {
+  it('merges the mirrored halves when the target is written unqualified', async () => {
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Docs" Type="Collection(Gadget)" />
+      </EntityType>
+      <EntityType Name="Gadget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Parent" Type="Widget" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+    expect(model.relationships).toHaveLength(1);
+    expect(model.relationships[0].to.entity).toBe('N.Gadget');
+  });
+});
