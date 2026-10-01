@@ -422,7 +422,10 @@ const RESOURCE_SEGMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/
  */
 const SELECT_IDENTIFIER = '[A-Za-z_][A-Za-z0-9_]*';
 const SELECT_QUALIFIED_NAME = `(?:${SELECT_IDENTIFIER}\\.)*${SELECT_IDENTIFIER}`;
-const SELECT_FUNCTION_CALL = `${SELECT_QUALIFIED_NAME}\\((?:${SELECT_IDENTIFIER}(?:,${SELECT_IDENTIFIER})*)?\\)`;
+// `parameterNames` is one-or-more: the ABNF's optional group is around the
+// whole `OPEN parameterNames CLOSE`, not the list. `Fn()` is therefore not a
+// legal select item — a no-parameter overload is spelled `Fn`.
+const SELECT_FUNCTION_CALL = `${SELECT_QUALIFIED_NAME}\\(${SELECT_IDENTIFIER}(?:,${SELECT_IDENTIFIER})*\\)`;
 const SELECT_ANNOTATION = `@${SELECT_QUALIFIED_NAME}(?:#${SELECT_IDENTIFIER})?`;
 const SELECT_PATH = `${SELECT_QUALIFIED_NAME}(?:\\/${SELECT_QUALIFIED_NAME})*`;
 const SELECT_ITEM = new RegExp(

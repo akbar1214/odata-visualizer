@@ -351,8 +351,13 @@ describe('$select forms beyond star and plain paths', () => {
     expect(buildQueryUrl({ entitySet: 'Parts', select: ['PTC.Part/Fn(ID,Name)'] })).toBe(
       '/Parts?$select=PTC.Part/Fn(ID,Name)',
     );
-    // `[ OPEN parameterNames CLOSE ]`: an overload with no parameters.
-    expect(buildQueryUrl({ entitySet: 'Parts', select: ['Fn()'] })).toBe('/Parts?$select=Fn()');
+    // A no-parameter overload is spelled without parens: `parameterNames` is
+    // one-or-more, and the ABNF's optional group wraps the whole
+    // `OPEN parameterNames CLOSE`. `Fn()` was accepted here before review.
+    expect(buildQueryUrl({ entitySet: 'Parts', select: ['Fn'] })).toBe('/Parts?$select=Fn');
+    expect(() => buildQueryUrl({ entitySet: 'Parts', select: ['Fn()'] })).toThrow(
+      /Invalid \$select/,
+    );
   });
 
   it('does not warn that annotation or function select items are not properties', () => {
@@ -391,7 +396,9 @@ describe('$select forms beyond star and plain paths', () => {
         select: ["Addresses($filter=Name eq 'x';$top=5)"],
       }),
     ).toThrow(/\$select/);
-    expect(() => buildQueryUrl({ entitySet: 'Parts', select: ['Qty($top=5)'] })).toThrow(/\$select/);
+    expect(() => buildQueryUrl({ entitySet: 'Parts', select: ['Qty($top=5)'] })).toThrow(
+      /\$select/,
+    );
   });
 });
 
