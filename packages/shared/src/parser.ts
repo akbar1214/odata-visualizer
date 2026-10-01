@@ -1288,7 +1288,7 @@ function childElements(owner: XmlElement, name: string, ...prefixes: string[]): 
   // ordering is used, such as an unqualified annotation target resolved against
   // `findEntityByName`.
   //
-  // `xml2js` groups repeats under one key, so this is the order of the key
+  // `fast-xml-parser` groups repeats under one key, so this is the order of
   // groups rather than of individual elements, which is as much as the parsed
   // tree preserves. It also never pushes into `ensureArray`'s return value,
   // which is the caller's own array for a repeated element.

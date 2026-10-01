@@ -399,11 +399,15 @@ describe('mixed spellings survive everywhere', () => {
         <Key><PropertyRef Name="Id" /></Key>
         <Property Name="Id" Type="Edm.String" Nullable="false" />
       </EntityType>
-      <EntityContainer Name="C1"><EntitySet Name="Things" EntityType="N.Thing" /></EntityContainer>
+      <EntityContainer Name="C1">
+        <EntitySet Name="Things" EntityType="N.Thing" />
+        <FunctionImport Name="G" Function="N.Fn" />
+        <edm:FunctionImport Name="F" Function="N.Fn" />
+        <ActionImport Name="GA" Action="N.Act" />
+        <edm:ActionImport Name="A" Action="N.Act" />
+      </EntityContainer>
       <edm:EntityContainer Name="C2">
         <edm:EntitySet Name="More" EntityType="N.Thing" />
-        <edm:FunctionImport Name="F" Function="N.Fn" />
-        <edm:ActionImport Name="A" Action="N.Fn" />
       </edm:EntityContainer>
       <Function Name="Fn"><ReturnType Type="Edm.String" /></Function>
       <Action Name="Act" />
@@ -413,8 +417,11 @@ describe('mixed spellings survive everywhere', () => {
 
     expect(model.typeDefinitions.map((t) => t.name).sort()).toEqual(['T1', 'T2']);
     expect(model.entityContainers.map((c) => c.name).sort()).toEqual(['C1', 'C2']);
-    expect(model.functionImports.map((f) => f.name)).toEqual(['F']);
-    expect(model.actionImports.map((a) => a.name)).toEqual(['A']);
+    // Both spellings sit in the *same* container: `a || b` returned only the
+    // unprefixed group, so the prefixed import disappeared. Declaring only the
+    // prefixed form (as this test did) passes either way and proves nothing.
+    expect(model.functionImports.map((f) => f.name)).toEqual(['G', 'F']);
+    expect(model.actionImports.map((a) => a.name)).toEqual(['GA', 'A']);
   });
 
   it('keeps NavigationProperty declared under both spellings', async () => {
@@ -719,5 +726,64 @@ describe('prefixed-only spellings survive', () => {
     ).toBe('from the prefixed block');
     const things = model.entityContainers[0].entitySets.find((s) => s.name === 'Things')!;
     expect(things.navigationPropertyBindings?.map((b) => b.path)).toEqual(['Others']);
+  });
+});
+
+/**
+ * Deleting this loop outright left the whole suite green: no test ever put a
+ * `NavigationProperty` on a `ComplexType`, so the conversion there was
+ * unverified and the path had no coverage at all.
+ */
+describe('ComplexType navigation properties', () => {
+  it('keeps both spellings on a complex type', async () => {
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm"
+            xmlns:edm="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <ComplexType Name="Addr">
+        <NavigationProperty Name="a" Type="Collection(N.Thing)" />
+        <edm:NavigationProperty Name="b" Type="Collection(N.Thing)" />
+      </ComplexType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+    const complex = model.entities.find((e) => e.qualifiedName === 'N.Addr')!;
+    expect(complex.navigationProperties.map((n) => n.name)).toEqual(['a', 'b']);
+  });
+});
+
+/**
+ * The `Collection` conversion is only observable when both spellings coexist:
+ * `ann['Collection'] ?? ann['edm:Collection']` always preferred the unprefixed
+ * one, whatever order the document used. Two `Collection` children in one
+ * annotation is invalid CSDL, so this exists purely to pin the conversion.
+ */
+describe('the Collection conversion is pinned', () => {
+  it('reads whichever spelling the document declares first', async () => {
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm"
+            xmlns:edm="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Annotations Target="N.Thing">
+        <Annotation Term="T.Both"><edm:Collection><String>prefixed</String></edm:Collection><Collection><String>plain</String></Collection></Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+    expect(model.entities.find((e) => e.qualifiedName === 'N.Thing')!.annotations?.['T.Both']).toBe(
+      'prefixed',
+    );
   });
 });
