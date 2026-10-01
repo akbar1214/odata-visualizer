@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react';
 import {
   encodeIdentifierForUrl,
   encodeLiteralForUrl,
+  IDENTIFIER_UNSAFE,
   PATH_UNSAFE,
   type ODataMetadata,
 } from '@odata-visualizer/shared';
@@ -13,6 +14,15 @@ import { formatODataValue } from '../../utils/queryResolver';
  * separate parameter.
  */
 const FUNCTION_VALUE_UNSAFE: ReadonlySet<string> = new Set([...PATH_UNSAFE, '&']);
+
+/**
+ * The same rationale for identifier positions (parameter and import names):
+ * MCP emits a whole URL and keeps the shared identifier policy, but a copied
+ * fragment is re-read as a query string, so a metadata name such as `A&B` must
+ * not be able to split it. `#` and the OData structure characters are already
+ * in `IDENTIFIER_UNSAFE`.
+ */
+const FUNCTION_IDENTIFIER_UNSAFE: ReadonlySet<string> = new Set([...IDENTIFIER_UNSAFE, '&']);
 
 interface FunctionImportSelectorProps {
   metadata: ODataMetadata;
@@ -53,15 +63,20 @@ export function FunctionImportSelector({ metadata, onSelect }: FunctionImportSel
         // shared encoder keeps a space, `&` or `#` inside the value.
         const literal = formatODataValue(value, param.type);
         paramParts.push(
-          `${encodeIdentifierForUrl(param.name)}=${encodeLiteralForUrl(literal, FUNCTION_VALUE_UNSAFE)}`,
+          `${encodeIdentifierForUrl(param.name, FUNCTION_IDENTIFIER_UNSAFE)}=${encodeLiteralForUrl(literal, FUNCTION_VALUE_UNSAFE)}`,
         );
       }
+      // An empty input cannot be told apart from an untouched one, so an empty
+      // value is left out; when it is a function's only parameter the preview
+      // collapses to the no-parameter shape. MCP receives values explicitly and
+      // renders `Name=''` for an empty string — this is the one documented
+      // divergence, pinned in `functionImportSelector.test.tsx`.
     }
 
     const queryString = paramParts.length > 0 ? `(${paramParts.join(',')})` : '';
     // An unbound function is addressed by its import name, and the selector's
     // options come from `metadata.functionImports`, so `name` is that name.
-    return `/${encodeIdentifierForUrl(selectedFunc.name)}${queryString}`;
+    return `/${encodeIdentifierForUrl(selectedFunc.name, FUNCTION_IDENTIFIER_UNSAFE)}${queryString}`;
   };
 
   const handleFunctionChangeEvent = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {

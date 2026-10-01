@@ -401,20 +401,35 @@ const RESOURCE_SEGMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/
 /**
  * A `$select` item (OData V4.01 ABNF `selectItem`).
  *
- *   `*`                     all structural properties (STAR)
- *   `NS.*`                  all operations of a schema (allOperationsInSchema)
- *   `Name`                  property, action or function name
- *   `Address/City`          structural path
- *   `NS.Part/Name`          path from a qualified type
- *   `Address/NS.Addr/City`  mid-path type cast (selectPath)
- *   `@NS.Term`              instance annotation (annotationInQuery)
- *   `@NS.Term#Qualifier`    annotated term; the caller writes the raw `#`,
- *                           which `encodeQueryValue` emits as `%23`
- *   `Address/@NS.Term`      annotation after a structural path
- *   `NS.Part/@NS.Term`      annotation after a type prefix
- *   `Fn(ID,Name)`           function call with parameter names; the name may
- *                           be qualified and may follow a single
- *                           optionally-qualified type prefix
+ *   `*`                       all structural properties (STAR)
+ *   `NS.*`                    all operations of a schema
+ *   `Name`                    property, action or function name
+ *   `NS.Name`                 optionally-qualified action or function name
+ *   `Fn(ID,Name)`             function call with parameter names
+ *   `NS.Fn(ID,Name)`          ... optionally qualified
+ *   `Address/City`            structural path (selectProperty)
+ *   `Address/NS.Addr/City`    mid-path type cast (selectPath)
+ *   `NS.Part/Address/City`    path from `selectItem`'s type prefix
+ *   `NS.Part/Fn(ID,Name)`     operation called on the type prefix
+ *   `@NS.Term`                instance annotation (annotationInQuery)
+ *   `@NS.Term#Qualifier`      annotated term; the caller writes the raw `#`,
+ *                             which `encodeQueryValue` emits as `%23`
+ *   `Address/@NS.Term`        annotation at the end of a path
+ *   `@T/More`, `@T/NS.Cast`   annotation followed by a selectProperty step
+ *
+ * `selectProperty` is recursive:
+ *
+ *   selectProperty = primitiveProperty / ... / selectPath [ "/" selectProperty ]
+ *   selectPath     = ( complexProperty / complexColProperty /
+ *                      complexAnnotationInQuery )
+ *                    [ "/" optionallyQualifiedComplexTypeName ]
+ *
+ * so a path is a sequence of plain identifiers and annotations, and a
+ * qualified name appears in it only as a cast *between* two of those (or at
+ * the end). Two qualified segments in a row are never legal: the qualified
+ * name at the front of an item is `selectItem`'s type prefix, not part of the
+ * path, and it cannot be followed by another one. That is why
+ * `NS.C/A/B` is legal but `A/NS.B/NS.C` is not.
  *
  * The ABNF also allows select options on a property path
  * (`Addresses($filter=…;$top=5)`, `selectProperty` / `selectOption`). They are
@@ -429,14 +444,27 @@ const RESOURCE_SEGMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/
  */
 const SELECT_IDENTIFIER = '[A-Za-z_][A-Za-z0-9_]*';
 const SELECT_QUALIFIED_NAME = `(?:${SELECT_IDENTIFIER}\\.)*${SELECT_IDENTIFIER}`;
+const SELECT_ANNOTATION = `@${SELECT_QUALIFIED_NAME}(?:#${SELECT_IDENTIFIER})?`;
 // `parameterNames` is one-or-more: the ABNF's optional group is around the
 // whole `OPEN parameterNames CLOSE`, not the list. `Fn()` is therefore not a
 // legal select item — a no-parameter overload is spelled `Fn`.
 const SELECT_FUNCTION_CALL = `${SELECT_QUALIFIED_NAME}\\(${SELECT_IDENTIFIER}(?:,${SELECT_IDENTIFIER})*\\)`;
-const SELECT_ANNOTATION = `@${SELECT_QUALIFIED_NAME}(?:#${SELECT_IDENTIFIER})?`;
-const SELECT_PATH = `${SELECT_QUALIFIED_NAME}(?:\\/${SELECT_QUALIFIED_NAME})*`;
+// One `selectProperty` step is a plain identifier or an annotation, so a
+// qualified name can never begin one. The middle group is `selectPath`'s
+// optional cast (`/ QN`) followed by the next step; the trailing group is the
+// cast that may end a path (`Address/NS.Addr`). Requiring a step after every
+// cast is exactly "no two qualified segments in a row".
+const SELECT_PROPERTY_STEP = `(?:${SELECT_IDENTIFIER}|${SELECT_ANNOTATION})`;
+const SELECT_PROPERTY = `${SELECT_PROPERTY_STEP}(?:\\/(?:${SELECT_QUALIFIED_NAME}\\/)?${SELECT_PROPERTY_STEP})*(?:\\/${SELECT_QUALIFIED_NAME})?`;
 const SELECT_ITEM = new RegExp(
-  `^(?:\\*|${SELECT_QUALIFIED_NAME}\\.\\*|${SELECT_ANNOTATION}|${SELECT_FUNCTION_CALL}|${SELECT_QUALIFIED_NAME}\\/${SELECT_FUNCTION_CALL}|${SELECT_PATH}|${SELECT_PATH}\\/${SELECT_ANNOTATION})$`,
+  `^(?:\\*` +
+    `|${SELECT_QUALIFIED_NAME}\\.\\*` +
+    `|${SELECT_PROPERTY}` +
+    `|${SELECT_QUALIFIED_NAME}` +
+    `|${SELECT_FUNCTION_CALL}` +
+    `|${SELECT_QUALIFIED_NAME}\\/${SELECT_PROPERTY}` +
+    `|${SELECT_QUALIFIED_NAME}\\/${SELECT_QUALIFIED_NAME}` +
+    `|${SELECT_QUALIFIED_NAME}\\/${SELECT_FUNCTION_CALL})$`,
 );
 
 /**

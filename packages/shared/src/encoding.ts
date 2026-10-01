@@ -65,30 +65,37 @@ export function percentEncode(value: string, unsafe: ReadonlySet<string>): strin
  * as a space outside the query string. Path values are data, so both are
  * encoded. The query side keeps `;` raw because a nested `$expand` uses it as a
  * separator — there it is structure, not data.
+ *
+ * The set is exported so callers can compose a stricter policy
+ * (`new Set([...PATH_UNSAFE, '&'])`), so it is typed `ReadonlySet` and frozen:
+ * a mutation would silently change every encoder in the package, and the
+ * compiler is what stops one.
  */
-export const PATH_UNSAFE = new Set([
-  ' ',
-  '"',
-  '<',
-  '>',
-  '\\',
-  '^',
-  '`',
-  '{',
-  '|',
-  '}',
-  '?',
-  '#',
-  '[',
-  ']',
-  '%',
-  '/',
-  // `+` and `;` are encoded in values this layer *renders*. Caller-supplied key
-  // predicates are used verbatim (`KEY_QUOTED_INNER` accepts both raw), so the
-  // rule is not global — see the note in `query.ts`.
-  '+',
-  ';',
-]);
+export const PATH_UNSAFE: ReadonlySet<string> = Object.freeze(
+  new Set([
+    ' ',
+    '"',
+    '<',
+    '>',
+    '\\',
+    '^',
+    '`',
+    '{',
+    '|',
+    '}',
+    '?',
+    '#',
+    '[',
+    ']',
+    '%',
+    '/',
+    // `+` and `;` are encoded in values this layer *renders*. Caller-supplied key
+    // predicates are used verbatim (`KEY_QUOTED_INNER` accepts both raw), so the
+    // rule is not global — see the note in `query.ts`.
+    '+',
+    ';',
+  ]),
+);
 
 /**
  * Percent-encode a rendered OData literal for use inside a URL path segment.
@@ -116,10 +123,25 @@ export function encodeLiteralForUrl(
  * silently address a different resource. Encoding keeps the name inside one
  * segment and unambiguous; the server percent-decodes before matching, so a
  * lenient server spelling a set `Th#ings` still answers to `Th%23ings`.
+ *
+ * Exported so a caller can compose a stricter policy: the function-import
+ * selector adds `&` to keep a copied fragment from splitting when a client
+ * reads it as a query string.
  */
-const IDENTIFIER_UNSAFE = new Set([...PATH_UNSAFE, '(', ')', ',', '=', "'"]);
+export const IDENTIFIER_UNSAFE: ReadonlySet<string> = Object.freeze(
+  new Set([...PATH_UNSAFE, '(', ')', ',', '=', "'"]),
+);
 
-/** Percent-encode a metadata-derived identifier for its position in a URL. */
-export function encodeIdentifierForUrl(identifier: string): string {
-  return percentEncode(identifier, IDENTIFIER_UNSAFE);
+/**
+ * Percent-encode a metadata-derived identifier for its position in a URL.
+ *
+ * The default is `IDENTIFIER_UNSAFE`; a caller can pass a stricter set. MCP
+ * emits whole URLs and keeps the default, because `&` and `#` are legal in the
+ * path itself.
+ */
+export function encodeIdentifierForUrl(
+  identifier: string,
+  unsafe: ReadonlySet<string> = IDENTIFIER_UNSAFE,
+): string {
+  return percentEncode(identifier, unsafe);
 }

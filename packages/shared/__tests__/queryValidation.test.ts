@@ -379,8 +379,39 @@ describe('$select forms beyond star and plain paths', () => {
     // `selectItem` allows `optionallyQualifiedFunctionName` directly, or after
     // a *single* optionally-qualified type prefix — never after a `selectPath`.
     for (const item of ['Address/PTC.Addr/Fn(ID)', 'PTC.Part/Address/Fn(ID)']) {
-      expect(() => buildQueryUrl({ entitySet: 'Parts', select: [item] }), item).toThrow(
-        /\$select/,
+      expect(() => buildQueryUrl({ entitySet: 'Parts', select: [item] }), item).toThrow(/\$select/);
+    }
+  });
+
+  it('rejects a second qualified segment inside a select path', () => {
+    // A qualified name can only be a cast directly after a plain identifier,
+    // or the single optionally-qualified type prefix at the start of
+    // `selectItem`; inside `selectProperty` it can never begin a step or
+    // follow another qualified segment. `A/NS.B/NS.C/@T` only passed before
+    // because the old path matcher treated every `/`-separated part as
+    // interchangeable.
+    for (const item of ['A/NS.B/NS.C', 'A/NS.B/NS.C/D', 'NS.C/NS.D/NS.E', 'A/NS.B/NS.C/@T']) {
+      expect(() => buildQueryUrl({ entitySet: 'Parts', select: [item] }), item).toThrow(/\$select/);
+    }
+  });
+
+  it('accepts a selectProperty recursion after an annotation or a cast', () => {
+    // `selectPath` is `(complexProperty / complexAnnotationInQuery)
+    // [ "/" optionallyQualifiedComplexTypeName ]` followed by
+    // `[ "/" selectProperty ]`, so an annotation or a cast starts a new
+    // selectProperty step rather than ending the item.
+    for (const item of [
+      '@T/More',
+      '@T/NS.Cast',
+      '@T/@T2',
+      'A/@T/More',
+      'A/@T/NS.Cast',
+      '@T/NS.Cast/More',
+      'A/@T/NS.Cast/More',
+      '@NS.Term/NS.Type',
+    ]) {
+      expect(buildQueryUrl({ entitySet: 'Parts', select: [item] }), item).toBe(
+        `/Parts?$select=${item}`,
       );
     }
   });
