@@ -315,7 +315,7 @@ describe('buildQueryUrl input validation', () => {
  * `Addresses($filter=…;$top=5)` — is deliberately left unsupported: its values
  * are arbitrary expressions this module has no parser for, so accepting them
  * would emit URLs whose content it cannot check. That decision is pinned below
- * and stated in the `SELECT_ITEM` doc comment.
+ * and stated in the `isValidSelectItem` doc comment.
  */
 describe('$select forms beyond star and plain paths', () => {
   it('accepts instance annotations, with and without a qualifier', () => {
@@ -392,6 +392,19 @@ describe('$select forms beyond star and plain paths', () => {
     // interchangeable.
     for (const item of ['A/NS.B/NS.C', 'A/NS.B/NS.C/D', 'NS.C/NS.D/NS.E', 'A/NS.B/NS.C/@T']) {
       expect(() => buildQueryUrl({ entitySet: 'Parts', select: [item] }), item).toThrow(/\$select/);
+    }
+  });
+
+  it('rejects a long malformed path promptly instead of backtracking', () => {
+    // The path matcher was a nested optional group, so `/B/B/…` could be read
+    // as plain steps or as cast-plus-step blocks; on a mismatch the engine
+    // tried every partition of the run. A 40-step path with a typo at the end
+    // blocked the event loop for tens of seconds. Rejecting it must stay well
+    // inside vitest's default timeout.
+    for (const item of [`A${'/B'.repeat(40)}!`, `A${'/B'.repeat(40)}/`]) {
+      expect(() => buildQueryUrl({ entitySet: 'Parts', select: [item] })).toThrow(
+        /Invalid \$select/,
+      );
     }
   });
 
