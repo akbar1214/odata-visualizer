@@ -138,7 +138,44 @@ export function getTargetEntityName(
   // work on identities; comparing `rel.from.entity === sourceEntity.name`
   // stopped matching once the end was qualified.
   if (!nav.relationship) return undefined;
-  const rel = metadata.relationships.find((r) => r.name === nav.relationship);
+  // The association is stored under its *simple* name (`parseAssociation` keeps
+  // `@_Name` verbatim), but a namespaced generator writes `Self.R1` — or `N.R1`
+  // once the parser expands `Schema/@Alias`. Matching the two directly missed
+  // every such document, so the whole V3 pathfinder branch was dead.
+  //
+  // A qualified reference names the association's *namespace*, and that is what
+  // the qualifier is for: two namespaces may declare the same simple name.
+  // Preferring the source entity's namespace instead picked the wrong
+  // association whenever the two differed — which is the only case where a
+  // generator writes the qualified form at all.
+  const dot = nav.relationship.lastIndexOf('.');
+  const qualifier = dot > 0 ? nav.relationship.slice(0, dot) : undefined;
+  const localName = dot > 0 ? nav.relationship.slice(dot + 1) : nav.relationship;
+  const sameName = metadata.relationships.filter(
+    (r) => r.name === nav.relationship || r.name === localName,
+  );
+
+  // A qualifier that names a namespace in this model is authoritative: the
+  // reference is explicitly qualified, so an association outside that namespace
+  // is a dangling reference and stays unresolved. Guessing from the source
+  // entity's namespace instead silently followed an unrelated association that
+  // merely shared the simple name.
+  const modelNamespaces = new Set<string>();
+  for (const entity of metadata.entities) {
+    if (entity.namespace) modelNamespaces.add(entity.namespace);
+  }
+  for (const relationship of metadata.relationships) {
+    if (relationship.namespace) modelNamespaces.add(relationship.namespace);
+  }
+  const qualified = qualifier !== undefined && modelNamespaces.has(qualifier);
+
+  const rel = qualified
+    ? sameName.find((r) => r.namespace === qualifier)
+    : // An unrecognised qualifier is most likely an alias this layer cannot
+      // expand, so the source entity's own namespace is the better guess. There
+      // is no separate exact-name clause: `sameName` already matches both
+      // spellings, so it would only ever return an element of this list.
+      (sameName.find((r) => r.namespace === sourceEntity.namespace) ?? sameName[0]);
   if (!rel) return undefined;
 
   const endIdentity = (end: ODataAssociationEnd): string => {
@@ -149,7 +186,12 @@ export function getTargetEntityName(
   };
 
   if (nav.toRole) {
-    return endIdentity(rel.from.role === nav.toRole ? rel.from : rel.to);
+    // #35's both-ends check, wrapped so the result is an identity rather than
+    // a stored endpoint. Taking either side wholesale breaks the other's tests:
+    // #35's raw returns give qualified strings where callers expect identities,
+    // and #38's one-liner loses the neither-end fallthrough.
+    if (rel.from.role === nav.toRole) return endIdentity(rel.from);
+    if (rel.to.role === nav.toRole) return endIdentity(rel.to);
   }
   return endIdentity(rel.from) === getEntitySelectionValue(sourceEntity, metadata.entities)
     ? endIdentity(rel.to)
