@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { createToolHandler, handleToolCall, getMetadata, resetMetadata } from '../src/tools.js';
 import { createMetadataStore } from '../src/store.js';
+import { textOf } from './textOf.js';
 
 const minimalCSDL = `<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
@@ -50,26 +51,26 @@ describe('handleToolCall', () => {
   it('returns isError when source is missing for load_metadata', async () => {
     const result = await handleToolCall('load_metadata', { type: 'file' });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('source is required');
+    expect(textOf(result)).toContain('source is required');
   });
 
   it('returns isError when metadata not loaded', async () => {
     const result = await handleToolCall('list_entities', {});
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('No metadata loaded');
+    expect(textOf(result)).toContain('No metadata loaded');
   });
 
   it('loads metadata from a file and lists entities', async () => {
     const file = await writeFixture();
     const load = await handleToolCall('load_metadata', { source: file, type: 'file' });
     expect(load.isError).toBeUndefined();
-    expect(load.content[0].text).toContain('Successfully loaded');
+    expect(textOf(load)).toContain('Successfully loaded');
     expect(getMetadata()?.entities).toHaveLength(2);
 
     const list = await handleToolCall('list_entities', {});
     expect(list.isError).toBeUndefined();
-    expect(list.content[0].text).toContain('Product');
-    expect(list.content[0].text).toContain('Category');
+    expect(textOf(list)).toContain('Product');
+    expect(textOf(list)).toContain('Category');
   });
 
   it('returns entity details with navigation target types', async () => {
@@ -78,8 +79,8 @@ describe('handleToolCall', () => {
 
     const details = await handleToolCall('get_entity_details', { entityName: 'product' });
     expect(details.isError).toBeUndefined();
-    expect(details.content[0].text).toContain('Entity: Test.Models.Product');
-    expect(details.content[0].text).toContain('Category -> Test.Models.Category');
+    expect(textOf(details)).toContain('Entity: Test.Models.Product');
+    expect(textOf(details)).toContain('Category -> Test.Models.Category');
   });
 
   it('renders a targeted description in get_entity_details', async () => {
@@ -111,8 +112,8 @@ describe('handleToolCall', () => {
     // Populating annotations changes MCP output: the label becomes a `Label:`
     // line and the annotation an `Annotations:` entry.
     const details = await handleToolCall('get_entity_details', { entityName: 'Product' });
-    expect(details.content[0].text).toContain('Label: A sellable product');
-    expect(details.content[0].text).toContain('- Core.Description: A sellable product');
+    expect(textOf(details)).toContain('Label: A sellable product');
+    expect(textOf(details)).toContain('- Core.Description: A sellable product');
   });
 
   it('returns isError for unknown entity', async () => {
@@ -121,7 +122,7 @@ describe('handleToolCall', () => {
 
     const details = await handleToolCall('get_entity_details', { entityName: 'Nope' });
     expect(details.isError).toBe(true);
-    expect(details.content[0].text).toContain('No entity matching');
+    expect(textOf(details)).toContain('No entity matching');
   });
 
   it('lists V4 relationships derived from navigation properties', async () => {
@@ -130,8 +131,8 @@ describe('handleToolCall', () => {
 
     const rels = await handleToolCall('get_relationships', {});
     expect(rels.isError).toBeUndefined();
-    expect(rels.content[0].text).toContain('Product');
-    expect(rels.content[0].text).toContain('Category');
+    expect(textOf(rels)).toContain('Product');
+    expect(textOf(rels)).toContain('Category');
   });
 
   it('returns isError for load failure', async () => {
@@ -140,13 +141,13 @@ describe('handleToolCall', () => {
       type: 'file',
     });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Error loading metadata');
+    expect(textOf(result)).toContain('Error loading metadata');
   });
 
   it('returns isError for unknown tool', async () => {
     const result = await handleToolCall('nope', {});
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Unknown tool');
+    expect(textOf(result)).toContain('Unknown tool');
   });
 });
 
@@ -174,7 +175,7 @@ describe('Windchill-like model tools', () => {
       source: windchillFixture,
       type: 'file',
     });
-    const text = result.content[0].text;
+    const text = textOf(result);
     expect(text).toContain('Actions: 4');
     expect(text).toContain('Functions: 2');
     expect(text).toContain('Enums: 1');
@@ -183,29 +184,29 @@ describe('Windchill-like model tools', () => {
 
   it('searches entities by name and label', async () => {
     const byName = await handleToolCall('search_entities', { query: 'electrical' });
-    expect(byName.content[0].text).toContain('ElectricalPart');
+    expect(textOf(byName)).toContain('ElectricalPart');
 
     const byLabel = await handleToolCall('search_entities', { query: 'product structure part' });
-    expect(byLabel.content[0].text).toContain('PTC.ProdMgmt.Part');
+    expect(textOf(byLabel)).toContain('PTC.ProdMgmt.Part');
   });
 
   it('resolves namespace collisions by qualified name', async () => {
     const ambiguous = await handleToolCall('get_entity_details', { entityName: 'Part' });
     expect(ambiguous.isError).toBe(true);
-    expect(ambiguous.content[0].text).toContain('ambiguous');
+    expect(textOf(ambiguous)).toContain('ambiguous');
 
     const qualified = await handleToolCall('get_entity_details', {
       entityName: 'PTC.ProdMgmt.Part',
     });
     expect(qualified.isError).toBeUndefined();
-    expect(qualified.content[0].text).toContain('PTC.ProdMgmt.Part');
+    expect(textOf(qualified)).toContain('PTC.ProdMgmt.Part');
   });
 
   it('shows inheritance-resolved properties with source types', async () => {
     const details = await handleToolCall('get_entity_details', {
       entityName: 'PTC.ProdMgmt.ElectricalPart',
     });
-    const text = details.content[0].text;
+    const text = textOf(details);
     expect(text).toContain('ElectricalPart -> Part -> WindchillEntity');
     expect(text).toContain('ID: Edm.String [KEY, non-nullable] (from WindchillEntity)');
     expect(text).toContain('voltageRating: Edm.Double');
@@ -218,20 +219,20 @@ describe('Windchill-like model tools', () => {
 
   it('lists entity sets with capabilities and navigation bindings', async () => {
     const sets = await handleToolCall('list_entity_sets', {});
-    const text = sets.content[0].text;
+    const text = textOf(sets);
     expect(text).toContain('Parts -> PTC.ProdMgmt.Part [create, update, delete, navigate]');
     expect(text).toContain('bindings: Documents->CADDocuments');
   });
 
   it('lists and describes actions', async () => {
     const list = await handleToolCall('list_actions', { bound: true });
-    expect(list.content[0].text).toContain('PTC.ProdMgmt.GetPartStructure [bound]');
-    expect(list.content[0].text).not.toContain('CreateParts');
+    expect(textOf(list)).toContain('PTC.ProdMgmt.GetPartStructure [bound]');
+    expect(textOf(list)).not.toContain('CreateParts');
 
     const details = await handleToolCall('get_action_details', {
       name: 'GetPartStructure',
     });
-    const text = details.content[0].text;
+    const text = textOf(details);
     expect(text).toContain('Bound action');
     expect(text).toContain('Return type: Collection(PTC.ProdMgmt.PartStructureItem)');
     expect(text).toContain('Part: PTC.ProdMgmt.Part (binding)');
@@ -240,19 +241,19 @@ describe('Windchill-like model tools', () => {
 
   it('lists and describes functions', async () => {
     const list = await handleToolCall('list_functions', { bound: false });
-    expect(list.content[0].text).toContain('GetWindchillMetaInfo');
-    expect(list.content[0].text).not.toContain('GetPartEstimate');
+    expect(textOf(list)).toContain('GetWindchillMetaInfo');
+    expect(textOf(list)).not.toContain('GetPartEstimate');
 
     const details = await handleToolCall('get_function_details', {
       name: 'GetWindchillMetaInfo',
     });
-    expect(details.content[0].text).toContain('Import: GetWindchillMetaInfo');
-    expect(details.content[0].text).toContain('EntityName: Edm.String');
+    expect(textOf(details)).toContain('Import: GetWindchillMetaInfo');
+    expect(textOf(details)).toContain('EntityName: Edm.String');
   });
 
   it('lists enums and type definitions', async () => {
     const result = await handleToolCall('list_enums', {});
-    const text = result.content[0].text;
+    const text = textOf(result);
     expect(text).toContain(
       'PTC.ProdMgmt.LifeCycleState (Edm.String): INWORK=0, RELEASED=1, OBSOLETE=2',
     );
@@ -272,15 +273,15 @@ describe('Windchill-like model tools', () => {
       top: 5,
     });
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain(
+    expect(textOf(result)).toContain(
       "https://host/Windchill/servlet/odata/ProdMgmt/Parts?$filter=state%20eq%20PTC.ProdMgmt.LifeCycleState'RELEASED'%20and%20unitPrice%20gt%2010&$expand=Documents($select=ID)&$orderby=number%20desc&$top=5",
     );
   });
 
   it('warns on unknown entity set', async () => {
     const result = await handleToolCall('build_query', { entitySet: 'Partz' });
-    expect(result.content[0].text).toContain('not a known entity set');
-    expect(result.content[0].text).toContain('Parts');
+    expect(textOf(result)).toContain('not a known entity set');
+    expect(textOf(result)).toContain('Parts');
   });
 
   it('accepts a key predicate in entitySet, as the tool description advertises', async () => {
@@ -289,10 +290,10 @@ describe('Windchill-like model tools', () => {
       top: 1,
     });
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain("GET /Parts('OR:wt.part.WTPart:123')?$top=1");
+    expect(textOf(result)).toContain("GET /Parts('OR:wt.part.WTPart:123')?$top=1");
     // The keyed path resolves to the same set, so it must not draw the
     // "not a known entity set" note.
-    expect(result.content[0].text).not.toContain('not a known entity set');
+    expect(textOf(result)).not.toContain('not a known entity set');
   });
 
   it('builds a bound action invocation with typed body', async () => {
@@ -303,7 +304,7 @@ describe('Windchill-like model tools', () => {
       parameters: { ShowSingleLevelReport: 'true' },
       baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
     });
-    const text = result.content[0].text;
+    const text = textOf(result);
     expect(text).toContain(
       "POST https://host/Windchill/servlet/odata/ProdMgmt/Parts('OR:wt.part.WTPart:123')/PTC.ProdMgmt.GetPartStructure",
     );
@@ -318,7 +319,7 @@ describe('Windchill-like model tools', () => {
       keys: {},
     });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Missing key value(s): ID');
+    expect(textOf(result)).toContain('Missing key value(s): ID');
   });
 
   it('builds an unbound function invocation with inline literals', async () => {
@@ -327,7 +328,7 @@ describe('Windchill-like model tools', () => {
       parameters: { EntityName: 'Part', IncludeAncestorProperty: 'true' },
       baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
     });
-    const text = result.content[0].text;
+    const text = textOf(result);
     expect(text).toContain(
       "GET https://host/Windchill/servlet/odata/ProdMgmt/GetWindchillMetaInfo(EntityName='Part',IncludeAncestorProperty=true)",
     );
@@ -341,7 +342,7 @@ describe('Windchill-like model tools', () => {
       keys: { ID: 'OR:wt.part.WTPart:123' },
       parameters: { Quantity: 12.5 },
     });
-    expect(result.content[0].text).toContain(
+    expect(textOf(result)).toContain(
       "GET <serviceRoot>/Parts('OR:wt.part.WTPart:123')/PTC.ProdMgmt.GetPartEstimate(Quantity=12.5)",
     );
   });
@@ -377,7 +378,7 @@ describe('targeted annotations reach tool output', () => {
 
     const details = await handleToolCall('get_action_details', { name: 'Reset' });
     expect(details.isError).toBeUndefined();
-    expect(details.content[0].text).toContain('Description: Resets the whole model');
+    expect(textOf(details)).toContain('Description: Resets the whole model');
   });
 });
 
@@ -386,7 +387,7 @@ describe('createToolHandler', () => {
     const handler = createToolHandler(createMetadataStore());
     const result = await handler('list_entities', {});
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('No metadata loaded');
+    expect(textOf(result)).toContain('No metadata loaded');
   });
 
   it('reads metadata injected into the store without load_metadata', async () => {
@@ -400,7 +401,7 @@ describe('createToolHandler', () => {
 
     const result = await handler('list_entity_sets', {});
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain('Parts -> PTC.ProdMgmt.Part');
+    expect(textOf(result)).toContain('Parts -> PTC.ProdMgmt.Part');
   });
 
   it('reports the loaded source via get_metadata_status', async () => {
@@ -412,7 +413,7 @@ describe('createToolHandler', () => {
     store.set(await parseCSDL(xml), { sourceName: 'windchill.xml', sourceType: 'file' });
     const result = await createToolHandler(store)('get_metadata_status', {});
 
-    const text = result.content[0].text;
+    const text = textOf(result);
     expect(text).toContain('windchill.xml');
     expect(text).toContain('Entities: 9');
     expect(text).toContain('Entity sets: 4');
@@ -433,7 +434,7 @@ describe('createToolHandler', () => {
     const store = createMetadataStore();
     store.set(await parseCSDL(withReference), { sourceName: 'partial.xml' });
     const result = await createToolHandler(store)('get_metadata_status', {});
-    expect(result.content[0].text).toContain('Unresolved references: missing.xml');
+    expect(textOf(result)).toContain('Unresolved references: missing.xml');
   });
 });
 
@@ -499,7 +500,7 @@ describe('invocation builders', () => {
       parameters: { Part: 'should-not-appear', ShowSingleLevelReport: 'true' },
     });
 
-    const text = result.content[0].text;
+    const text = textOf(result);
     expect(text).toContain('"ShowSingleLevelReport": true');
     expect(text).not.toContain('should-not-appear');
   });
@@ -513,7 +514,7 @@ describe('invocation builders', () => {
       parameters: { Part: 'should-not-appear', Quantity: '3' },
     });
 
-    const text = result.content[0].text;
+    const text = textOf(result);
     expect(text).toContain(
       "GET <serviceRoot>/Parts('OR:wt.part.WTPart:1')/PTC.ProdMgmt.GetPartEstimate(Quantity=3)",
     );
@@ -529,7 +530,7 @@ describe('invocation builders', () => {
       parameters: { showsinglelevelreport: 'true' },
     });
 
-    const text = result.content[0].text;
+    const text = textOf(result);
     expect(text).toContain('"ShowSingleLevelReport": true');
   });
 
@@ -543,8 +544,8 @@ describe('invocation builders', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Unknown parameter "Bogus"');
-    expect(result.content[0].text).toContain('ShowSingleLevelReport');
+    expect(textOf(result)).toContain('Unknown parameter "Bogus"');
+    expect(textOf(result)).toContain('ShowSingleLevelReport');
   });
 
   it('rejects a non-boolean value for a boolean parameter', async () => {
@@ -557,7 +558,7 @@ describe('invocation builders', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid Edm.Boolean');
+    expect(textOf(result)).toContain('Invalid Edm.Boolean');
   });
 
   it('rejects a non-numeric value for a numeric function parameter', async () => {
@@ -570,7 +571,7 @@ describe('invocation builders', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid Edm.Double');
+    expect(textOf(result)).toContain('Invalid Edm.Double');
   });
 
   it('emits a null literal for null function parameters', async () => {
@@ -580,7 +581,7 @@ describe('invocation builders', () => {
       parameters: { EntityName: null, IncludeAncestorProperty: 'true' },
     });
 
-    expect(result.content[0].text).toContain(
+    expect(textOf(result)).toContain(
       'GET <serviceRoot>/GetWindchillMetaInfo(EntityName=null,IncludeAncestorProperty=true)',
     );
   });
@@ -592,7 +593,7 @@ describe('invocation builders', () => {
       parameters: { PartNames: ["O'Brien"] },
     });
 
-    const text = result.content[0].text;
+    const text = textOf(result);
     expect(text).toContain("O'\\''Brien");
   });
 
@@ -603,7 +604,7 @@ describe('invocation builders', () => {
       parameters: { EntityName: 'Part' },
     });
 
-    expect(result.content[0].text).not.toContain('Content-Type');
+    expect(textOf(result)).not.toContain('Content-Type');
   });
 
   it('addresses an unbound action with no import by its qualified name', async () => {
@@ -612,7 +613,7 @@ describe('invocation builders', () => {
       actionName: 'Reset',
       parameters: { Scope: 'all' },
     });
-    expect(result.content[0].text).toContain('POST <serviceRoot>/Edge.Reset');
+    expect(textOf(result)).toContain('POST <serviceRoot>/Edge.Reset');
   });
 
   it('addresses an unbound function with no import by its qualified name', async () => {
@@ -621,7 +622,7 @@ describe('invocation builders', () => {
       functionName: 'Lookup',
       parameters: { Term: 'x' },
     });
-    expect(result.content[0].text).toContain("GET <serviceRoot>/Edge.Lookup(Term='x')");
+    expect(textOf(result)).toContain("GET <serviceRoot>/Edge.Lookup(Term='x')");
   });
 });
 
@@ -632,7 +633,7 @@ describe('build_query diagnostics', () => {
       entitySet: 'Parts',
       select: ['ID', 'Nmae'],
     });
-    const text = result.content[0].text;
+    const text = textOf(result);
     expect(text).toContain('GET /Parts?$select=ID,Nmae');
     expect(text).toContain('"Nmae" is not a property of PTC.ProdMgmt.Part');
   });
@@ -643,7 +644,7 @@ describe('build_query diagnostics', () => {
       entitySet: 'Parts',
       orderBy: 'nmae desc',
     });
-    expect(result.content[0].text).toContain('"nmae" is not a property of PTC.ProdMgmt.Part');
+    expect(textOf(result)).toContain('"nmae" is not a property of PTC.ProdMgmt.Part');
   });
 
   it('warns about unknown $filter properties', async () => {
@@ -652,7 +653,7 @@ describe('build_query diagnostics', () => {
       entitySet: 'Parts',
       filters: [{ property: 'nope', operator: 'eq', value: '1' }],
     });
-    expect(result.content[0].text).toContain('"nope" is not a property of PTC.ProdMgmt.Part');
+    expect(textOf(result)).toContain('"nope" is not a property of PTC.ProdMgmt.Part');
   });
 
   it('warns about unknown $expand navigation properties', async () => {
@@ -661,7 +662,7 @@ describe('build_query diagnostics', () => {
       entitySet: 'Parts',
       expand: [{ navProperty: 'NoSuchNav' }],
     });
-    expect(result.content[0].text).toContain(
+    expect(textOf(result)).toContain(
       '"NoSuchNav" is not a navigation property of PTC.ProdMgmt.Part',
     );
   });
@@ -677,7 +678,7 @@ describe('build_query diagnostics', () => {
         },
       ],
     });
-    expect(result.content[0].text).toContain('Documents/Missing');
+    expect(textOf(result)).toContain('Documents/Missing');
   });
 
   it('does not warn for valid properties', async () => {
@@ -689,8 +690,8 @@ describe('build_query diagnostics', () => {
       filters: [{ property: 'state', operator: 'eq', value: 'RELEASED' }],
       expand: [{ navProperty: 'Documents', select: ['ID'] }],
     });
-    expect(result.content[0].text).not.toContain('not a property');
-    expect(result.content[0].text).not.toContain('not a navigation property');
+    expect(textOf(result)).not.toContain('not a property');
+    expect(textOf(result)).not.toContain('not a navigation property');
   });
 
   it('builds a groupby/aggregate query', async () => {
@@ -703,7 +704,7 @@ describe('build_query diagnostics', () => {
         { property: 'unitPrice', method: 'avg', alias: 'AvgPrice' },
       ],
     });
-    expect(result.content[0].text).toContain(
+    expect(textOf(result)).toContain(
       '$apply=groupby((state),aggregate($count%20as%20PartCount,avg(unitPrice)%20as%20AvgPrice))',
     );
   });
@@ -715,7 +716,7 @@ describe('build_query diagnostics', () => {
       aggregates: [{ property: 'number', method: 'sum' }],
     });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('requires a numeric property');
+    expect(textOf(result)).toContain('requires a numeric property');
   });
 });
 
@@ -728,12 +729,12 @@ describe('lookup helpers', () => {
 
     // ElectricalPart inherits Part navs, so it has relationships via its base type.
     const inherited = await handler('get_relationships', { entityName: 'Part' });
-    expect(inherited.content[0].text).toContain('Part_Documents');
+    expect(textOf(inherited)).toContain('Part_Documents');
 
     const qualifiedBase = await handler('get_relationships', {
       entityName: 'PTC.ProdMgmt.Part',
     });
-    expect(qualifiedBase.content[0].text).toContain('Part_Documents');
+    expect(textOf(qualifiedBase)).toContain('Part_Documents');
     expect(result.isError).toBeFalsy();
   });
 
@@ -741,16 +742,16 @@ describe('lookup helpers', () => {
     const handler = await windchillHandler();
 
     const inherited = await handler('search_entities', { query: 'description' });
-    expect(inherited.content[0].text).toContain('PTC.ProdMgmt.Part');
+    expect(textOf(inherited)).toContain('PTC.ProdMgmt.Part');
 
     const nav = await handler('search_entities', { query: 'SourcePart' });
-    expect(nav.content[0].text).toContain('PTC.ProdMgmt.Part');
+    expect(textOf(nav)).toContain('PTC.ProdMgmt.Part');
   });
 
   it('resolves enum members and type definitions behind Collection(...)', async () => {
     const handler = await edgeCaseHandler();
     const details = await handler('get_entity_details', { entityName: 'Thing' });
-    const text = details.content[0].text;
+    const text = textOf(details);
     expect(text).toContain('Collection(Edge.Color (enum: RED | BLUE))');
     expect(text).toContain('Collection(Edge.Code (type definition of Edm.String))');
   });
@@ -759,8 +760,8 @@ describe('lookup helpers', () => {
     const handler = await windchillHandler();
     const list = await handler('list_entities', { limit: 50 });
     // ElectricalPart declares 1 property but inherits 10.
-    expect(list.content[0].text).toContain('PTC.ProdMgmt.ElectricalPart');
-    expect(list.content[0].text).toMatch(/ElectricalPart[^-\n]*- 11 props, 2 navs/);
+    expect(textOf(list)).toContain('PTC.ProdMgmt.ElectricalPart');
+    expect(textOf(list)).toMatch(/ElectricalPart[^-\n]*- 11 props, 2 navs/);
   });
 });
 
@@ -770,20 +771,20 @@ describe('error handling and pagination', () => {
     const result = await handler('get_action_details', { name: 'Touch' });
 
     expect(result.isError).toBeFalsy();
-    expect(result.content[0].text).toContain('Edge.Touch');
-    expect(result.content[0].text).toContain('is not defined in the loaded metadata');
+    expect(textOf(result)).toContain('Edge.Touch');
+    expect(textOf(result)).toContain('is not defined in the loaded metadata');
   });
 
   it('reports a clear range when offset is beyond the end', async () => {
     const handler = await windchillHandler();
     const result = await handler('list_entities', { offset: 500 });
-    expect(result.content[0].text).toContain('No results at offset 500 (9 total)');
+    expect(textOf(result)).toContain('No results at offset 500 (9 total)');
   });
 
   it('reports the shown range when offset is non-zero', async () => {
     const handler = await windchillHandler();
     const result = await handler('list_entity_sets', { offset: 1, limit: 2 });
-    expect(result.content[0].text).toContain('Showing 2-3 of 4');
+    expect(textOf(result)).toContain('Showing 2-3 of 4');
   });
 
   it('caps the page size so huge limits cannot flood the response', async () => {
@@ -804,18 +805,18 @@ describe('error handling and pagination', () => {
     store.set(await parseCSDL(csdl), { sourceName: 'big.xml' });
     const result = await createToolHandler(store)('list_entities', { limit: 100000 });
 
-    expect(result.content[0].text).toContain('Showing 1-200 of 300');
+    expect(textOf(result)).toContain('Showing 1-200 of 300');
   });
 
   it('points at the UI upload when load_metadata is disabled', async () => {
     const handler = createToolHandler(createMetadataStore(), { allowLoadMetadata: false });
     const status = await handler('get_metadata_status', {});
-    expect(status.content[0].text).toContain('Upload a file in the OData Visualizer UI');
-    expect(status.content[0].text).not.toContain('call load_metadata');
+    expect(textOf(status)).toContain('Upload a file in the OData Visualizer UI');
+    expect(textOf(status)).not.toContain('call load_metadata');
 
     const list = await handler('list_entities', {});
     expect(list.isError).toBe(true);
-    expect(list.content[0].text).toContain('Upload a file in the OData Visualizer UI');
+    expect(textOf(list)).toContain('Upload a file in the OData Visualizer UI');
   });
 });
 
@@ -830,7 +831,7 @@ describe('load_metadata from backend server', () => {
     const metadata = await parseCSDL(readFileSync(windchillFixture, 'utf-8'));
 
     const fetchMock = vi.fn(
-      async () =>
+      async (_url: string) =>
         new Response(JSON.stringify({ success: true, metadata }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -849,7 +850,7 @@ describe('load_metadata from backend server', () => {
     expect(getMetadata()?.entityContainers.length).toBeGreaterThan(0);
 
     const list = await handleToolCall('list_entity_sets', {});
-    expect(list.content[0].text).toContain('Parts');
+    expect(textOf(list)).toContain('Parts');
   });
 
   it('errors clearly when the backend has no metadata', async () => {
@@ -867,7 +868,7 @@ describe('load_metadata from backend server', () => {
     resetMetadata();
     const result = await handleToolCall('load_metadata', { type: 'server' });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('No metadata');
+    expect(textOf(result)).toContain('No metadata');
   });
 
   it('errors when the backend is unreachable', async () => {
@@ -879,7 +880,7 @@ describe('load_metadata from backend server', () => {
     resetMetadata();
     const result = await handleToolCall('load_metadata', { type: 'server' });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Error loading metadata');
+    expect(textOf(result)).toContain('Error loading metadata');
   });
 
   it('explains when the backend URL returns something other than JSON', async () => {
@@ -900,7 +901,7 @@ describe('load_metadata from backend server', () => {
       source: 'http://localhost:9999',
     });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('JSON');
+    expect(textOf(result)).toContain('JSON');
   });
 });
 
@@ -929,7 +930,7 @@ describe('inline parameter encoding', () => {
       baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
     });
 
-    const url = emittedUrl(result.content[0].text);
+    const url = emittedUrl(textOf(result));
     expect(url).toContain('ball%20bearing');
     // A raw space is what made `curl` reject the whole request.
     expect(url).not.toContain(' ');
@@ -942,7 +943,7 @@ describe('inline parameter encoding', () => {
       baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
     });
 
-    const url = emittedUrl(result.content[0].text);
+    const url = emittedUrl(textOf(result));
     // A raw slash would split the value into two path segments, addressing a
     // different resource entirely — and `curl` would still accept the URL.
     expect(url).toContain('a%2Fb');
@@ -959,7 +960,7 @@ describe('inline parameter encoding', () => {
     });
 
     // Values are raw data, never pre-encoded URL text, so `%` is escaped too.
-    expect(emittedUrl(result.content[0].text)).toContain('a%252Fb');
+    expect(emittedUrl(textOf(result))).toContain('a%252Fb');
   });
 
   it('percent-encodes characters that would truncate the URL', async () => {
@@ -969,7 +970,7 @@ describe('inline parameter encoding', () => {
       baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
     });
 
-    const url = emittedUrl(result.content[0].text);
+    const url = emittedUrl(textOf(result));
     const parsed = new URL(url);
     // `#` would start a fragment and `?` a query string; neither is part of the
     // resource path, so the path must still carry the whole value.
@@ -985,7 +986,7 @@ describe('inline parameter encoding', () => {
       baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
     });
 
-    const url = emittedUrl(result.content[0].text);
+    const url = emittedUrl(textOf(result));
     expect(url).toContain('caf%C3%A9');
     // One code point, encoded as four UTF-8 bytes, not two surrogate halves.
     expect(url).toContain('%F0%9F%8E%89');
@@ -999,7 +1000,7 @@ describe('inline parameter encoding', () => {
       baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
     });
 
-    const url = emittedUrl(result.content[0].text);
+    const url = emittedUrl(textOf(result));
     expect(url).toContain('a%0Ab%09c');
     expect(url).not.toMatch(/[\n\t]/);
   });
@@ -1012,8 +1013,8 @@ describe('inline parameter encoding', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('unpaired surrogate');
-    expect(result.content[0].text).not.toContain('URI malformed');
+    expect(textOf(result)).toContain('unpaired surrogate');
+    expect(textOf(result)).not.toContain('URI malformed');
   });
 
   it('escapes the OData literal and URL-encodes it independently', async () => {
@@ -1025,7 +1026,7 @@ describe('inline parameter encoding', () => {
       baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
     });
 
-    const url = emittedUrl(result.content[0].text);
+    const url = emittedUrl(textOf(result));
     // OData doubles the apostrophe; the space is the part the URL must encode.
     // Either step stopping would fail this.
     expect(url).toContain("'O''Brien%20Smith'");
@@ -1040,7 +1041,7 @@ describe('inline parameter encoding', () => {
       baseUrl: 'https://host/Windchill/servlet/odata/ProdMgmt',
     });
 
-    const url = emittedUrl(result.content[0].text);
+    const url = emittedUrl(textOf(result));
     expect(url).not.toContain(' ');
     const parsed = new URL(url);
     expect(parsed.hash).toBe('');
@@ -1057,7 +1058,7 @@ describe('inline parameter encoding', () => {
     });
 
     // Colons in a key are legal in a path segment and must not be mangled.
-    expect(result.content[0].text).toContain(
+    expect(textOf(result)).toContain(
       "/Parts('OR:wt.part.WTPart:123')/PTC.ProdMgmt.GetPartEstimate(Quantity=12.5)",
     );
   });
@@ -1109,7 +1110,7 @@ describe('composite key encoding', () => {
       baseUrl: 'https://host/svc',
     });
 
-    const url = result.content[0].text
+    const url = textOf(result)
       .split('\n')
       .find((l) => l.startsWith('POST ') || l.startsWith('GET '))!
       .replace(/^(POST|GET) /, '');
@@ -1178,20 +1179,20 @@ describe('numeric action body coercion', () => {
   it('rejects 1e999 for Edm.Int64 instead of shipping JSON null', async () => {
     const result = await adjust({ Big: '1e999' });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid Edm.Int64');
+    expect(textOf(result)).toContain('Invalid Edm.Int64');
   });
 
   it('rejects 1e999 for Edm.Double instead of shipping JSON null', async () => {
     const result = await adjust({ Ratio: '1e999' });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid Edm.Double');
+    expect(textOf(result)).toContain('Invalid Edm.Double');
   });
 
   it('rejects empty and whitespace-only strings for a numeric parameter', async () => {
     for (const empty of ['', '   ']) {
       const result = await adjust({ Count: empty });
       expect(result.isError, `input ${JSON.stringify(empty)} must be rejected`).toBe(true);
-      expect(result.content[0].text).toContain('Edm.Int32');
+      expect(textOf(result)).toContain('Edm.Int32');
     }
   });
 
@@ -1199,7 +1200,7 @@ describe('numeric action body coercion', () => {
     for (const bad of ['0x1F', '1.5', 1.5, '1e3']) {
       const result = await adjust({ Count: bad });
       expect(result.isError, `input ${JSON.stringify(bad)} must be rejected`).toBe(true);
-      expect(result.content[0].text).toContain('Invalid Edm.Int32');
+      expect(textOf(result)).toContain('Invalid Edm.Int32');
     }
   });
 
@@ -1215,8 +1216,8 @@ describe('numeric action body coercion', () => {
     for (const { param, type, value } of cases) {
       const result = await adjust({ [param]: value });
       expect(result.isError, `${type}=${JSON.stringify(value)} must be rejected`).toBe(true);
-      expect(result.content[0].text).toContain(`Invalid ${type}`);
-      expect(result.content[0].text).toContain('out of range');
+      expect(textOf(result)).toContain(`Invalid ${type}`);
+      expect(textOf(result)).toContain('out of range');
     }
   });
 
@@ -1224,21 +1225,21 @@ describe('numeric action body coercion', () => {
     // 2^53 + 1: in EDM Int64 range, but Number() rounds it to 2^53.
     const result = await adjust({ Big: '9007199254740993' });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid Edm.Int64');
-    expect(result.content[0].text).toContain('exact');
+    expect(textOf(result)).toContain('Invalid Edm.Int64');
+    expect(textOf(result)).toContain('exact');
   });
 
   it('rejects Edm.Int64 MAX for the same reason', async () => {
     const result = await adjust({ Big: '9223372036854775807' });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid Edm.Int64');
-    expect(result.content[0].text).toContain('exact');
+    expect(textOf(result)).toContain('Invalid Edm.Int64');
+    expect(textOf(result)).toContain('exact');
   });
 
   it('accepts an Int64 value that survives the round trip through a number', async () => {
     const result = await adjust({ Big: '9007199254740992' }); // 2^53
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain('"Big": 9007199254740992');
+    expect(textOf(result)).toContain('"Big": 9007199254740992');
   });
 
   it('emits an accepted Int64 with exactly the digits the caller sent', async () => {
@@ -1247,7 +1248,7 @@ describe('numeric action body coercion', () => {
     for (const input of ['9007199254740992', '-9007199254740992', '123456789']) {
       const result = await adjust({ Big: input });
       expect(result.isError, `${input} must be accepted`).toBeUndefined();
-      const body = emittedBody(result.content[0].text);
+      const body = emittedBody(textOf(result));
       expect(String(body['Big']), `${input} must be emitted verbatim`).toBe(input);
     }
   });
@@ -1259,8 +1260,8 @@ describe('numeric action body coercion', () => {
     for (const input of ['4611686018427387904', '1152921504606846976', '-9223372036854775808']) {
       const result = await adjust({ Big: input });
       expect(result.isError, `${input} must be rejected`).toBe(true);
-      expect(result.content[0].text).toContain('Invalid Edm.Int64');
-      expect(result.content[0].text).toContain('exact');
+      expect(textOf(result)).toContain('Invalid Edm.Int64');
+      expect(textOf(result)).toContain('exact');
     }
   });
 
@@ -1270,15 +1271,15 @@ describe('numeric action body coercion', () => {
     // separately from 2^53 + 1.
     const result = await adjust({ Big: '-9007199254740993' });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid Edm.Int64');
-    expect(result.content[0].text).toContain('exact');
+    expect(textOf(result)).toContain('Invalid Edm.Int64');
+    expect(textOf(result)).toContain('exact');
   });
 
   it('rejects Int64 input past the EDM 64-bit range', async () => {
     const result = await adjust({ Big: '99999999999999999999' });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid Edm.Int64');
-    expect(result.content[0].text).toContain('out of range');
+    expect(textOf(result)).toContain('Invalid Edm.Int64');
+    expect(textOf(result)).toContain('out of range');
   });
 
   it('still emits plain numbers for valid values', async () => {
@@ -1291,7 +1292,7 @@ describe('numeric action body coercion', () => {
       Ratio: 12.5,
     });
     expect(result.isError).toBeUndefined();
-    const text = result.content[0].text;
+    const text = textOf(result);
     expect(text).toContain('"Count": 42');
     expect(text).toContain('"Big": -5');
     expect(text).toContain('"Small": 200');
@@ -1303,36 +1304,36 @@ describe('numeric action body coercion', () => {
   it('trims surrounding whitespace around numeric body values', async () => {
     const result = await adjust({ Count: ' 42 ' });
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain('"Count": 42');
+    expect(textOf(result)).toContain('"Count": 42');
   });
 
   it('keeps an explicit null parameter as JSON null', async () => {
     const result = await adjust({ Count: null });
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain('"Count": null');
+    expect(textOf(result)).toContain('"Count": null');
   });
 
   it('rejects the string "null" for a numeric parameter (JSON null is null, the value)', async () => {
     const result = await adjust({ Ratio: 'null' });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid Edm.Double');
+    expect(textOf(result)).toContain('Invalid Edm.Double');
   });
 
   it('validates a body parameter through a type definition to its underlying type', async () => {
     const result = await adjust({ Grade: '1.5' });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid Edm.Int32');
+    expect(textOf(result)).toContain('Invalid Edm.Int32');
   });
 
   it('validates each element of a numeric collection body parameter', async () => {
     const ok = await adjust({ Counts: ['1', '2'] });
     expect(ok.isError).toBeUndefined();
-    expect(ok.content[0].text).toContain('"Counts": [');
-    expect(ok.content[0].text).toMatch(/\[\s*1,\s*2\s*\]/);
+    expect(textOf(ok)).toContain('"Counts": [');
+    expect(textOf(ok)).toMatch(/\[\s*1,\s*2\s*\]/);
 
     const bad = await adjust({ Counts: ['1', 'x'] });
     expect(bad.isError).toBe(true);
-    expect(bad.content[0].text).toContain('Invalid Edm.Int32');
+    expect(textOf(bad)).toContain('Invalid Edm.Int32');
   });
 
   /**
@@ -1353,7 +1354,7 @@ describe('numeric action body coercion', () => {
     for (const [input, expected] of cases) {
       const result = await adjust({ Money: input });
       expect(result.isError, `${input} must be accepted`).toBeUndefined();
-      const body = emittedBody(result.content[0].text);
+      const body = emittedBody(textOf(result));
       expect(body['Money'], `${input} must be emitted as ${expected}`).toBe(expected);
     }
   });
@@ -1365,8 +1366,8 @@ describe('numeric action body coercion', () => {
     for (const input of ['9007199254740993', '1.0000000000000000001']) {
       const result = await adjust({ Money: input });
       expect(result.isError, `${input} must be rejected`).toBe(true);
-      expect(result.content[0].text).toContain('Invalid Edm.Decimal');
-      expect(result.content[0].text).toContain('exact');
+      expect(textOf(result)).toContain('Invalid Edm.Decimal');
+      expect(textOf(result)).toContain('exact');
     }
   });
 
@@ -1375,13 +1376,13 @@ describe('numeric action body coercion', () => {
     // into the body and the service would reject it.
     const result = await adjust({ Precise: '1.5' });
     expect(result.isError).toBeUndefined();
-    expect(emittedBody(result.content[0].text)['Precise']).toBe(1.5);
+    expect(emittedBody(textOf(result))['Precise']).toBe(1.5);
   });
 
   it('rejects a Single literal that overflows binary64', async () => {
     const result = await adjust({ Precise: '1e999' });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid Edm.Single');
+    expect(textOf(result)).toContain('Invalid Edm.Single');
   });
 
   it('no longer coerces booleans to 1/0 for a numeric parameter', async () => {
@@ -1390,7 +1391,7 @@ describe('numeric action body coercion', () => {
     for (const input of [true, false]) {
       const result = await adjust({ Count: input });
       expect(result.isError, `${JSON.stringify(input)} must be rejected`).toBe(true);
-      expect(result.content[0].text).toContain('Invalid Edm.Int32');
+      expect(textOf(result)).toContain('Invalid Edm.Int32');
     }
   });
 
@@ -1404,7 +1405,7 @@ describe('numeric action body coercion', () => {
     INTEGER_TYPES.delete('Edm.Int64');
     try {
       const result = await adjust({ Big: '1e5' });
-      expect(result.content[0].text).not.toMatch(/BigInt|Cannot convert/);
+      expect(textOf(result)).not.toMatch(/BigInt|Cannot convert/);
     } finally {
       INTEGER_TYPES.add('Edm.Int64');
     }
@@ -1469,7 +1470,7 @@ describe('entity lookup under a case-only collision', () => {
     const handler = createToolHandler(store);
 
     const result = await handler('get_entity_details', { entityName: 'SHOP.Order' });
-    const text = result.content[0].text;
+    const text = textOf(result);
 
     expect(text).toContain('SHOP.Order');
     expect(text).toContain('ShopUpperOnly');
@@ -1555,7 +1556,7 @@ describe('bound function composition', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    expect(emittedUrl(result.content[0].text)).toBe('<serviceRoot>/As/N.AllOf');
+    expect(emittedUrl(textOf(result))).toBe('<serviceRoot>/As/N.AllOf');
   });
 
   it('ignores keys supplied for a collection-bound function', async () => {
@@ -1567,7 +1568,7 @@ describe('bound function composition', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    expect(emittedUrl(result.content[0].text)).toBe('<serviceRoot>/As/N.AllOf');
+    expect(emittedUrl(textOf(result))).toBe('<serviceRoot>/As/N.AllOf');
   });
 
   it('sketches a collection-bound invocation without a key predicate', async () => {
@@ -1575,8 +1576,8 @@ describe('bound function composition', () => {
     const details = await handler('get_function_details', { name: 'AllOf' });
 
     expect(details.isError).toBeUndefined();
-    expect(details.content[0].text).toContain('<serviceRoot>/As/N.AllOf');
-    expect(details.content[0].text).not.toContain('<key>');
+    expect(textOf(details)).toContain('<serviceRoot>/As/N.AllOf');
+    expect(textOf(details)).not.toContain('<key>');
   });
 
   it('selects the overload whose declared parameters cover the supplied names', async () => {
@@ -1589,7 +1590,7 @@ describe('bound function composition', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    expect(emittedUrl(result.content[0].text)).toBe("<serviceRoot>/As('1')/N.B(factor=2)");
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.B(factor=2)");
   });
 
   it('lists the overloads when none accepts the supplied parameters', async () => {
@@ -1602,7 +1603,7 @@ describe('bound function composition', () => {
     });
 
     expect(result.isError).toBe(true);
-    const text = result.content[0].text;
+    const text = textOf(result);
     expect(text).toContain('No overload of "B"');
     expect(text).toContain('N.B(it)');
     expect(text).toContain('N.B(it, factor)');
@@ -1617,9 +1618,9 @@ describe('bound function composition', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    expect(emittedUrl(result.content[0].text)).toBe("<serviceRoot>/As('1')/N.NeedsParam");
-    expect(result.content[0].text).toContain('"required"');
-    expect(result.content[0].text).toContain('was not supplied');
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.NeedsParam");
+    expect(textOf(result)).toContain('"required"');
+    expect(textOf(result)).toContain('was not supplied');
   });
 
   it('drops query options that do not apply to a scalar return', async () => {
@@ -1633,8 +1634,8 @@ describe('bound function composition', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    expect(emittedUrl(result.content[0].text)).toBe("<serviceRoot>/As('1')/N.Count");
-    const text = result.content[0].text;
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.Count");
+    const text = textOf(result);
     expect(text).toContain('$select');
     expect(text).toContain('$top');
     expect(text).toContain('not applicable');
@@ -1652,9 +1653,9 @@ describe('bound function composition', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    expect(emittedUrl(result.content[0].text)).toBe("<serviceRoot>/As('1')/N.Numbers()?$top=3");
-    expect(result.content[0].text).toContain('$select');
-    expect(result.content[0].text).toContain('not applicable');
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.Numbers()?$top=3");
+    expect(textOf(result)).toContain('$select');
+    expect(textOf(result)).toContain('not applicable');
   });
 });
 
@@ -1686,7 +1687,7 @@ describe('operation edge pagination', () => {
     const handler = createToolHandler(store, { allowLoadMetadata: false });
 
     const result = await handler('get_relationships', { entityName: 'A', limit: 5 });
-    const text = result.content[0].text;
+    const text = textOf(result);
 
     expect(text).toContain('Operation edges:');
     expect(text).toContain('Showing 1-5 of 60. Use limit/offset for more.');

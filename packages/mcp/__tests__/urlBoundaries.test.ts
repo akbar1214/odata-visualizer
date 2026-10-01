@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createToolHandler } from '../src/tools.js';
 import { createMetadataStore } from '../src/store.js';
+import { textOf } from './textOf.js';
 
 /**
  * A deliberately invalid CSDL document: the names below are not OData
@@ -83,7 +84,7 @@ describe('metadata-derived identifiers are encoded', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    const url = emittedUrl(result.content[0].text);
+    const url = emittedUrl(textOf(result));
     expect(url).toContain("Th%23ings(A%231='x',B='y')/Hostile.Do%23It");
     // The raw `#` would have made everything after it a fragment.
     expect(new URL(url).hash).toBe('');
@@ -98,7 +99,7 @@ describe('metadata-derived identifiers are encoded', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    const url = emittedUrl(result.content[0].text);
+    const url = emittedUrl(textOf(result));
     expect(url).toContain("Imp%23ort(P%231='v')");
     expect(new URL(url).hash).toBe('');
   });
@@ -111,7 +112,7 @@ describe('metadata-derived identifiers are encoded', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    const text = result.content[0].text;
+    const text = textOf(result);
     expect(text).toContain('https://host/svc/Th%23ings(A%231=<A%231>,B=<B>)/Hostile.Do%23It');
   });
 
@@ -123,7 +124,7 @@ describe('metadata-derived identifiers are encoded', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain('https://host/svc/Imp%23ort');
+    expect(textOf(result)).toContain('https://host/svc/Imp%23ort');
   });
 
   it('still emits a normal path unchanged, so readability is not lost', async () => {
@@ -137,7 +138,7 @@ describe('metadata-derived identifiers are encoded', () => {
     });
 
     // Colons and dots are legal raw in a path segment and stay readable.
-    expect(result.content[0].text).toContain("(A%231='OR:wt.part:1',B='b')/Hostile.Do%23It");
+    expect(textOf(result)).toContain("(A%231='OR:wt.part:1',B='b')/Hostile.Do%23It");
   });
 });
 
@@ -159,7 +160,7 @@ describe('path values encode + and ;', () => {
       baseUrl: 'https://host/svc',
     });
 
-    const url = emittedUrl(result.content[0].text);
+    const url = emittedUrl(textOf(result));
     expect(url).toContain("P%231='a%2Bb%3Bc'");
     expect(decodeURIComponent(url)).toContain("'a+b;c'");
   });
@@ -174,7 +175,7 @@ describe('path values encode + and ;', () => {
       baseUrl: 'https://host/svc',
     });
 
-    const url = emittedUrl(result.content[0].text);
+    const url = emittedUrl(textOf(result));
     expect(url).toContain("(A%231='x%2By%3Bz',B='b')");
     expect(decodeURIComponent(url)).toContain("'x+y;z'");
   });
@@ -197,7 +198,7 @@ describe('baseUrl is validated at every MCP splice point', () => {
     const result = await handler('build_query', { entitySet: 'Anything', baseUrl });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid baseUrl');
+    expect(textOf(result)).toContain('Invalid baseUrl');
   });
 
   it.each(invalid)('build_action_invocation rejects a baseUrl containing a %s', async (baseUrl) => {
@@ -210,7 +211,7 @@ describe('baseUrl is validated at every MCP splice point', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid baseUrl');
+    expect(textOf(result)).toContain('Invalid baseUrl');
   });
 
   it.each(invalid)(
@@ -223,7 +224,7 @@ describe('baseUrl is validated at every MCP splice point', () => {
       });
 
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain('Invalid baseUrl');
+      expect(textOf(result)).toContain('Invalid baseUrl');
     },
   );
 
@@ -232,7 +233,7 @@ describe('baseUrl is validated at every MCP splice point', () => {
     const result = await handler('get_action_details', { name: 'Do#It', baseUrl });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid baseUrl');
+    expect(textOf(result)).toContain('Invalid baseUrl');
   });
 
   it.each(invalid)('get_function_details rejects a baseUrl containing a %s', async (baseUrl) => {
@@ -240,7 +241,7 @@ describe('baseUrl is validated at every MCP splice point', () => {
     const result = await handler('get_function_details', { name: 'Get#It', baseUrl });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid baseUrl');
+    expect(textOf(result)).toContain('Invalid baseUrl');
   });
 
   it('still strips a trailing slash from a valid baseUrl', async () => {
@@ -251,8 +252,8 @@ describe('baseUrl is validated at every MCP splice point', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain('GET https://host/svc/Anything');
-    expect(result.content[0].text).not.toContain('https://host/svc//');
+    expect(textOf(result)).toContain('GET https://host/svc/Anything');
+    expect(textOf(result)).not.toContain('https://host/svc//');
   });
 });
 
@@ -273,7 +274,7 @@ describe('the full identifier set and the single-key branch', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain('/Hostile.Do%28It%29');
+    expect(textOf(result)).toContain('/Hostile.Do%28It%29');
   });
 
   it('encodes the key name twice in the single-key branch', async () => {
@@ -285,7 +286,7 @@ describe('the full identifier set and the single-key branch', () => {
 
     // The single-key branch spells the name on both sides of the `=`; both must
     // be encoded, and the raw `#` would start a fragment.
-    const line = result.content[0].text.split('\n').find((l) => l.includes('/Ones('))!;
+    const line = textOf(result).split('\n').find((l) => l.includes('/Ones('))!;
     expect(line.trim()).toBe('https://host/svc/Ones(A%231=<A%231>)/Hostile.Do%28It%29');
     expect(new URL(line.trim()).hash).toBe('');
   });
@@ -306,7 +307,7 @@ describe('the backend source is validated like any other base URL', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid baseUrl');
+    expect(textOf(result)).toContain('Invalid baseUrl');
   });
 });
 
@@ -326,7 +327,7 @@ describe('the quote, comma and equals in an identifier position', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    const url = emittedUrl(result.content[0].text);
+    const url = emittedUrl(textOf(result));
     expect(url).toContain('I%2C%3D1');
     expect(url).toContain('P%27%2C%3D1');
   });

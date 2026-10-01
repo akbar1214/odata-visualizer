@@ -332,6 +332,21 @@ describe('$select forms beyond star and plain paths', () => {
     );
   });
 
+  it('accepts annotations nested after a path or type prefix', () => {
+    // `selectProperty` admits `primitiveAnnotationInQuery` /
+    // `complexAnnotationInQuery` after a path or a type prefix, so the
+    // annotation does not have to be the whole select item.
+    expect(buildQueryUrl({ entitySet: 'Parts', select: ['Address/@PTC.Term'] })).toBe(
+      '/Parts?$select=Address/@PTC.Term',
+    );
+    expect(buildQueryUrl({ entitySet: 'Parts', select: ['PTC.Part/@PTC.Term'] })).toBe(
+      '/Parts?$select=PTC.Part/@PTC.Term',
+    );
+    expect(buildQueryUrl({ entitySet: 'Parts', select: ['Address/PTC.Addr/@PTC.Term'] })).toBe(
+      '/Parts?$select=Address/PTC.Addr/@PTC.Term',
+    );
+  });
+
   it('accepts mid-path type casts', () => {
     expect(buildQueryUrl({ entitySet: 'Parts', select: ['Address/PTC.Addr/City'] })).toBe(
       '/Parts?$select=Address/PTC.Addr/City',
@@ -358,6 +373,16 @@ describe('$select forms beyond star and plain paths', () => {
     expect(() => buildQueryUrl({ entitySet: 'Parts', select: ['Fn()'] })).toThrow(
       /Invalid \$select/,
     );
+  });
+
+  it('rejects a function call after more than one path segment', () => {
+    // `selectItem` allows `optionallyQualifiedFunctionName` directly, or after
+    // a *single* optionally-qualified type prefix — never after a `selectPath`.
+    for (const item of ['Address/PTC.Addr/Fn(ID)', 'PTC.Part/Address/Fn(ID)']) {
+      expect(() => buildQueryUrl({ entitySet: 'Parts', select: [item] }), item).toThrow(
+        /\$select/,
+      );
+    }
   });
 
   it('does not warn that annotation or function select items are not properties', () => {
