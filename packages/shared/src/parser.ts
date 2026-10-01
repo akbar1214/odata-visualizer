@@ -1,5 +1,5 @@
 import { XMLParser, type X2jOptions } from 'fast-xml-parser';
-import { resolveInheritanceChain, findEntityByName, findEntitySet } from './resolve.js';
+import { resolveInheritanceChain, findEntitySetInScope, findTypeInScope } from './resolve.js';
 import type {
   ODataMetadata,
   ODataEntity,
@@ -337,8 +337,11 @@ export async function parseCSDL(
    */
   const targetedAnnotations: Array<{
     target: string;
+    qualifier?: string;
     annotations: Record<string, string>;
     document: number;
+    /** Schema that declared the block; bare targets resolve here first. */
+    namespace: string;
   }> = [];
 
   const registry = new Map<string, XmlElement>();
@@ -610,7 +613,15 @@ export async function parseCSDL(
       const target = str(annotationsEl['@_Target']);
       if (!target) continue;
       const annotations = parseAnnotations(annotationsEl);
-      if (annotations) targetedAnnotations.push({ target, annotations, document: currentDocument });
+      if (annotations) {
+        targetedAnnotations.push({
+          target,
+          qualifier: str(annotationsEl['@_Qualifier']) || undefined,
+          annotations,
+          document: currentDocument,
+          namespace,
+        });
+      }
     }
   }
 
@@ -741,8 +752,18 @@ function relationshipFromNavigationProperty(
  * only way to annotate one property of a type. `parseAnnotations` reads direct
  * `<Annotation>` children, so every block was dropped.
  *
- * An annotation declared on the element itself wins over a targeted one — the
- * element's own declaration is the more specific statement.
+ * Precedence:
+ *
+ * - An annotation declared on the element itself wins over a targeted one — the
+ *   element's own declaration is the more specific statement.
+ * - Among targeted blocks, the last one in document order wins, matching the
+ *   rule one level down where the last `<Annotation>` in a block wins.
+ * - A bare target (no dot in its first segment) resolves in the schema that
+ *   declared the block first, then across the model. Every lookup is exact-case
+ *   first with a case-insensitive fallback, per the project-wide case policy.
+ * - A block carrying `Qualifier` is rejected: `annotations` is a
+ *   `Record<term, string>` and cannot represent the qualifier, so attaching
+ *   either value as if it were unqualified would be silently wrong.
  *
  * Targets that name nothing in the document are ignored rather than reported:
  * an `Annotations` block commonly targets a type from an `edmx:Reference` that
@@ -750,7 +771,13 @@ function relationshipFromNavigationProperty(
  */
 function applyTargetedAnnotations(
   metadata: ODataMetadata,
-  targeted: Array<{ target: string; annotations: Record<string, string>; document: number }>,
+  targeted: Array<{
+    target: string;
+    qualifier?: string;
+    annotations: Record<string, string>;
+    document: number;
+    namespace: string;
+  }>,
   aliasesForNamespace: (
     namespace?: string,
     element?: object,
@@ -758,18 +785,55 @@ function applyTargetedAnnotations(
   ) => Map<string, string>,
   namespaces: Set<string>,
 ): void {
-  const merge = (
-    current: Record<string, string> | undefined,
-    extra: Record<string, string>,
-  ): Record<string, string> => ({ ...extra, ...current });
+  // Inline annotations win over targeted ones. Snapshot which terms each
+  // element declared inline *before* any block is applied, so a later block
+  // cannot overwrite one and a bare target cannot win by arriving first.
+  const inlineTerms = new WeakMap<object, Set<string>>();
+  const rememberInline = (element: { annotations?: Record<string, string> }) => {
+    if (element.annotations) {
+      inlineTerms.set(element, new Set(Object.keys(element.annotations)));
+    }
+  };
+  for (const entity of metadata.entities) {
+    rememberInline(entity);
+    for (const property of entity.properties) rememberInline(property);
+    for (const navigation of entity.navigationProperties) rememberInline(navigation);
+  }
+  for (const container of metadata.entityContainers) {
+    for (const set of container.entitySets) rememberInline(set);
+  }
 
-  for (const { target, annotations, document } of targeted) {
+  const applyTo = (
+    element: { annotations?: Record<string, string>; label?: string },
+    extra: Record<string, string>,
+  ): void => {
+    const protectedTerms = inlineTerms.get(element);
+    const merged = { ...(element.annotations ?? {}) };
+    let changed = false;
+    for (const [term, value] of Object.entries(extra)) {
+      if (protectedTerms?.has(term)) continue;
+      merged[term] = value;
+      changed = true;
+    }
+    if (!changed) return;
+    element.annotations = merged;
+    element.label = labelFromAnnotations(merged) ?? element.label;
+  };
+
+  for (const block of targeted) {
+    // Rejected on purpose. The combination of target, term and qualifier
+    // uniquely identifies an annotation (CSDL 4.01 §14.2.1), and `annotations`
+    // cannot carry the qualifier, so a qualified block is dropped rather than
+    // flattened into the unqualified map. No consumer acts on a qualifier yet;
+    // revisit when one does.
+    if (block.qualifier) continue;
+
     // The namespace guard added in #25 matters here too: a prefix that names an
     // actual schema is a namespace, not an alias, so an annotation target
     // cannot be rewritten into another document's namespace.
     const expanded = expandAlias(
-      target,
-      aliasesForNamespace(undefined, undefined, document),
+      block.target,
+      aliasesForNamespace(undefined, undefined, block.document),
       namespaces,
     );
     const segments = expanded.split('/');
@@ -778,15 +842,12 @@ function applyTargetedAnnotations(
     // an unqualified first segment cannot be a type — requiring the dot keeps
     // `C/Widgets` from matching a property named `Widgets` on some type `C`.
     if (segments.length === 2 && segments[0].includes('.')) {
-      const owner = findEntityByName(metadata.entities, segments[0]);
+      const owner = findTypeInScope(metadata.entities, segments[0], block.namespace);
       if (owner) {
         // Annotations apply to structural *or* navigation properties.
-        const property =
-          owner.properties.find((p) => p.name === segments[1]) ??
-          owner.navigationProperties.find((p) => p.name === segments[1]);
+        const property = findPropertyOrNavigation(owner, segments[1]);
         if (property) {
-          property.annotations = merge(property.annotations, annotations);
-          property.label = labelFromAnnotations(property.annotations) ?? property.label;
+          applyTo(property, block.annotations);
           continue;
         }
       }
@@ -797,32 +858,97 @@ function applyTargetedAnnotations(
     // is accepted too, because it costs nothing and appears in hand-written
     // documents.
     if (segments.length === 2) {
-      const container = metadata.entityContainers.find(
-        (c) => c.name === segments[0] || `${c.namespace ?? ''}.${c.name}` === segments[0],
-      );
-      const set = container?.entitySets.find((s) => s.name === segments[1]);
+      const container = findContainer(metadata.entityContainers, segments[0], block.namespace);
+      const set = container ? findSetIn(container, segments[1]) : undefined;
       if (set) {
-        set.annotations = merge(set.annotations, annotations);
-        set.label = labelFromAnnotations(set.annotations) ?? set.label;
+        applyTo(set, block.annotations);
         continue;
       }
     }
 
     if (segments.length === 1) {
       // A type, or a container-less entity set name.
-      const entity = findEntityByName(metadata.entities, expanded);
+      const entity = findTypeInScope(metadata.entities, expanded, block.namespace);
       if (entity) {
-        entity.annotations = merge(entity.annotations, annotations);
-        entity.label = labelFromAnnotations(entity.annotations) ?? entity.label;
+        applyTo(entity, block.annotations);
         continue;
       }
-      const set = findEntitySet(metadata, expanded);
+      const set = findEntitySetInScope(metadata, expanded, block.namespace);
       if (set) {
-        set.annotations = merge(set.annotations, annotations);
-        set.label = labelFromAnnotations(set.annotations) ?? set.label;
+        applyTo(set, block.annotations);
       }
     }
   }
+}
+
+/**
+ * A structural or navigation property by name.
+ *
+ * Exact case wins across both lists before the case-insensitive fallback, so a
+ * property spelled exactly is never shadowed by a differently-cased navigation
+ * property.
+ */
+function findPropertyOrNavigation(
+  owner: ODataEntity,
+  name: string,
+): ODataProperty | ODataNavigationProperty | undefined {
+  const exact =
+    owner.properties.find((property) => property.name === name) ??
+    owner.navigationProperties.find((navigation) => navigation.name === name);
+  if (exact) return exact;
+
+  const needle = name.toLowerCase();
+  return (
+    owner.properties.find((property) => property.name.toLowerCase() === needle) ??
+    owner.navigationProperties.find((navigation) => navigation.name.toLowerCase() === needle)
+  );
+}
+
+/**
+ * A container by bare or namespace-qualified name, preferring the schema that
+ * declared the annotation block. Exact case first, then case-insensitive.
+ */
+function findContainer(
+  containers: ODataEntityContainer[],
+  name: string,
+  preferredNamespace: string,
+): ODataEntityContainer | undefined {
+  const qualified = (container: ODataEntityContainer) =>
+    container.namespace ? `${container.namespace}.${container.name}` : container.name;
+
+  const exactQualified = containers.find(
+    (container) => container.namespace && qualified(container) === name,
+  );
+  if (exactQualified) return exactQualified;
+
+  const exactSameNamespace = containers.find(
+    (container) => container.namespace === preferredNamespace && container.name === name,
+  );
+  if (exactSameNamespace) return exactSameNamespace;
+
+  const exactBare = containers.find((container) => container.name === name);
+  if (exactBare) return exactBare;
+
+  const needle = name.toLowerCase();
+  return (
+    containers.find(
+      (container) => container.namespace && qualified(container).toLowerCase() === needle,
+    ) ??
+    containers.find(
+      (container) =>
+        container.namespace?.toLowerCase() === preferredNamespace.toLowerCase() &&
+        container.name.toLowerCase() === needle,
+    ) ??
+    containers.find((container) => container.name.toLowerCase() === needle)
+  );
+}
+
+/** An entity set within one container. Exact case first, then case-insensitive. */
+function findSetIn(container: ODataEntityContainer, name: string): ODataEntitySet | undefined {
+  const exact = container.entitySets.find((set) => set.name === name);
+  if (exact) return exact;
+  const needle = name.toLowerCase();
+  return container.entitySets.find((set) => set.name.toLowerCase() === needle);
 }
 
 function parseEntitySet(entitySet: XmlElement): ODataEntitySet | null {
@@ -834,6 +960,7 @@ function parseEntitySet(entitySet: XmlElement): ODataEntitySet | null {
   const bindings = childElements(entitySet, 'NavigationPropertyBinding', 'edm')
     .map(parseNavigationPropertyBinding)
     .filter((b): b is ODataNavigationPropertyBinding => b !== null);
+  const annotations = parseAnnotations(entitySet);
 
   return {
     name,
@@ -844,7 +971,8 @@ function parseEntitySet(entitySet: XmlElement): ODataEntitySet | null {
     deletable: boolAttr(entitySet['@_Deletable']),
     navigable: boolAttr(entitySet['@_Navigable']),
     navigationPropertyBindings: bindings.length > 0 ? bindings : undefined,
-    annotations: parseAnnotations(entitySet),
+    label: labelFromAnnotations(annotations),
+    annotations,
   };
 }
 
@@ -886,6 +1014,7 @@ function parseAction(el: XmlElement, namespace: string): ODataAction {
   const isBound = str(el['@_IsBound']) === 'true';
   const parameters = parseParameters(el, isBound);
   const returnType = parseReturnType(el);
+  const annotations = parseAnnotations(el);
 
   return {
     name,
@@ -894,7 +1023,8 @@ function parseAction(el: XmlElement, namespace: string): ODataAction {
     isBound,
     parameters,
     returnType,
-    annotations: parseAnnotations(el),
+    label: labelFromAnnotations(annotations),
+    annotations,
   };
 }
 
@@ -903,6 +1033,7 @@ function parseFunction(el: XmlElement, namespace: string): ODataFunction {
   const isBound = str(el['@_IsBound']) === 'true';
   const parameters = parseParameters(el, isBound);
   const returnType = parseReturnType(el);
+  const annotations = parseAnnotations(el);
 
   return {
     name,
@@ -911,7 +1042,8 @@ function parseFunction(el: XmlElement, namespace: string): ODataFunction {
     isBound,
     parameters,
     returnType,
-    annotations: parseAnnotations(el),
+    label: labelFromAnnotations(annotations),
+    annotations,
   };
 }
 
@@ -1207,6 +1339,16 @@ function parseAnnotations(el: XmlElement): Record<string, string> | undefined {
   for (const ann of annElements) {
     const term = str(ann['@_Term']);
     if (!term) continue;
+    // A qualifier distinguishes multiple applications of the same term
+    // (CSDL 4.01 §14.2.1). The model stores annotations as a
+    // `Record<term, string>` and cannot represent it, so a qualified
+    // annotation is rejected rather than flattened into the unqualified map.
+    if (str(ann['@_Qualifier'])) continue;
+    // `Term="Core.Description#Phone"` is the other spelling of a qualifier. It
+    // is non-conformant for XML CSDL — the qualifier has its own attribute —
+    // but it reached the map under a mangled key while the canonical spelling
+    // was rejected, so the policy was not the complete one it claimed.
+    if (term.includes('#')) continue;
     out[term] = annotationValue(ann);
   }
   return Object.keys(out).length > 0 ? out : undefined;

@@ -43,8 +43,12 @@ export function findEntityByName(entities: ODataEntity[], name: string): ODataEn
  * a match in the same namespace before falling back to any short-name match.
  * Short names are unique per namespace in CSDL but not across a model, so the
  * namespace hint prevents resolving `BaseType="Part"` to the wrong `Part`.
+ *
+ * The parser's annotation resolver uses this too: a bare `<Annotations
+ * Target="Part">` block must attach to the `Part` its own schema declares, not
+ * to whichever `Part` happens to come first in the document.
  */
-function findTypeInScope(
+export function findTypeInScope(
   entities: ODataEntity[],
   name: string,
   preferredNamespace?: string,
@@ -171,6 +175,36 @@ export function findEntitySet(metadata: ODataMetadata, name: string): ODataEntit
     }
   }
   return fallback;
+}
+
+/**
+ * Find an entity set by name, preferring one declared in `preferredNamespace`.
+ *
+ * The policy is `findEntitySet`'s — an exact-case match wins and a
+ * case-insensitive match is only the fallback — with the namespace preference
+ * applied at both levels. A bare annotation target must reach the set its own
+ * schema declares before one in another schema.
+ */
+export function findEntitySetInScope(
+  metadata: ODataMetadata,
+  name: string,
+  preferredNamespace?: string,
+): ODataEntitySet | undefined {
+  const needle = name.toLowerCase();
+  const scoped = metadata.entityContainers
+    .filter((container) => container.namespace === preferredNamespace)
+    .flatMap((container) => container.entitySets);
+
+  const exactScoped = scoped.find((set) => set.name === name);
+  if (exactScoped) return exactScoped;
+
+  const exact = getAllEntitySets(metadata).find((set) => set.name === name);
+  if (exact) return exact;
+
+  const caseInsensitiveScoped = scoped.find((set) => set.name.toLowerCase() === needle);
+  if (caseInsensitiveScoped) return caseInsensitiveScoped;
+
+  return getAllEntitySets(metadata).find((set) => set.name.toLowerCase() === needle);
 }
 
 /**
