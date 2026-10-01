@@ -239,7 +239,14 @@ function QueryCanvasInner({ graphNodes, graphEdges, metadata, onGraphChange }: Q
         label: ge.label,
         type: 'smoothstep',
         animated: true,
-        labelStyle: { fontSize: 10 },
+        // A bound function is a resource-path segment, not an `$expand`, so it
+        // is drawn distinctly from a navigation property.
+        ...(ge.kind === 'boundFunction'
+          ? {
+              style: { strokeDasharray: '6 4', stroke: '#f59e0b' },
+              labelStyle: { fontSize: 10, fill: '#b45309', fontWeight: 600 },
+            }
+          : { labelStyle: { fontSize: 10 } }),
       })),
     [graphEdges],
   );

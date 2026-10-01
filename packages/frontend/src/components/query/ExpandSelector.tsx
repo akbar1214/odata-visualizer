@@ -4,12 +4,9 @@ import type {
   ODataNavigationProperty,
   ODataProperty,
 } from '@odata-visualizer/shared';
+import { getEffectiveNavigationProperties } from '@odata-visualizer/shared';
 import type { ExpandItem } from '../../utils/queryResolver';
-import {
-  getTargetEntityName,
-  findEntity,
-  getResolvedNavProperties,
-} from '../../utils/queryResolver';
+import { getTargetEntityName, findEntity } from '../../utils/queryResolver';
 import { FilterBuilder } from './FilterBuilder';
 
 const EMPTY_NAV_PROPS: ODataNavigationProperty[] = [];
@@ -102,7 +99,7 @@ export function ExpandSelector({
             : undefined;
 
           const targetNavProps = targetEntity
-            ? getResolvedNavProperties(targetEntity, metadata.entities)
+            ? getEffectiveNavigationProperties(targetEntity, metadata.entities)
             : EMPTY_NAV_PROPS;
           const targetProps = targetEntity ? targetEntity.properties : EMPTY_PROPS;
 

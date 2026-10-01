@@ -1,23 +1,47 @@
 import ELK from 'elkjs';
-import type { ODataMetadata, ODataEntity } from '@odata-visualizer/shared';
+import type { ODataMetadata } from '@odata-visualizer/shared';
+import {
+  findPaths,
+  getReachableEntities,
+  isComposableEdge,
+  type TraversalEdge,
+  type TraversalPath,
+  type TraversalStep,
+} from '@odata-visualizer/shared';
 import {
   getTargetEntityName,
   findEntity,
-  getResolvedNavProperties,
+  type ExpandItem,
   type QueryFilter,
   type FilterLogic,
+  type QueryState,
 } from './queryResolver';
+
+// The traversal lives in `shared` so the query builder, MCP and any other
+// consumer walk one graph. Re-exported here for the components that already
+// import the pathfinder from this module.
+export { findPaths, getReachableEntities };
+export type { TraversalEdge, TraversalPath, TraversalStep };
 
 const elk = new ELK();
 
 const NODE_WIDTH = 260;
 const NODE_HEIGHT = 280;
 
+/** `$top` a fresh root card starts with; anything else is a user choice. */
+const DEFAULT_TOP = 25;
+
 export interface GraphNodeState {
   id: string;
   entityName: string;
   parentId: string | null;
   navProperty: string | null;
+  /**
+   * The edge that created this node. Carries the kind, so a bound function can
+   * never be mistaken for a navigation property: `navProperty` stays null for
+   * function steps and they are not written into `$expand`.
+   */
+  step: TraversalStep | null;
   select: string[];
   filters: QueryFilter[];
   filterLogic: FilterLogic;
@@ -34,6 +58,7 @@ export interface GraphEdge {
   source: string;
   target: string;
   label: string;
+  kind: TraversalEdge['kind'];
 }
 
 export interface GraphState {
@@ -52,12 +77,13 @@ export function createRootNode(entityName: string): GraphNodeState {
     entityName,
     parentId: null,
     navProperty: null,
+    step: null,
     select: [],
     filters: [],
     filterLogic: 'and',
     sort: '',
     sortDirection: 'asc',
-    top: 25,
+    top: DEFAULT_TOP,
     skip: 0,
     expandedNavProps: [],
     position: { x: 0, y: 0 },
@@ -91,6 +117,11 @@ export function addExpandedNode(
     entityName: targetEntityName,
     parentId,
     navProperty,
+    step: {
+      from: parentNode.entityName,
+      to: targetEntityName,
+      edge: { kind: 'nav', name: navProperty, from: parentNode.entityName, to: targetEntityName },
+    },
     select: [],
     filters: [],
     filterLogic: 'and',
@@ -115,6 +146,7 @@ export function addExpandedNode(
     source: parentId,
     target: nodeId,
     label: navProperty,
+    kind: 'nav',
   };
 
   return {
@@ -202,65 +234,73 @@ export async function layoutGraph(state: GraphState): Promise<GraphState> {
   }
 }
 
-export function getReachableEntities(
-  entityName: string,
-  metadata: ODataMetadata,
-  maxDepth: number = 4,
-): Map<string, { entity: ODataEntity; navProp: string; parentEntity: string }[]> {
-  const result = new Map<
-    string,
-    { entity: ODataEntity; navProp: string; parentEntity: string }[]
-  >();
-  const visited = new Set<string>();
-
-  const bfs = (startEntityName: string) => {
-    const queue: { entityName: string; depth: number }[] = [
-      { entityName: startEntityName, depth: 0 },
-    ];
-    visited.add(startEntityName.toLowerCase());
-
-    while (queue.length > 0) {
-      const { entityName: currentName, depth: currentDepth } = queue.shift()!;
-      if (currentDepth >= maxDepth) continue;
-
-      const entity = findEntity(currentName, metadata.entities);
-      if (!entity) continue;
-
-      const navProps = getResolvedNavProperties(entity, metadata.entities);
-      const targets: { entity: ODataEntity; navProp: string; parentEntity: string }[] = [];
-
-      for (const nav of navProps) {
-        const targetName = getTargetEntityName(nav.name, entity, metadata);
-        if (!targetName) continue;
-
-        const targetEntity = findEntity(targetName, metadata.entities);
-        if (!targetEntity) continue;
-
-        targets.push({ entity: targetEntity, navProp: nav.name, parentEntity: currentName });
-
-        const key = `${currentName.toLowerCase()}-${targetName.toLowerCase()}`;
-        if (!visited.has(key)) {
-          visited.add(key);
-          queue.push({ entityName: targetName, depth: currentDepth + 1 });
-        }
-      }
-
-      if (targets.length > 0) {
-        const existing = result.get(currentName) || [];
-        result.set(currentName, [...existing, ...targets]);
-      }
-    }
-  };
-
-  bfs(entityName);
-  return result;
+/**
+ * Can this path be rendered by the builder? Every edge must be composable
+ * (a bound function with parameters has values the builder cannot collect),
+ * and a function step must be the first hop: the builder composes a function
+ * into the *resource path*, which it can only do at the root. A function
+ * deeper in a path would have to be a segment of an `$expand`, which OData V4
+ * does not express.
+ */
+export function isComposablePath(path: TraversalPath): boolean {
+  return path.every(
+    (step, index) =>
+      isComposableEdge(step.edge) && (step.edge.kind !== 'boundFunction' || index === 0),
+  );
 }
 
-export function graphToExpandItems(
-  state: GraphState,
-  nodeId: string,
-): import('./queryResolver').ExpandItem[] {
-  const children = state.nodes.filter((n) => n.parentId === nodeId);
+/** Does the card carry an option that would appear in the query? */
+function hasQueryOptions(node: GraphNodeState): boolean {
+  return (
+    node.filters.length > 0 ||
+    node.select.length > 0 ||
+    node.sort !== '' ||
+    node.top !== DEFAULT_TOP ||
+    node.skip !== 0 ||
+    node.expandedNavProps.length > 0
+  );
+}
+
+/**
+ * Notes about bound-function steps the query projection cannot carry.
+ *
+ * A function composes only as the *first* resource-path segment, and the root
+ * card's options cannot be expressed before the invocation (they would filter
+ * the source of the call, which a URL cannot say). Both shapes are reported to
+ * the caller — the builder renders them next to the preview — so a card whose
+ * options are absent from the query is never dropped silently.
+ */
+export function functionStepWarnings(state: GraphState): string[] {
+  const warnings: string[] = [];
+  const rootNode = state.nodes.find((n) => n.id === 'root');
+  const functionNode = state.nodes.find(
+    (n) => n.parentId === 'root' && n.step?.edge.kind === 'boundFunction',
+  );
+
+  if (functionNode && rootNode && hasQueryOptions(rootNode)) {
+    warnings.push(
+      "The root card's options are not part of the query: the resource path invokes a bound function, so only the function result card's options apply.",
+    );
+  }
+
+  for (const node of state.nodes) {
+    if (node.parentId !== 'root' && node.step?.edge.kind === 'boundFunction') {
+      warnings.push(
+        `The bound function ${node.step.edge.functionName}() is not part of the query: a function can only be the first step of the resource path.`,
+      );
+    }
+  }
+
+  return warnings;
+}
+
+export function graphToExpandItems(state: GraphState, nodeId: string): ExpandItem[] {
+  // A bound-function step is a resource-path segment, not an expansion: it
+  // must never reach `$expand`. The function segment is composed into the
+  // resource path by `buildODataQuery` instead.
+  const children = state.nodes.filter(
+    (n) => n.parentId === nodeId && n.step?.edge.kind !== 'boundFunction',
+  );
   return children.map((child) => ({
     navProperty: child.navProperty || '',
     select: child.select,
@@ -274,63 +314,63 @@ export function graphToExpandItems(
   }));
 }
 
-export interface PathStep {
-  fromEntity: string;
-  navProperty: string;
-  toEntity: string;
-}
+/**
+ * Project a query graph onto the `QueryState` the shared builder consumes.
+ *
+ * A bound-function step changes the resource path: the query addresses the
+ * function result, so the result node owns the query options and the function
+ * name never reaches `$expand`. The root's own options are not representable
+ * before the function (they would filter the source of the invocation, which a
+ * URL cannot express), so they are not part of the query;
+ * `functionStepWarnings` reports them to the caller.
+ */
+export function graphToQueryState(state: GraphState, fallbackEntity: string): QueryState {
+  const rootNode = state.nodes.find((n) => n.id === 'root');
+  if (!rootNode) {
+    return {
+      entityName: fallbackEntity,
+      filters: [],
+      filterLogic: 'and',
+      select: [],
+      expand: [],
+      sort: '',
+      sortDirection: 'asc',
+      top: DEFAULT_TOP,
+      skip: 0,
+    };
+  }
 
-export type EntityPath = PathStep[];
+  const functionNode = state.nodes.find(
+    (n) => n.parentId === 'root' && n.step?.edge.kind === 'boundFunction',
+  );
+  const optionNode = functionNode ?? rootNode;
+  const functionEdge = functionNode?.step?.edge;
 
-export function findPaths(
-  sourceEntity: string,
-  targetEntity: string,
-  metadata: ODataMetadata,
-  maxDepth: number = 5,
-): EntityPath[] {
-  const paths: EntityPath[] = [];
-
-  const dfs = (currentEntity: string, path: PathStep[], visited: Set<string>, depth: number) => {
-    if (depth > maxDepth) return;
-
-    if (currentEntity.toLowerCase() === targetEntity.toLowerCase() && path.length > 0) {
-      paths.push([...path]);
-      return;
-    }
-
-    const entity = findEntity(currentEntity, metadata.entities);
-    if (!entity) return;
-
-    const navProps = getResolvedNavProperties(entity, metadata.entities);
-
-    for (const nav of navProps) {
-      const targetName = getTargetEntityName(nav.name, entity, metadata);
-      if (!targetName) continue;
-
-      const key = targetName.toLowerCase();
-      if (visited.has(key)) continue;
-
-      visited.add(key);
-      path.push({
-        fromEntity: currentEntity,
-        navProperty: nav.name,
-        toEntity: targetName,
-      });
-
-      dfs(targetName, path, visited, depth + 1);
-
-      path.pop();
-      visited.delete(key);
-    }
+  return {
+    entityName: optionNode.entityName,
+    sourceEntity: functionEdge ? rootNode.entityName : undefined,
+    segment:
+      functionEdge?.kind === 'boundFunction'
+        ? {
+            name: functionEdge.functionName,
+            qualifiedName: functionEdge.qualifiedName,
+            parameters: functionEdge.parameters,
+            bindingIsCollection: functionEdge.bindingIsCollection,
+            returnsCollection: functionEdge.returnsCollection,
+          }
+        : undefined,
+    filters: optionNode.filters,
+    filterLogic: optionNode.filterLogic,
+    select: optionNode.select,
+    expand: graphToExpandItems(state, optionNode.id),
+    sort: optionNode.sort,
+    sortDirection: optionNode.sortDirection,
+    top: optionNode.top,
+    skip: optionNode.skip,
   };
-
-  const startVisited = new Set<string>([sourceEntity.toLowerCase()]);
-  dfs(sourceEntity, [], startVisited, 0);
-
-  return paths;
 }
 
-export function expandPath(sourceEntity: string, path: EntityPath): GraphState {
+export function expandPath(sourceEntity: string, path: TraversalPath): GraphState {
   const nodes: GraphNodeState[] = [];
   const edges: GraphEdge[] = [];
 
@@ -341,12 +381,14 @@ export function expandPath(sourceEntity: string, path: EntityPath): GraphState {
 
   for (const step of path) {
     const nodeId = nextNodeId();
+    const navProperty = step.edge.kind === 'nav' ? step.edge.name : null;
 
     const newNode: GraphNodeState = {
       id: nodeId,
-      entityName: step.toEntity,
+      entityName: step.to,
       parentId,
-      navProperty: step.navProperty,
+      navProperty,
+      step,
       select: [],
       filters: [],
       filterLogic: 'and',
@@ -361,15 +403,18 @@ export function expandPath(sourceEntity: string, path: EntityPath): GraphState {
     nodes.push(newNode);
 
     const parentNode = nodes.find((n) => n.id === parentId);
-    if (parentNode) {
-      parentNode.expandedNavProps.push(step.navProperty);
+    // Only navigation steps are expansions; a function step changes the
+    // resource path and must not be recorded as an expanded nav property.
+    if (parentNode && navProperty) {
+      parentNode.expandedNavProps.push(navProperty);
     }
 
     edges.push({
       id: `edge-${parentId}-${nodeId}`,
       source: parentId,
       target: nodeId,
-      label: step.navProperty,
+      label: step.edge.kind === 'nav' ? step.edge.name : `${step.edge.functionName}()`,
+      kind: step.edge.kind,
     });
 
     parentId = nodeId;

@@ -1,11 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseCSDL } from '@odata-visualizer/shared';
-import {
-  findEntity,
-  getEntitySelectionValue,
-  getResolvedEntity,
-  getTargetEntityName,
-} from '../src/utils/queryResolver';
+import { findEntity, getResolvedEntity, getTargetEntityName } from '../src/utils/queryResolver';
 import {
   addExpandedNode,
   createRootNode,
@@ -162,16 +157,19 @@ describe('query graph identity', () => {
 
     const paths = findPaths('A.Widget', 'B.Part', model);
 
-    expect(paths).toEqual([[{ fromEntity: 'A.Widget', navProperty: 'Docs', toEntity: 'B.Part' }]]);
+    expect(paths).toHaveLength(1);
+    expect(paths[0][0]).toMatchObject({
+      from: 'A.Widget',
+      to: 'B.Part',
+      edge: { kind: 'nav', name: 'Docs' },
+    });
   });
 
   it('reports reachable targets by the identity the dropdown offers', async () => {
     const model = await ambiguousModel();
 
     const reachable = getReachableEntities('A.Widget', model);
-    const values = [...reachable.values()]
-      .flat()
-      .map((entry) => getEntitySelectionValue(entry.entity, model.entities));
+    const values = [...reachable.values()].flat().map((step) => step.to);
 
     expect(values).toContain('B.Part');
     // The bare short name is not offered: it cannot say which `Part`.

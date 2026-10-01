@@ -665,10 +665,6 @@ function isValidKeyPredicate(predicate: string): boolean {
 }
 
 /**
- * Validate the single resource path segment the URL is built from (an entity
- * set name, or the entity type name the builder UI previews with).
- */
-/**
  * The path part of a resource segment, without a key predicate.
  *
  * `/Parts('P1')` and `/Parts` address the same entity set, so metadata lookups
@@ -680,7 +676,16 @@ export function resourcePathOf(entitySet: string): string {
   return predicateStart === -1 ? entitySet : entitySet.slice(0, predicateStart);
 }
 
-function assertResourceSegment(entitySet: string): string {
+/**
+ * Validate a resource path segment (an entity set name, or the
+ * namespace-qualified name of a bound function) before it is concatenated
+ * into a URL.
+ *
+ * Exported so a consumer that composes a resource path itself — the frontend
+ * builder emits a bound-function segment rather than an entity set — applies
+ * the same assertion `buildQueryUrl` applies to its `entitySet`.
+ */
+export function assertResourceSegment(entitySet: string): string {
   if (!entitySet || entitySet.trim().length === 0) {
     throw new Error('entitySet is required');
   }

@@ -14,11 +14,12 @@ import {
 import {
   createRootNode,
   expandPath,
+  functionStepWarnings,
   layoutGraph,
-  graphToExpandItems,
+  graphToQueryState,
   type GraphNodeState,
   type GraphEdge,
-  type EntityPath,
+  type TraversalPath,
 } from '../utils/graphState';
 
 interface QueryBuilderProps {
@@ -55,7 +56,7 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
     setGraphEdges(edges);
   }, []);
 
-  const handleSelectPath = useCallback(async (sourceEntity: string, path: EntityPath) => {
+  const handleSelectPath = useCallback(async (sourceEntity: string, path: TraversalPath) => {
     const state = expandPath(sourceEntity, path);
     const laid = await layoutGraph(state);
     setSelectedEntity(sourceEntity);
@@ -68,34 +69,10 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
     setFunctionQuery(query);
   }, []);
 
-  const query: QueryState = useMemo(() => {
-    const rootNode = graphNodes.find((n) => n.id === 'root');
-    if (!rootNode) {
-      return {
-        entityName: selectedEntity,
-        filters: [],
-        filterLogic: 'and',
-        select: [],
-        expand: [],
-        sort: '',
-        sortDirection: 'asc',
-        top: 25,
-        skip: 0,
-      };
-    }
-
-    return {
-      entityName: rootNode.entityName,
-      filters: rootNode.filters,
-      filterLogic: rootNode.filterLogic,
-      select: rootNode.select,
-      expand: graphToExpandItems({ nodes: graphNodes, edges: graphEdges }, 'root'),
-      sort: rootNode.sort,
-      sortDirection: rootNode.sortDirection,
-      top: rootNode.top,
-      skip: rootNode.skip,
-    };
-  }, [graphNodes, graphEdges, selectedEntity]);
+  const query: QueryState = useMemo(
+    () => graphToQueryState({ nodes: graphNodes, edges: graphEdges }, selectedEntity),
+    [graphNodes, graphEdges, selectedEntity],
+  );
 
   // One pass: the warnings describe *this* query, so they are collected while
   // it is built rather than recomputed separately (which could show reasons
@@ -106,14 +83,17 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
     if (functionQuery) {
       return { queryString: functionQuery, warnings: [] as string[], omittedFilterCount: 0 };
     }
-    const warnings: string[] = [];
+    // Shapes the projection cannot carry — a function that is not the first
+    // hop, root options before a function segment — are reported here, next to
+    // the query that omits them.
+    const warnings = functionStepWarnings({ nodes: graphNodes, edges: graphEdges });
     let omittedFilterCount = 0;
     const queryString = buildODataQuery(query, metadata, (message, omittedFilter) => {
       warnings.push(message);
       if (omittedFilter) omittedFilterCount += 1;
     });
     return { queryString, warnings, omittedFilterCount };
-  }, [functionQuery, query, metadata]);
+  }, [functionQuery, query, graphNodes, graphEdges, metadata]);
 
   // An entity type with no entity set anywhere in its inheritance chain has no
   // resource path, so `buildODataQuery` returns ''. Saying "select an entity"

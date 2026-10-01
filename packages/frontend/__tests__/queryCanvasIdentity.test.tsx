@@ -83,9 +83,7 @@ describe('PathFinder across colliding short names', () => {
     const metadata = await ambiguousModel();
     const onSelectPath = vi.fn();
 
-    render(
-      <PathFinder metadata={metadata} currentEntity="A.Widget" onSelectPath={onSelectPath} />,
-    );
+    render(<PathFinder metadata={metadata} currentEntity="A.Widget" onSelectPath={onSelectPath} />);
 
     // The "To entity" control is the second combobox.
     const toInput = screen.getAllByRole('combobox')[1];
@@ -97,7 +95,17 @@ describe('PathFinder across colliding short names', () => {
 
     fireEvent.click(screen.getByText('Path 1 (1 hop)'));
     expect(onSelectPath).toHaveBeenCalledWith('A.Widget', [
-      { fromEntity: 'A.Widget', navProperty: 'Docs', toEntity: 'B.Part' },
+      {
+        from: 'A.Widget',
+        to: 'B.Part',
+        edge: {
+          kind: 'nav',
+          name: 'Docs',
+          from: 'A.Widget',
+          to: 'B.Part',
+          targetType: 'B.Part',
+        },
+      },
     ]);
   });
 });

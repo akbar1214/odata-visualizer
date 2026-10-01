@@ -1,22 +1,31 @@
 import type {
   ODataMetadata,
   ODataEntity,
-  ODataAssociationEnd,
   ODataEntitySet,
+  ODataParameter,
   ODataProperty,
   ODataNavigationProperty,
 } from '@odata-visualizer/shared';
 import {
+  assertResourceSegment,
+  buildQueryOptions,
   buildQueryUrl,
   findEntitiesByName,
   findEntityByName,
   formatV4Literal,
+  getEffectiveKeys,
   getEffectiveNavigationProperties,
   getEffectiveProperties,
   getAllEntitySets,
+  getEntitySelectionValue,
+  getTargetEntityName,
   resolveInheritanceChain,
   type ExpandNode,
 } from '@odata-visualizer/shared';
+
+// One implementation, in `shared`: the query graph stores these values in
+// nodes and path steps, and MCP resolves the same names.
+export { getEntitySelectionValue, getTargetEntityName };
 
 export interface ResolvedEntity {
   entity: ODataEntity;
@@ -44,8 +53,32 @@ export interface ExpandItem {
   skip: number;
 }
 
+/**
+ * A bound-function resource-path segment. A function is not an expansion: the
+ * query addresses the function result, and its options apply to that result.
+ */
+export interface FunctionSegment {
+  /** Function simple name, for display. */
+  name: string;
+  /** Namespace-qualified name, as it appears in the URL. */
+  qualifiedName: string;
+  /** Parameters beyond the binding one; the builder only offers edges with none. */
+  parameters: ODataParameter[];
+  /** The binding parameter accepts a collection. */
+  bindingIsCollection: boolean;
+  /** The return type is a collection. */
+  returnsCollection: boolean;
+}
+
 export interface QueryState {
   entityName: string;
+  /**
+   * When `segment` is set, the entity type the function is invoked on; the
+   * resource path is built from its set, not from the result type's.
+   */
+  sourceEntity?: string;
+  /** Bound-function segment forming the resource path; the query addresses its result. */
+  segment?: FunctionSegment;
   filters: QueryFilter[];
   filterLogic: FilterLogic;
   select: string[];
@@ -85,13 +118,6 @@ export function getResolvedProperties(
 }
 
 /** Own + inherited navigation properties, base types first. */
-export function getResolvedNavProperties(
-  entity: ODataEntity,
-  entities: ODataEntity[],
-): ODataNavigationProperty[] {
-  return getEffectiveNavigationProperties(entity, entities);
-}
-
 export function getResolvedEntity(
   entityName: string,
   entities: ODataEntity[],
@@ -102,109 +128,8 @@ export function getResolvedEntity(
   return {
     entity,
     allProperties: getResolvedProperties(entity, entities),
-    allNavProperties: getResolvedNavProperties(entity, entities),
+    allNavProperties: getEffectiveNavigationProperties(entity, entities),
   };
-}
-
-/**
- * Resolve the entity type a navigation property points at.
- *
- * Returns the target's **graph identity**, not its short name: the short name
- * while it is unique in the model, and `Namespace.Name` when two types share
- * the short name (`getEntitySelectionValue`). The query graph stores these
- * values in nodes and path steps and compares them directly. Returning an
- * ambiguous short name made every consumer resolve it with first-match-wins,
- * so expanding a navigation property silently landed on whichever same-named
- * type was parsed first.
- *
- * The value is always resolvable through `findEntity`, which prefers an exact
- * qualified match over a short one. Ambiguity is judged the same way that
- * resolver matches — case-insensitively — so a case-only collision is qualified
- * too rather than resolving to the first of the pair.
- */
-export function getTargetEntityName(
-  navProperty: string,
-  sourceEntity: ODataEntity,
-  metadata: ODataMetadata,
-): string | undefined {
-  const nav = getResolvedNavProperties(sourceEntity, metadata.entities).find(
-    (n) => n.name === navProperty,
-  );
-  if (!nav) return undefined;
-
-  // OData V4: the navigation property points straight at the target type. The
-  // qualified reference is preferred over the short one even when it cannot be
-  // resolved: it names a type from an unloaded reference, and the short name
-  // may silently name a different type in this model.
-  if (nav.targetTypeQualified) {
-    const target = findEntityByName(metadata.entities, nav.targetTypeQualified);
-    if (target) return getEntitySelectionValue(target, metadata.entities);
-    return nav.targetTypeQualified;
-  }
-  if (nav.targetType) return nav.targetType;
-
-  // OData V3: resolve through the Association. The endpoint identity is
-  // resolved before it is compared, so both the endpoint lookup and the source
-  // comparison work on identities rather than short names.
-  if (!nav.relationship) return undefined;
-  // The association is stored under its *simple* name (`parseAssociation` keeps
-  // `@_Name` verbatim), but a namespaced generator writes `Self.R1` — or `N.R1`
-  // once the parser expands `Schema/@Alias`. Matching the two directly missed
-  // every such document, so the whole V3 pathfinder branch was dead.
-  //
-  // A qualified reference names the association's *namespace*, and that is what
-  // the qualifier is for: two namespaces may declare the same simple name.
-  // Preferring the source entity's namespace instead picked the wrong
-  // association whenever the two differed — which is the only case where a
-  // generator writes the qualified form at all.
-  const dot = nav.relationship.lastIndexOf('.');
-  const qualifier = dot > 0 ? nav.relationship.slice(0, dot) : undefined;
-  const localName = dot > 0 ? nav.relationship.slice(dot + 1) : nav.relationship;
-  const sameName = metadata.relationships.filter(
-    (r) => r.name === nav.relationship || r.name === localName,
-  );
-
-  // A qualifier that names a namespace in this model is authoritative: the
-  // reference is explicitly qualified, so an association outside that namespace
-  // is a dangling reference and stays unresolved. Guessing from the source
-  // entity's namespace instead silently followed an unrelated association that
-  // merely shared the simple name.
-  const modelNamespaces = new Set<string>();
-  for (const entity of metadata.entities) {
-    if (entity.namespace) modelNamespaces.add(entity.namespace);
-  }
-  for (const relationship of metadata.relationships) {
-    if (relationship.namespace) modelNamespaces.add(relationship.namespace);
-  }
-  const qualified = qualifier !== undefined && modelNamespaces.has(qualifier);
-
-  const rel = qualified
-    ? sameName.find((r) => r.namespace === qualifier)
-    : // An unrecognised qualifier is most likely an alias this layer cannot
-      // expand, so the source entity's own namespace is the better guess. There
-      // is no separate exact-name clause: `sameName` already matches both
-      // spellings, so it would only ever return an element of this list.
-      (sameName.find((r) => r.namespace === sourceEntity.namespace) ?? sameName[0]);
-  if (!rel) return undefined;
-
-  const endIdentity = (end: ODataAssociationEnd): string => {
-    const target = findEntityByName(metadata.entities, end.entityQualified ?? end.entity);
-    return target
-      ? getEntitySelectionValue(target, metadata.entities)
-      : (end.entityQualified ?? end.entity);
-  };
-
-  if (nav.toRole) {
-    // #35's both-ends check, wrapped so the result is an identity rather than
-    // a stored endpoint. Taking either side wholesale breaks the other's tests:
-    // #35's raw returns give qualified strings where callers expect identities,
-    // and #38's one-liner loses the neither-end fallthrough.
-    if (rel.from.role === nav.toRole) return endIdentity(rel.from);
-    if (rel.to.role === nav.toRole) return endIdentity(rel.to);
-  }
-  return endIdentity(rel.from) === getEntitySelectionValue(sourceEntity, metadata.entities)
-    ? endIdentity(rel.to)
-    : endIdentity(rel.from);
 }
 
 const STRING_OPERATORS = ['eq', 'ne', 'contains', 'startswith', 'endswith'];
@@ -314,29 +239,6 @@ function setForType(entity: ODataEntity, metadata: ODataMetadata): ODataEntitySe
     const matches = findEntitiesByName(metadata.entities, set.entityType);
     return matches.length === 1 && matches[0] === entity;
   });
-}
-
-/**
- * The identity the entity selector and the query graph use for a type.
- *
- * Short names are used while they are unique — that is what the graph and the
- * rest of the UI speak. When two types share a short name (the Windchill
- * fixture ships two `Part` types) the qualified name is used instead, because
- * otherwise both dropdown entries emit the same string and the selection
- * silently resolves to whichever one the parser saw first. That turned a loud
- * 404 into a query against the wrong collection.
- *
- * Always compute the ambiguity against the *whole* model. A filtered list can
- * hide the colliding type, and the short value then resolves to it.
- */
-export function getEntitySelectionValue(entity: ODataEntity, entities: ODataEntity[]): string {
-  // Case-insensitively, because `findEntity` matches that way: two types
-  // differing only by case would both emit the same short value, and every
-  // consumer would resolve it to whichever was parsed first.
-  const ambiguous = entities.some(
-    (other) => other !== entity && other.name.toLowerCase() === entity.name.toLowerCase(),
-  );
-  return ambiguous ? (entity.qualifiedName ?? entity.name) : entity.name;
 }
 
 /** The URL segment an entity type is addressed by, or `undefined` when it has no
@@ -487,6 +389,10 @@ function filterExpandItems(
  * so property lookup and literal typing resolve against the selected shape
  * rather than the set's.
  *
+ * When the graph path starts with a bound function, the resource path is the
+ * function *segment* (`/As('1')/N.B()`) and the query options apply to its
+ * result — a function is never emitted into `$expand`.
+ *
  * Filter rows whose value cannot be formatted as a literal for their property
  * are left out instead of discarding the whole query, at every level: the root
  * `filters` and each expand node's `filters` recursively. Each left-out row
@@ -496,7 +402,7 @@ function filterExpandItems(
  * integer) cannot disappear from the preview without an explanation. An empty
  * row is left out silently: a freshly added row is not a problem to report.
  *
- * `onWarning` is also handed to `buildQueryUrl`, which reports rows it can
+ * `onWarning` is also handed to `buildQueryOptions`, which reports rows it can
  * format but cannot resolve (a property the model does not have). Those
  * messages are advisory: the row is *kept*. The UI's property and navigation
  * dropdowns are all model-derived, so no UI interaction produces that channel
@@ -514,41 +420,133 @@ export function buildODataQuery(
   const resolved = getResolvedEntity(query.entityName, metadata.entities);
   if (!resolved) return '';
 
-  const resourcePath = resolveResourcePath(query.entityName, metadata);
-  if (!resourcePath) return '';
-
   const filters = filterRows(query.filters, resolved.allProperties, '', onWarning);
   const expand =
     query.expand.length > 0
       ? filterExpandItems(query.expand, query.entityName, metadata, '', onWarning)
       : [];
 
+  const options = {
+    rootEntityName: query.entityName,
+    metadata,
+    onWarning,
+    filters: filters.length > 0 ? filters : undefined,
+    filterLogic: query.filterLogic,
+    select: query.select.length > 0 ? query.select : undefined,
+    expand: expand.length > 0 ? expand.map(toExpandNode) : undefined,
+    orderBy: query.sort ? `${query.sort} ${query.sortDirection}` : undefined,
+    top: query.top > 0 ? query.top : undefined,
+    skip: query.skip > 0 ? query.skip : undefined,
+  };
+
+  // The resource path is also the fallback when the options cannot be built:
+  // the preview keeps addressing the resource rather than collapsing.
+  let path = '';
   try {
-    return buildQueryUrl({
-      entitySet: resourcePath,
-      rootEntityName: query.entityName,
-      metadata,
-      onWarning,
-      filters: filters.length > 0 ? filters : undefined,
-      filterLogic: query.filterLogic,
-      select: query.select.length > 0 ? query.select : undefined,
-      expand: expand.length > 0 ? expand.map(toExpandNode) : undefined,
-      orderBy: query.sort ? `${query.sort} ${query.sortDirection}` : undefined,
-      top: query.top > 0 ? query.top : undefined,
-      skip: query.skip > 0 ? query.skip : undefined,
-    });
+    if (query.segment) {
+      path = functionSegmentPath(query, query.segment, metadata, onWarning);
+      if (!path) return '';
+
+      return `${path}${buildQueryOptions(options)}`;
+    }
+
+    const entitySet = resolveResourcePath(query.entityName, metadata);
+    if (!entitySet) return '';
+    path = `/${entitySet}`;
+
+    // `buildQueryUrl` rather than `buildQueryOptions`: it asserts the set path
+    // first, so a set name that is not a resource path (`As?evil=1`) is
+    // reported instead of being concatenated into a URL with its options.
+    return buildQueryUrl({ ...options, entitySet });
   } catch (error) {
     // Invalid state while the user is editing: show the bare resource path
     // rather than an error state in the preview, but say so — silently losing
-    // every other option is worse than the note. This must use the resolved
-    // entity *set* — returning the type name here would reintroduce the very
-    // bug this function exists to fix.
+    // every other option is worse than the note.
     const reason = error instanceof Error ? error.message : String(error);
     onWarning?.(
       `The full query could not be built, so the preview shows only the resource path: ${reason}`,
     );
-    return `/${resourcePath}`;
+    return path;
   }
+}
+
+/**
+ * The placeholder key the preview puts on a single-entity binding. The builder
+ * has no key input, so it says what it did rather than emitting a URL that
+ * silently addresses the whole collection.
+ */
+const PLACEHOLDER_KEY = "'1'";
+
+/**
+ * A placeholder literal for a key property, typed by the property's EDM type:
+ * an `Edm.Int32` key yields `1`, a string key `'1'`. A type the placeholder
+ * cannot represent (a guid, a date) falls back to the quoted form; the warning
+ * asks the user to replace the placeholder either way.
+ */
+function placeholderKeyLiteral(type: string | undefined): string {
+  if (!type) return PLACEHOLDER_KEY;
+  try {
+    return formatV4Literal('1', type);
+  } catch {
+    return PLACEHOLDER_KEY;
+  }
+}
+
+function placeholderKeySegment(
+  entityName: string,
+  metadata: ODataMetadata,
+  onWarning?: QueryWarningHandler,
+): string {
+  const entity = findEntityByName(metadata.entities, entityName);
+  const keys = entity ? getEffectiveKeys(entity, metadata.entities) : [];
+  const properties = entity ? getEffectiveProperties(entity, metadata.entities) : [];
+  const literalFor = (keyName: string) =>
+    placeholderKeyLiteral(properties.find((p) => p.name === keyName)?.type);
+
+  if (keys.length === 0) {
+    // A keyless type has no key to replace the placeholder with, so the
+    // generic "replace it" note would be misleading: no valid single-entity
+    // path exists, and the placeholder only sketches the shape.
+    onWarning?.(
+      `${entityName} declares no key, so no single-entity path can be built; the placeholder ${PLACEHOLDER_KEY} sketches the shape only.`,
+    );
+    return `(${PLACEHOLDER_KEY})`;
+  }
+  onWarning?.(
+    `The preview uses key placeholder ${PLACEHOLDER_KEY} on ${entityName}; replace it with a real key.`,
+  );
+  if (keys.length === 1) return `(${literalFor(keys[0])})`;
+  return `(${keys.map((key) => `${key}=${literalFor(key)}`).join(',')})`;
+}
+
+/**
+ * Build the resource path of a bound-function step: the source set (with a key
+ * when the function is bound to one entity) followed by the qualified function
+ * segment. Returns `''` when the source has no resource path or the segment
+ * cannot be composed.
+ */
+function functionSegmentPath(
+  query: QueryState,
+  segment: FunctionSegment,
+  metadata: ODataMetadata,
+  onWarning?: QueryWarningHandler,
+): string {
+  // The UI only offers parameterless functions, but a programmatic caller can
+  // hand over an edge it could not compose: refuse rather than emit a call
+  // that silently omits a required parameter.
+  if (segment.parameters.length > 0) {
+    onWarning?.(
+      `The preview cannot call ${segment.qualifiedName}(): it requires parameter values, which this builder has no input for.`,
+    );
+    return '';
+  }
+
+  const source = query.sourceEntity ?? '';
+  const sourcePath = source ? resolveResourcePath(source, metadata) : undefined;
+  if (!sourcePath) return '';
+
+  const key = segment.bindingIsCollection ? '' : placeholderKeySegment(source, metadata, onWarning);
+  return `/${assertResourceSegment(sourcePath)}${key}/${assertResourceSegment(segment.qualifiedName)}()`;
 }
 
 export function getDefaultQuery(entityName: string): QueryState {
