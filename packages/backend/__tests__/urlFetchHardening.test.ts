@@ -22,12 +22,6 @@ const referencingPrivateHost = `<?xml version="1.0"?>
   </edmx:DataServices>
 </edmx:Edmx>`;
 
-function responseWithUrl(body: string, url: string) {
-  const response = new Response(body, { status: 200 });
-  Object.defineProperty(response, 'url', { value: url });
-  return response;
-}
-
 // The SSRF guard resolves a hostname's addresses before fetching it. These tests
 // are about fetch hardening, so pin resolution to a public address rather than
 // depending on `windchill.example.com` failing to resolve.

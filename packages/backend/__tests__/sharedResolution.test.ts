@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-// @ts-expect-error -- the real config module, resolved relative to this file.
+// The real config module, resolved relative to this file. The `@ts-expect-error`
+// that used to sit here went stale once the test config stopped excluding this
+// file from `rootDir`.
 import config from '../vitest.config';
 
 /**

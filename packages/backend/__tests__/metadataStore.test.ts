@@ -107,8 +107,8 @@ describe('createModelStore', () => {
     // (or onto each other), so unrelated uploads silently clobbered one another.
     const ids = m.list().map((entry) => entry.id);
     expect(new Set(ids).size).toBe(4);
-    expect(m.get('a/b').info.sourceName).toBe('slash');
-    expect(m.get('ab').info.sourceName).toBe('plain');
+    expect(m.get('a/b')?.info.sourceName).toBe('slash');
+    expect(m.get('ab')?.info.sourceName).toBe('plain');
   });
 
   it('scopes listFor to a single session', async () => {
