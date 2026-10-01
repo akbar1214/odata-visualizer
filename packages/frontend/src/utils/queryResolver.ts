@@ -147,18 +147,36 @@ export function getTargetEntityName(
   const dot = nav.relationship.lastIndexOf('.');
   const qualifier = dot > 0 ? nav.relationship.slice(0, dot) : undefined;
   const localName = dot > 0 ? nav.relationship.slice(dot + 1) : nav.relationship;
-  const candidates = metadata.relationships.filter(
+  const sameName = metadata.relationships.filter(
     (r) => r.name === nav.relationship || r.name === localName,
   );
-  const rel =
-    metadata.relationships.find((r) => r.name === nav.relationship) ??
-    (qualifier ? candidates.find((r) => r.namespace === qualifier) : undefined) ??
-    candidates.find((r) => r.namespace === sourceEntity.namespace) ??
-    candidates[0];
+
+  // A qualifier that names a namespace in this model is authoritative: the
+  // reference is explicitly qualified, so an association outside that namespace
+  // is a dangling reference and stays unresolved. Guessing from the source
+  // entity's namespace instead silently followed an unrelated association that
+  // merely shared the simple name.
+  const modelNamespaces = new Set<string>();
+  for (const entity of metadata.entities) {
+    if (entity.namespace) modelNamespaces.add(entity.namespace);
+  }
+  for (const relationship of metadata.relationships) {
+    if (relationship.namespace) modelNamespaces.add(relationship.namespace);
+  }
+  const qualified = qualifier !== undefined && modelNamespaces.has(qualifier);
+
+  const rel = qualified
+    ? sameName.find((r) => r.namespace === qualifier)
+    : // An unrecognised qualifier is most likely an alias this layer cannot
+      // expand, so the source entity's own namespace is the better guess. There
+      // is no separate exact-name clause: `sameName` already matches both
+      // spellings, so it would only ever return an element of this list.
+      (sameName.find((r) => r.namespace === sourceEntity.namespace) ?? sameName[0]);
   if (!rel) return undefined;
 
   if (nav.toRole) {
-    return rel.from.role === nav.toRole ? rel.from.entity : rel.to.entity;
+    if (rel.from.role === nav.toRole) return rel.from.entity;
+    if (rel.to.role === nav.toRole) return rel.to.entity;
   }
   return rel.from.entity === sourceEntity.name ? rel.to.entity : rel.from.entity;
 }

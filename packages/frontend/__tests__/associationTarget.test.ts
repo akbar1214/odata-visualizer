@@ -107,3 +107,120 @@ describe('a qualified association reference names its namespace', () => {
     expect(getTargetEntityName('Kids', widget, metadata)).toBe('Beta');
   });
 });
+
+/**
+ * The corners of the resolution order. Each of these returned a *confident
+ * wrong answer* rather than `undefined`, which is worse than not resolving:
+ * they feed `$expand` validation and PathFinder traversal, so the user is
+ * taken to the wrong entity type with no warning.
+ */
+describe('association resolution does not guess', () => {
+  const schema = (ns: string, body: string, alias?: string) =>
+    `<Schema Namespace="${ns}"${alias ? ` Alias="${alias}"` : ''} xmlns="http://docs.oasis-open.org/odata/ns/edm">${body}</Schema>`;
+
+  const entity = (name: string, navs = '') => `
+      <EntityType Name="${name}">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />${navs}
+      </EntityType>`;
+
+  const association = (ns: string, from: string, fromRole: string, to: string, toRole: string) => `
+      <Association Name="R1">
+        <End Type="${ns}.${from}" Role="${fromRole}" Multiplicity="1" />
+        <End Type="${ns}.${to}" Role="${toRole}" Multiplicity="*" />
+      </Association>`;
+
+  const parse = (schemas: string) =>
+    parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>${schemas}
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+  it('leaves a dangling qualified reference unresolved instead of following a stranger', async () => {
+    // `N3` is a real namespace in the model but declares no `R1`. `N1` declares
+    // one and `Widget` lives in `N1`, so guessing by source namespace expanded
+    // to `Gadget`.
+    const metadata = await parse(
+      schema('N3', entity('Other')) +
+        schema(
+          'N1',
+          entity(
+            'Widget',
+            '\n        <NavigationProperty Name="Kids" Relationship="N3.R1" FromRole="Widget" ToRole="Gadget" />',
+          ) +
+            entity('Gadget') +
+            association('N1', 'Widget', 'Widget', 'Gadget', 'Gadget'),
+        ),
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBeUndefined();
+  });
+
+  it('falls back to the source namespace when the qualifier cannot be resolved', async () => {
+    // `Ghost` is neither a namespace in the model nor an alias the parser can
+    // expand, so the qualifier carries no information. `N2`'s `R1` is declared
+    // first; the source entity is in `N1`, whose association the roles name.
+    const metadata = await parse(
+      schema(
+        'N2',
+        entity('Widget2') +
+          entity('Gadget2') +
+          association('N2', 'Widget2', 'Widget2', 'Gadget2', 'Gadget2'),
+      ) +
+        schema(
+          'N1',
+          entity(
+            'Widget',
+            '\n        <NavigationProperty Name="Kids" Relationship="Ghost.R1" FromRole="Alpha" ToRole="Beta" />',
+          ) +
+            entity('Alpha') +
+            entity('Beta') +
+            association('N1', 'Alpha', 'Alpha', 'Beta', 'Beta'),
+        ),
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBe('Beta');
+  });
+
+  it('handles a dotted namespace in the qualifier', async () => {
+    // Splitting on the *first* dot would leave `example.M.R1` as the local name
+    // and fail to match anything.
+    const metadata = await parse(
+      schema(
+        'com.example.M',
+        entity(
+          'Widget',
+          '\n        <NavigationProperty Name="Kids" Relationship="com.example.M.R1" FromRole="Alpha" ToRole="Beta" />',
+        ) +
+          entity('Alpha') +
+          entity('Beta') +
+          association('com.example.M', 'Alpha', 'Alpha', 'Beta', 'Beta'),
+      ),
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBe('Beta');
+  });
+
+  it('does not return the source entity when no end carries the requested role', async () => {
+    // Ends declared target-first, so the old logic fell through to `rel.to` —
+    // the source entity itself.
+    const metadata = await parse(
+      schema(
+        'N',
+        entity(
+          'Widget',
+          '\n        <NavigationProperty Name="Kids" Relationship="R1" FromRole="Widget" ToRole="Bogus" />',
+        ) +
+          entity('Gadget') +
+          association('N', 'Gadget', 'Gadget', 'Widget', 'Widget'),
+      ),
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBe('Gadget');
+  });
+});
