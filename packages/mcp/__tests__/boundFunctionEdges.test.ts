@@ -112,6 +112,49 @@ describe('get_relationships reports operation edges', () => {
   });
 });
 
+/**
+ * A function bound to a base type is invocable on derived instances (OData V4
+ * §11.2.2), so `get_relationships` must surface the edge when asked about the
+ * derived type. MCP reads the shared traversal graph, so this verifies the
+ * fix is inherited rather than re-derived here.
+ */
+describe('inherited binding types', () => {
+  it('reports a base-bound function when asked about the derived type', async () => {
+    resetMetadata();
+    const { mkdtemp, writeFile } = await import('fs/promises');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const dir = await mkdtemp(join(tmpdir(), 'mcp-bound-fn-inherited-'));
+    const file = join(dir, 'metadata.xml');
+    await writeFile(
+      file,
+      `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base" />
+      <EntityType Name="Derived" BaseType="N.Base" />
+      <EntityType Name="C" />
+      <Function Name="B" IsBound="true">
+        <Parameter Name="it" Type="N.Base" />
+        <ReturnType Type="N.C" />
+      </Function>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`,
+      'utf-8',
+    );
+    const load = await handleToolCall('load_metadata', { source: file, type: 'file' });
+    expect(load.isError).toBeUndefined();
+
+    const result = await handleToolCall('get_relationships', { entityName: 'Derived' });
+    const text = result.content[0].text;
+
+    expect(text).toContain('N.B()');
+    expect(text).toContain('N.B(): N.Derived -> N.C');
+  });
+});
+
 describe('list_functions names the binding type', () => {
   it('shows what a bound function is bound to', async () => {
     const result = await handleToolCall('list_functions', { bound: true });

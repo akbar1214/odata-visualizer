@@ -23,6 +23,7 @@ import {
   getEffectiveNavigationProperties,
   getEntitySelectionValue,
   getTargetEntityName,
+  resolveInheritanceChain,
 } from './resolve.js';
 
 /** A navigation-property step between two entity types. */
@@ -138,7 +139,11 @@ function resolveEntityType(
  * bound functions.
  *
  * Nav edges are derived per entity so inherited navigation properties are
- * traversable from each derived type under that type's own identity.
+ * traversable from each derived type under that type's own identity. Bound
+ * functions follow the same rule (OData V4 §11.2.2): a function bound to
+ * `Base` is invocable on every type that inherits it, so each inheriting graph
+ * identity gets its own edge. Inheritance is one-directional: a function bound
+ * to `Mid` yields no edge from `Base`, which `Mid` itself inherits from.
  */
 export function getTraversalEdges(metadata: ODataMetadata): TraversalEdge[] {
   const edges: TraversalEdge[] = [];
@@ -161,6 +166,23 @@ export function getTraversalEdges(metadata: ODataMetadata): TraversalEdge[] {
     }
   }
 
+  // The identities a bound function is invocable from: each entity's own
+  // identity plus every base type in its inheritance chain, indexed by the
+  // binding identity so a function can look its sources up directly. Sources
+  // stay in entity document order, and an identity is added once, so a
+  // duplicate declaration cannot emit the same edge twice.
+  const inheritors = new Map<string, string[]>();
+  for (const entity of metadata.entities) {
+    if (entity.kind === 'complex') continue;
+    const from = getEntitySelectionValue(entity, metadata.entities);
+    for (const base of resolveInheritanceChain(entity, metadata.entities)) {
+      const bindingIdentity = getEntitySelectionValue(base, metadata.entities);
+      const sources = inheritors.get(bindingIdentity);
+      if (!sources) inheritors.set(bindingIdentity, [from]);
+      else if (!sources.includes(from)) sources.push(from);
+    }
+  }
+
   for (const fn of metadata.functions) {
     if (!fn.isBound) continue;
 
@@ -176,16 +198,19 @@ export function getTraversalEdges(metadata: ODataMetadata): TraversalEdge[] {
     const target = resolveEntityType(returnType.type, fn.namespace, metadata.entities);
     if (!target) continue;
 
-    edges.push({
-      kind: 'boundFunction',
-      functionName: fn.name,
-      qualifiedName: fn.qualifiedName ?? fn.name,
-      from: getEntitySelectionValue(source, metadata.entities),
-      to: getEntitySelectionValue(target, metadata.entities),
-      parameters: (fn.parameters ?? []).filter((p) => !p.isBinding),
-      bindingIsCollection: bindingType.isCollection,
-      returnsCollection: returnType.isCollection,
-    });
+    const sources = inheritors.get(getEntitySelectionValue(source, metadata.entities)) ?? [];
+    for (const from of sources) {
+      edges.push({
+        kind: 'boundFunction',
+        functionName: fn.name,
+        qualifiedName: fn.qualifiedName ?? fn.name,
+        from,
+        to: getEntitySelectionValue(target, metadata.entities),
+        parameters: (fn.parameters ?? []).filter((p) => !p.isBinding),
+        bindingIsCollection: bindingType.isCollection,
+        returnsCollection: returnType.isCollection,
+      });
+    }
   }
 
   return edges;

@@ -348,6 +348,111 @@ describe('operation edge derivation', () => {
   });
 });
 
+/**
+ * OData V4 §11.2.2: a function bound to `Base` is invocable on `Derived`
+ * instances. Bound-function edges must therefore be derived per entity, exactly
+ * as inherited navigation properties are, so both the pathfinder and MCP can
+ * discover the step from every inheriting type.
+ */
+describe('bound functions on a base type', () => {
+  /** The issue's fixture, verbatim. */
+  const INHERITED = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base" />
+      <EntityType Name="Derived" BaseType="N.Base" />
+      <EntityType Name="C" />
+      <Function Name="B" IsBound="true">
+        <Parameter Name="it" Type="N.Base" />
+        <ReturnType Type="N.C" />
+      </Function>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('derives exactly one edge from the binding type and each derived type', async () => {
+    const { edges } = await edgesOf(INHERITED);
+    const operations = edges.filter(isFunctionEdge);
+
+    expect(operations).toHaveLength(2);
+    expect(operations.map((e) => e.from).sort()).toEqual(['Base', 'Derived']);
+    expect(operations.map((e) => e.to)).toEqual(['C', 'C']);
+    expect(operations.every((e) => e.functionName === 'B')).toBe(true);
+  });
+
+  it('finds the function step from the derived type', async () => {
+    const metadata = await parseCSDL(INHERITED);
+    const paths = findPaths('Derived', 'C', metadata);
+
+    expect(paths).toHaveLength(1);
+    expect(paths[0]).toHaveLength(1);
+    expect(paths[0][0].edge).toMatchObject({
+      kind: 'boundFunction',
+      functionName: 'B',
+      from: 'Derived',
+      to: 'C',
+    });
+    // The binding type keeps its own edge.
+    expect(findPaths('Base', 'C', metadata)).toHaveLength(1);
+  });
+
+  it('reports the derived type reaching C', async () => {
+    const metadata = await parseCSDL(INHERITED);
+    const reachable = getReachableEntities('Derived', metadata);
+    const targets = [...reachable.values()].flat().map((step) => step.to);
+
+    expect(targets).toContain('C');
+    expect(reachable.get('Derived')?.map((s) => s.edge.kind)).toEqual(['boundFunction']);
+  });
+
+  it('walks a multi-level inheritance chain', async () => {
+    const { metadata, edges } = await edgesOf(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base" />
+      <EntityType Name="Mid" BaseType="N.Base" />
+      <EntityType Name="Derived" BaseType="N.Mid" />
+      <EntityType Name="C" />
+      <Function Name="B" IsBound="true">
+        <Parameter Name="it" Type="N.Base" />
+        <ReturnType Type="N.C" />
+      </Function>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    const operations = edges.filter(isFunctionEdge);
+
+    expect(operations.map((e) => e.from).sort()).toEqual(['Base', 'Derived', 'Mid']);
+    expect(findPaths('Derived', 'C', metadata)).toHaveLength(1);
+  });
+
+  it('does not walk an edge from a type that only inherits from the binding type', async () => {
+    // Bound to Mid, so Base must not gain an edge: a base type is not
+    // substitutable for its derived binding type.
+    const { metadata, edges } = await edgesOf(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base" />
+      <EntityType Name="Mid" BaseType="N.Base" />
+      <EntityType Name="Derived" BaseType="N.Mid" />
+      <EntityType Name="C" />
+      <Function Name="B" IsBound="true">
+        <Parameter Name="it" Type="N.Mid" />
+        <ReturnType Type="N.C" />
+      </Function>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    const operations = edges.filter(isFunctionEdge);
+
+    expect(operations.map((e) => e.from).sort()).toEqual(['Derived', 'Mid']);
+    expect(findPaths('Base', 'C', metadata)).toEqual([]);
+  });
+});
+
 describe('nav edges and traversal', () => {
   const mixed = `<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
