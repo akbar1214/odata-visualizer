@@ -395,18 +395,42 @@ const PROPERTY_PATH = /^[A-Za-z_][A-Za-z0-9_]*(?:\/[A-Za-z_][A-Za-z0-9_]*)*$/;
 const RESOURCE_SEGMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 
 /**
- * A `$select` item (OData V4 ABNF `selectItem`): a star, an all-operations star
- * for a schema, or a property path optionally prefixed with the type it is
- * selected from.
+ * A `$select` item (OData V4.01 ABNF `selectItem`).
  *
- *   `*`                  `NS.*`                 `Name`
- *   `Address/City`       `NS.Part/Name`         `A/B/C`
+ *   `*`                     all structural properties (STAR)
+ *   `NS.*`                  all operations of a schema (allOperationsInSchema)
+ *   `Name`                  property, action or function name
+ *   `Address/City`          structural path
+ *   `NS.Part/Name`          path from a qualified type
+ *   `Address/NS.Addr/City`  mid-path type cast (selectPath)
+ *   `@NS.Term`              instance annotation (annotationInQuery)
+ *   `@NS.Term#Qualifier`    annotated term; the caller writes the raw `#`,
+ *                           which `encodeQueryValue` emits as `%23`
+ *   `Fn(ID,Name)`           function call with parameter names; the name may
+ *                           be qualified and may follow a type prefix
+ *
+ * The ABNF also allows select options on a property path
+ * (`Addresses($filter=…;$top=5)`, `selectProperty` / `selectOption`). They are
+ * deliberately **unsupported**: every option value is an arbitrary OData
+ * expression (a filter, an orderby, a nested select), and this module has no
+ * expression parser, so accepting the shape would emit URLs whose content it
+ * cannot validate. `queryValidation.test.ts` pins that decision; supporting
+ * them needs a real expression validator, not a wider pattern here.
  *
  * This previously used the plain-identifier matcher, which rejected `*` and
  * every structural path — the two most common shapes in practice.
  */
-const SELECT_ITEM =
-  /^(?:\*|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\.\*|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*(?:\/[A-Za-z_][A-Za-z0-9_]*)*)$/;
+const SELECT_IDENTIFIER = '[A-Za-z_][A-Za-z0-9_]*';
+const SELECT_QUALIFIED_NAME = `(?:${SELECT_IDENTIFIER}\\.)*${SELECT_IDENTIFIER}`;
+// `parameterNames` is one-or-more: the ABNF's optional group is around the
+// whole `OPEN parameterNames CLOSE`, not the list. `Fn()` is therefore not a
+// legal select item — a no-parameter overload is spelled `Fn`.
+const SELECT_FUNCTION_CALL = `${SELECT_QUALIFIED_NAME}\\(${SELECT_IDENTIFIER}(?:,${SELECT_IDENTIFIER})*\\)`;
+const SELECT_ANNOTATION = `@${SELECT_QUALIFIED_NAME}(?:#${SELECT_IDENTIFIER})?`;
+const SELECT_PATH = `${SELECT_QUALIFIED_NAME}(?:\\/${SELECT_QUALIFIED_NAME})*`;
+const SELECT_ITEM = new RegExp(
+  `^(?:\\*|${SELECT_QUALIFIED_NAME}\\.\\*|${SELECT_ANNOTATION}|${SELECT_FUNCTION_CALL}|${SELECT_PATH}|${SELECT_PATH}\\/${SELECT_FUNCTION_CALL})$`,
+);
 
 /**
  * A key predicate appended to a resource segment: `('P1')`, `(1)`,
@@ -944,9 +968,20 @@ export function buildQueryUrl(options: QueryOptions): string {
   const warn = options.onWarning;
   const checkProperty = (property: string): void => {
     if (!warn || !rootEntity || !options.metadata) return;
-    // `*`, `NS.*` and structural paths name something other than a single
-    // property on the root type, so the exact-name check cannot apply to them.
-    if (property.includes('*') || property.includes('/')) return;
+    // `*`, `NS.*`, structural paths, annotations (`@NS.Term`) and function
+    // calls (`Fn(ID,Name)`) all name something other than a single property on
+    // the root type, so the exact-name check cannot apply to them. Only the
+    // latter two shapes are select-only; a filter property or sort field that
+    // reached here with `(` or `@` has already been rejected as an invalid
+    // property path.
+    if (
+      property.includes('*') ||
+      property.includes('/') ||
+      property.includes('(') ||
+      property.startsWith('@')
+    ) {
+      return;
+    }
     const entity = findEntityByName(options.metadata.entities, rootEntity);
     if (!entity) return;
     const known = getEffectiveProperties(entity, options.metadata.entities).some(
