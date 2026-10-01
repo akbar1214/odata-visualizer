@@ -399,13 +399,16 @@ describe('$select forms beyond star and plain paths', () => {
     // The path matcher was a nested optional group, so `/B/B/…` could be read
     // as plain steps or as cast-plus-step blocks; on a mismatch the engine
     // tried every partition of the run. A 40-step path with a typo at the end
-    // blocked the event loop for tens of seconds. Rejecting it must stay well
-    // inside vitest's default timeout.
+    // blocked the event loop for tens of seconds. A blocking regex cannot be
+    // interrupted by vitest's timeout, so the elapsed time is asserted
+    // explicitly — the check must fail, not merely run late.
+    const started = performance.now();
     for (const item of [`A${'/B'.repeat(40)}!`, `A${'/B'.repeat(40)}/`]) {
       expect(() => buildQueryUrl({ entitySet: 'Parts', select: [item] })).toThrow(
         /Invalid \$select/,
       );
     }
+    expect(performance.now() - started).toBeLessThan(500);
   });
 
   it('accepts a selectProperty recursion after an annotation or a cast', () => {
