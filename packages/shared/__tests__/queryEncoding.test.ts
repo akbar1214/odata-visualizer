@@ -82,3 +82,45 @@ describe('system query options are percent-encoded', () => {
     expect(url).toBe("/Parts?$filter=name%20eq%20'O''Brien,%20Jr.'");
   });
 });
+
+/**
+ * `DEL` is outside `pchar` and has no visible effect in a terminal, so it is
+ * the character most likely to slip through unnoticed. Deleting its branch from
+ * the encoder survived both the shared and the MCP suite.
+ */
+describe('control characters are encoded', () => {
+  it('encodes DEL, which is invisible in a terminal', () => {
+    const url = buildQueryUrl({
+      entitySet: 'Parts',
+      filters: [{ property: 'name', operator: 'eq', value: 'a\u007fb' }],
+    });
+
+    expect(url).toBe("/Parts?$filter=name%20eq%20'a%7Fb'");
+  });
+
+  it('encodes a tab and a newline', () => {
+    const url = buildQueryUrl({
+      entitySet: 'Parts',
+      filters: [{ property: 'name', operator: 'eq', value: 'a\tb\nc' }],
+    });
+
+    expect(url).toBe("/Parts?$filter=name%20eq%20'a%09b%0Ac'");
+  });
+});
+
+/**
+ * `curl` accepts these seven, so they never showed up in the reported bug — but
+ * they are outside `pchar`/`sub-delims`, WHATWG `URL` encodes three of them, and
+ * strict servers and WAFs reject the rest. MCP's `PATH_UNSAFE` already encoded
+ * all seven, so the query side was the inconsistent one.
+ */
+describe('characters outside pchar that curl tolerates are still encoded', () => {
+  it('encodes quotes, angle brackets, backslash, caret, backtick and pipe', () => {
+    const url = buildQueryUrl({
+      entitySet: 'Parts',
+      filters: [{ property: 'name', operator: 'eq', value: 'a"b<c>d\\e^f`g|h' }],
+    });
+
+    expect(url).toBe("/Parts?$filter=name%20eq%20'a%22b%3Cc%3Ed%5Ce%5Ef%60g%7Ch'");
+  });
+});

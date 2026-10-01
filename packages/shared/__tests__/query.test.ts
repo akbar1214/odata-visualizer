@@ -195,8 +195,8 @@ describe('buildQueryUrl', () => {
       entitySet: 'Parts',
       filters: [{ property: 'number', operator: 'eq', value: 'A&B#1+C' }],
     });
-    // Only the characters that would corrupt parsing are encoded; the
-    // OData structure stays readable.
+    // The characters that corrupt a URL are encoded; the OData structure —
+    // quotes, commas, `=` — stays readable.
     expect(url).toBe("/Parts?$filter=number%20eq%20'A%26B%231%2BC'");
   });
 

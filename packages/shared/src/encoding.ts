@@ -14,7 +14,9 @@
  *   are also curl glob delimiters.
  *
  * So the caller supplies its own `unsafe` set and this handles the mechanical
- * part: non-ASCII, controls, `DEL`, and lone surrogates.
+ * part: non-ASCII, C0 controls, and lone surrogates. `DEL` needs no clause of
+ * its own — `0x7F > 0x7E`, so the non-ASCII branch already encodes it, and a
+ * separate clause would be unreachable code no test could distinguish.
  */
 export function percentEncode(value: string, unsafe: ReadonlySet<string>): string {
   let encoded = '';
@@ -25,7 +27,7 @@ export function percentEncode(value: string, unsafe: ReadonlySet<string>): strin
         throw new Error('Value contains an unpaired surrogate and cannot be encoded for a URL.');
       }
       encoded += encodeURIComponent(char);
-    } else if (code < 0x20 || code === 0x7f || unsafe.has(char)) {
+    } else if (code < 0x20 || unsafe.has(char)) {
       encoded += `%${code.toString(16).toUpperCase().padStart(2, '0')}`;
     } else {
       encoded += char;
