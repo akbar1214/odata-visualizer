@@ -120,3 +120,33 @@ describe('MetadataExplorer search', () => {
     await waitFor(() => expect(input.value).toBe(''));
   });
 });
+
+/**
+ * The explorer header renders `entity.label || entity.name`
+ * (MetadataExplorer.tsx), so a populated schema-level annotation changes the
+ * visible title. Nothing covered that before.
+ */
+describe('targeted annotation labels', () => {
+  afterEach(() => cleanup());
+
+  it('renders a targeted description in the explorer header', async () => {
+    const metadata = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Shop" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Annotations Target="Shop.Widget">
+        <Annotation Term="Core.Description" String="A flange assembly" />
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    render(<MetadataExplorer metadata={metadata} />);
+
+    // The description, not the type name, is the card title.
+    await waitFor(() => expect(screen.getByText('A flange assembly')).toBeDefined());
+  });
+});

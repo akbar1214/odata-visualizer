@@ -78,6 +78,39 @@ describe('handleToolCall', () => {
     expect(details.content[0].text).toContain('Category -> Test.Models.Category');
   });
 
+  it('renders a targeted description in get_entity_details', async () => {
+    const { mkdtemp, writeFile } = await import('fs/promises');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const dir = await mkdtemp(join(tmpdir(), 'mcp-test-'));
+    const file = join(dir, 'metadata.xml');
+    await writeFile(
+      file,
+      `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Test.Models" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Product">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.Int32" Nullable="false" />
+      </EntityType>
+      <Annotations Target="Test.Models.Product">
+        <Annotation Term="Core.Description" String="A sellable product" />
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`,
+      'utf-8',
+    );
+    await handleToolCall('load_metadata', { source: file, type: 'file' });
+
+    // Populating annotations changes MCP output: the label becomes a `Label:`
+    // line and the annotation an `Annotations:` entry.
+    const details = await handleToolCall('get_entity_details', { entityName: 'Product' });
+    expect(details.content[0].text).toContain('Label: A sellable product');
+    expect(details.content[0].text).toContain('- Core.Description: A sellable product');
+  });
+
   it('returns isError for unknown entity', async () => {
     const file = await writeFixture();
     await handleToolCall('load_metadata', { source: file, type: 'file' });
