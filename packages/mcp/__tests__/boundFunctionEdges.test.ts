@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { handleToolCall, resetMetadata } from '../src/tools.js';
+import { textOf } from './textOf.js';
 
 /**
  * The issue's reproduction plus a navigation property on the result type, so
@@ -57,7 +58,7 @@ beforeEach(async () => {
 describe('get_relationships reports operation edges', () => {
   it('reports the A -> B() -> C connection for the reproduction metadata', async () => {
     const result = await handleToolCall('get_relationships', { entityName: 'A' });
-    const text = result.content[0].text;
+    const text = textOf(result);
 
     expect(text).toContain('N.B()');
     expect(text).toContain('N.A -> N.C');
@@ -94,7 +95,7 @@ describe('get_relationships reports operation edges', () => {
     await handleToolCall('load_metadata', { source: file, type: 'file' });
 
     const result = await handleToolCall('get_relationships', {});
-    const text = result.content[0].text;
+    const text = textOf(result);
 
     expect(text).not.toContain('No relationships found');
     expect(text).toContain('Operation edges:');
@@ -103,19 +104,19 @@ describe('get_relationships reports operation edges', () => {
 
   it('exposes the parameters an agent must supply before composing', async () => {
     const result = await handleToolCall('get_relationships', { entityName: 'A' });
-    expect(result.content[0].text).toContain('requires: limit: Edm.Int32');
+    expect(textOf(result)).toContain('requires: limit: Edm.Int32');
   });
 
   it('does not report an unbound function as an edge', async () => {
     const result = await handleToolCall('get_relationships', {});
-    expect(result.content[0].text).not.toContain('Unbound');
+    expect(textOf(result)).not.toContain('Unbound');
   });
 });
 
 describe('list_functions names the binding type', () => {
   it('shows what a bound function is bound to', async () => {
     const result = await handleToolCall('list_functions', { bound: true });
-    expect(result.content[0].text).toContain('N.B [bound] on N.A -> N.C');
+    expect(textOf(result)).toContain('N.B [bound] on N.A -> N.C');
   });
 });
 
@@ -134,7 +135,7 @@ describe('build_function_invocation composes query options', () => {
       expand: [{ navProperty: 'Related' }],
     });
 
-    expect(emittedUrl(result.content[0].text)).toBe(
+    expect(emittedUrl(textOf(result))).toBe(
       "<serviceRoot>/As('1')/N.B()?$select=Id&$expand=Related",
     );
   });
@@ -148,7 +149,7 @@ describe('build_function_invocation composes query options', () => {
 
     // The terminal form predates this change and must stay byte-for-byte
     // identical: a parameterless function is emitted without parentheses.
-    expect(emittedUrl(result.content[0].text)).toBe("<serviceRoot>/As('1')/N.B");
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.B");
   });
 
   it('types filter literals from the function return type', async () => {
@@ -160,7 +161,7 @@ describe('build_function_invocation composes query options', () => {
       top: 2,
     });
 
-    expect(emittedUrl(result.content[0].text)).toContain("?$filter=Id%20eq%20'1'&$top=2");
+    expect(emittedUrl(textOf(result))).toContain("?$filter=Id%20eq%20'1'&$top=2");
   });
 
   it('warns when an $expand target is not on the return type', async () => {
@@ -171,7 +172,7 @@ describe('build_function_invocation composes query options', () => {
       expand: [{ navProperty: 'Nope' }],
     });
 
-    expect(result.content[0].text).toContain('"Nope" is not a navigation property of N.C');
+    expect(textOf(result)).toContain('"Nope" is not a navigation property of N.C');
   });
 
   it('produces an absolute, parseable URL with baseUrl', async () => {
@@ -184,7 +185,7 @@ describe('build_function_invocation composes query options', () => {
       baseUrl: 'https://host/svc',
     });
 
-    const url = new URL(emittedUrl(result.content[0].text));
+    const url = new URL(emittedUrl(textOf(result)));
     expect(url.pathname).toBe("/svc/As('1')/N.B()");
     expect(url.searchParams.get('$select')).toBe('Id');
     expect(url.searchParams.get('$expand')).toBe('Related');
@@ -196,6 +197,6 @@ describe('build_function_invocation composes query options', () => {
       select: ['Id'],
     });
 
-    expect(emittedUrl(result.content[0].text)).toBe('<serviceRoot>/N.Unbound()?$select=Id');
+    expect(emittedUrl(textOf(result))).toBe('<serviceRoot>/N.Unbound()?$select=Id');
   });
 });

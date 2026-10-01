@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-// @ts-expect-error -- the real config module, resolved relative to this file.
 import config from '../vitest.config';
 
 /**

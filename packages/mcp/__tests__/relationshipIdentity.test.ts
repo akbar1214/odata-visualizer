@@ -3,6 +3,7 @@ import { mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { handleToolCall, resetMetadata } from '../src/tools.js';
+import { textOf } from './textOf.js';
 
 /**
  * `B.Part` is declared before `A.Part`, and the only relationship belongs to
@@ -47,9 +48,9 @@ describe('get_relationships resolves endpoints by identity', () => {
 
     const result = await handleToolCall('get_relationships', { entityName: 'A.Part' });
 
-    expect(result.content[0].text).toContain('Part_Docs');
+    expect(textOf(result)).toContain('Part_Docs');
     // The endpoint is printed as an identity, so the namespace is visible.
-    expect(result.content[0].text).toContain('A.Part (*)');
+    expect(textOf(result)).toContain('A.Part (*)');
     resetMetadata();
   });
 
@@ -58,7 +59,7 @@ describe('get_relationships resolves endpoints by identity', () => {
 
     const result = await handleToolCall('get_relationships', { entityName: 'B.Part' });
 
-    expect(result.content[0].text).toContain('No relationships found for "B.Part"');
+    expect(textOf(result)).toContain('No relationships found for "B.Part"');
     resetMetadata();
   });
 });

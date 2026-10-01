@@ -410,8 +410,11 @@ const RESOURCE_SEGMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/
  *   `@NS.Term`              instance annotation (annotationInQuery)
  *   `@NS.Term#Qualifier`    annotated term; the caller writes the raw `#`,
  *                           which `encodeQueryValue` emits as `%23`
+ *   `Address/@NS.Term`      annotation after a structural path
+ *   `NS.Part/@NS.Term`      annotation after a type prefix
  *   `Fn(ID,Name)`           function call with parameter names; the name may
- *                           be qualified and may follow a type prefix
+ *                           be qualified and may follow a single
+ *                           optionally-qualified type prefix
  *
  * The ABNF also allows select options on a property path
  * (`Addresses($filter=…;$top=5)`, `selectProperty` / `selectOption`). They are
@@ -433,7 +436,7 @@ const SELECT_FUNCTION_CALL = `${SELECT_QUALIFIED_NAME}\\(${SELECT_IDENTIFIER}(?:
 const SELECT_ANNOTATION = `@${SELECT_QUALIFIED_NAME}(?:#${SELECT_IDENTIFIER})?`;
 const SELECT_PATH = `${SELECT_QUALIFIED_NAME}(?:\\/${SELECT_QUALIFIED_NAME})*`;
 const SELECT_ITEM = new RegExp(
-  `^(?:\\*|${SELECT_QUALIFIED_NAME}\\.\\*|${SELECT_ANNOTATION}|${SELECT_FUNCTION_CALL}|${SELECT_PATH}|${SELECT_PATH}\\/${SELECT_FUNCTION_CALL})$`,
+  `^(?:\\*|${SELECT_QUALIFIED_NAME}\\.\\*|${SELECT_ANNOTATION}|${SELECT_FUNCTION_CALL}|${SELECT_QUALIFIED_NAME}\\/${SELECT_FUNCTION_CALL}|${SELECT_PATH}|${SELECT_PATH}\\/${SELECT_ANNOTATION})$`,
 );
 
 /**
