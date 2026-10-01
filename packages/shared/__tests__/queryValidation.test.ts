@@ -301,3 +301,22 @@ describe('buildQueryUrl input validation', () => {
     });
   });
 });
+
+/**
+ * A quoted key value admitted `[`, `]`, `{` and `}` raw, and the builder emits
+ * the resource segment verbatim, so `Parts('[a]')` produced a URL `curl`
+ * rejects (`bad range in URL`) — the same headline symptom as the query options,
+ * surviving in the path. The escape form is already supported, so these are
+ * rejected like `%`, `?`, `#`, `&` and whitespace are.
+ */
+describe('key predicates reject the characters that break a URL', () => {
+  it.each(['[', ']', '{', '}'])('rejects a raw %s in a quoted key value', (char) => {
+    expect(() => buildQueryUrl({ entitySet: `Parts('a${char}b')`, top: 1 })).toThrow(
+      /key|predicate/i,
+    );
+  });
+
+  it('still accepts the percent-escaped form', () => {
+    expect(buildQueryUrl({ entitySet: "Parts('a%5Bb')", top: 1 })).toBe("/Parts('a%5Bb')?$top=1");
+  });
+});

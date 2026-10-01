@@ -264,7 +264,7 @@ describe('buildODataQuery reports why a filter row was left out', () => {
       onWarning,
     );
 
-    // Captured before the fix; the warning channel must not alter output.
+    // Captured before the encoding change; the warning channel must not alter output.
     expect(url).toBe(
       "/Items?$filter=contains(Sku,'A%26B')%20and%20Price%20gt%20100%20and%20Id%20eq%207&$select=Id,Sku&$orderby=Id%20desc&$top=10&$skip=5",
     );

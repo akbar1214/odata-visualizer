@@ -205,7 +205,7 @@ describe('buildQueryUrl', () => {
     expect(url).toBe('/Parts?$search=red%20%26%20blue');
   });
 
-  it('encodes the sort field but keeps the direction readable', () => {
+  it('encodes $orderby, including the direction', () => {
     const url = buildQueryUrl({ entitySet: 'Parts', orderBy: 'name asc' });
     expect(url).toBe('/Parts?$orderby=name%20asc');
   });

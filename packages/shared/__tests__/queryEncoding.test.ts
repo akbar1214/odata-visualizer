@@ -124,3 +124,24 @@ describe('characters outside pchar that curl tolerates are still encoded', () =>
     expect(url).toBe("/Parts?$filter=name%20eq%20'a%22b%3Cc%3Ed%5Ce%5Ef%60g%7Ch'");
   });
 });
+
+/**
+ * The bracket set was guarded by a single assertion covering all four
+ * characters at once, so one edit could remove the whole guard. These pin each
+ * character separately.
+ */
+describe('each pchar-illegal character is encoded on its own', () => {
+  it.each([
+    ['[', '%5B'],
+    [']', '%5D'],
+    ['{', '%7B'],
+    ['}', '%7D'],
+  ])('encodes %s as %s', (char, encoded) => {
+    const url = buildQueryUrl({
+      entitySet: 'Parts',
+      filters: [{ property: 'name', operator: 'eq', value: `a${char}b` }],
+    });
+
+    expect(url).toBe(`/Parts?$filter=name%20eq%20'a${encoded}b'`);
+  });
+});

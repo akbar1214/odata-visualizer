@@ -437,7 +437,7 @@ const SELECT_ITEM =
 const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // prettier-ignore
-const KEY_QUOTED_INNER = /^(?:[^'%/\\?#&\s\p{Cc}]|%(?:[01345689A-Fa-f][0-9A-Fa-f]|2[01345689A-Fa-f])|'')*$/u;
+const KEY_QUOTED_INNER = /^(?:[^'%/\\?#&\s\p{Cc}\[\]{}]|%(?:[01345689A-Fa-f][0-9A-Fa-f]|2[01345689A-Fa-f])|'')*$/u;
 
 const KEY_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
