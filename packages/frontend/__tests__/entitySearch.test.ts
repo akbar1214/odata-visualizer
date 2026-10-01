@@ -175,6 +175,62 @@ describe('createEntitySearch', () => {
   });
 });
 
+/**
+ * Populating schema-level annotations changes search ranking: a label match
+ * scores 5 and a property-name match 7, so an entity whose *description*
+ * matches outranks one whose property name matches. Nothing covered that.
+ */
+describe('a targeted description participates in ranking', () => {
+  it('ranks a label match above a property-name match', async () => {
+    const metadata = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Shop" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityType Name="Order">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Flange" Type="Edm.String" />
+      </EntityType>
+      <Annotations Target="Shop.Widget">
+        <Annotation Term="Core.Description" String="A flange assembly" />
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    const results = createEntitySearch(metadata)('flange');
+
+    expect(results.map((match) => match.entity.name)).toEqual(['Widget', 'Order']);
+    expect(results[0].reasons).toContain('label');
+  });
+
+  it('exposes annotation term names to search', async () => {
+    const metadata = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Shop" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Annotations Target="Shop.Widget">
+        <Annotation Term="Org.OData.Capabilities.V1.InsertRestrictions">
+          <Record><PropertyValue Property="Insertable" Bool="false" /></Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    const results = createEntitySearch(metadata)('insertrestrictions');
+
+    // The term name is searchable at the lowest tier.
+    expect(results.map((match) => match.entity.name)).toEqual(['Widget']);
+  });
+});
+
 describe('searchRelationships', () => {
   it('returns all relationships for an empty query', async () => {
     const metadata = await parseCSDL(csdl);
