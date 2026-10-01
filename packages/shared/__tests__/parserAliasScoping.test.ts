@@ -189,9 +189,9 @@ describe('alias registration precedence', () => {
 </edmx:Edmx>`);
 
     // `X` is a real schema, so it beats the `Alias="X"` declared on `Y`.
-    expect(model.entities.find((e) => e.name === 'Thing')!.navigationProperties[0].relationship).toBe(
-      'X.R9',
-    );
+    expect(
+      model.entities.find((e) => e.name === 'Thing')!.navigationProperties[0].relationship,
+    ).toBe('X.R9');
   });
 });
 
@@ -220,5 +220,236 @@ describe('the derived relationship carries the expanded association name', () =>
     // The derived copy used to say `Self.R1`.
     expect(model.relationships.map((r) => r.name)).toContain('N.R1');
     expect(model.relationships.some((r) => r.name === 'Self.R1')).toBe(false);
+  });
+});
+
+/**
+ * Namespaces are case-sensitive identifiers and `registry` is keyed
+ * case-sensitively, but `documentOfNamespace` was keyed lowercased — so
+ * `Foo` and `foo` both registered and the second overwrote the first, leaving
+ * the first document resolving aliases against the other's table.
+ */
+describe('namespaces differing only by case stay distinct', () => {
+  it('keeps each document resolving against its own table', async () => {
+    const external = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="foo" Alias="two" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityType Name="T2" BaseType="two.Base" />
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const model = await parseCSDL(
+      `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Foo" Alias="one" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityType Name="T1" BaseType="one.Base" />
+      <edmx:Reference Uri="https://example.org/ext.xml">
+        <edmx:Include Namespace="foo" />
+      </edmx:Reference>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`,
+      { loadExternal: async () => external },
+    );
+
+    // Collapsing the key left `Foo.T1` unexpanded, with no inheritance chain.
+    expect(model.entities.find((e) => e.qualifiedName === 'Foo.T1')!.baseType).toBe('Foo.Base');
+    expect(model.entities.find((e) => e.qualifiedName === 'foo.T2')!.baseType).toBe('foo.Base');
+  });
+});
+
+/**
+ * The three mechanisms the change advertises — per-document aliases for nested
+ * references, imports recording their own document, and annotation targets
+ * being scoped — were each unpinned: a mutant disabling them survived the suite.
+ */
+describe('per-document scoping is pinned for each mechanism', () => {
+  it('lets a nested reference declare aliases for the document that declares it', async () => {
+    // root -> B, and B's own reference declares an alias B itself uses.
+    const docB = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:Reference Uri="https://example.org/c.xml">
+    <edmx:Include Namespace="C" Alias="co" />
+  </edmx:Reference>
+  <edmx:DataServices>
+    <Schema Namespace="B" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="T" BaseType="co.R1" />
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const model = await parseCSDL(
+      `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="A" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Root">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <edmx:Reference Uri="https://example.org/b.xml"><edmx:Include Namespace="B" /></edmx:Reference>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`,
+      { loadExternal: async (uri) => (uri.includes('b.xml') ? docB : docB) },
+    );
+
+    // `co` is declared by document B's own reference, so B's type resolves it.
+    expect(model.entities.find((e) => e.qualifiedName === 'B.T')!.baseType).toBe('C.R1');
+  });
+
+  it('scopes an annotation target to the document that declares it', async () => {
+    const external = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="B" Alias="Self" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Annotations Target="Self.Thing">
+        <Annotation Term="Core.Description" String="from B" />
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const model = await parseCSDL(
+      `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="A" Alias="Self" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <edmx:Reference Uri="https://example.org/b.xml"><edmx:Include Namespace="B" /></edmx:Reference>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`,
+      { loadExternal: async () => external },
+    );
+
+    // Both documents declare `Self`. B's annotation must land on B's type only.
+    expect(
+      model.entities.find((e) => e.qualifiedName === 'B.Thing')!.annotations?.['Core.Description'],
+    ).toBe('from B');
+    expect(model.entities.find((e) => e.qualifiedName === 'A.Thing')!.annotations).toBeUndefined();
+  });
+});
+
+/** The remaining `a || b` sites are all converted, so both spellings survive. */
+describe('mixed spellings survive everywhere', () => {
+  it('keeps TypeDefinition, EntityContainer, FunctionImport and ActionImport', async () => {
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm"
+            xmlns:edm="http://docs.oasis-open.org/odata/ns/edm">
+      <TypeDefinition Name="T1" UnderlyingType="Edm.String" />
+      <edm:TypeDefinition Name="T2" UnderlyingType="Edm.String" />
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityContainer Name="C1"><EntitySet Name="Things" EntityType="N.Thing" /></EntityContainer>
+      <edm:EntityContainer Name="C2">
+        <edm:EntitySet Name="More" EntityType="N.Thing" />
+        <edm:FunctionImport Name="F" Function="N.Fn" />
+        <edm:ActionImport Name="A" Action="N.Fn" />
+      </edm:EntityContainer>
+      <Function Name="Fn"><ReturnType Type="Edm.String" /></Function>
+      <Action Name="Act" />
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+    expect(model.typeDefinitions.map((t) => t.name).sort()).toEqual(['T1', 'T2']);
+    expect(model.entityContainers.map((c) => c.name).sort()).toEqual(['C1', 'C2']);
+    expect(model.functionImports.map((f) => f.name)).toEqual(['F']);
+    expect(model.actionImports.map((a) => a.name)).toEqual(['A']);
+  });
+
+  it('keeps NavigationProperty declared under both spellings', async () => {
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm"
+            xmlns:edm="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="a" Type="Collection(N.Widget)" />
+        <edm:NavigationProperty Name="b" Type="Collection(N.Widget)" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+    // `b` was dropped, and with it the relationship derived from it.
+    expect(model.entities[0].navigationProperties.map((n) => n.name)).toEqual(['a', 'b']);
+    expect(model.relationships).toHaveLength(2);
+  });
+});
+
+/**
+ * Imports carry no namespace field, so their document is recorded directly.
+ * A mutant ignoring that lookup survived the suite — nothing exercised an
+ * import whose qualified name is alias-qualified.
+ *
+ * Two details make this discriminating rather than vacuous:
+ *  - the function is declared in the *aliased* namespace, not the container's,
+ *    so no already-resolved definition supplies the answer;
+ *  - it is declared in a schema parsed *after* the container, so the import
+ *    cannot snapshot it at parse time and must expand the alias afterwards;
+ *  - the root document declares `bf` too, pointing somewhere else, so falling
+ *    back to the wrong document is observable instead of silently agreeing.
+ */
+describe('imports resolve in their own document', () => {
+  it('expands an alias-qualified function import from a loaded document', async () => {
+    const external = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="BSvc" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityContainer Name="C">
+        <FunctionImport Name="RunIt" Function="bf.DoIt" />
+      </EntityContainer>
+    </Schema>
+    <Schema Namespace="BFuncs" Alias="bf" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <Function Name="DoIt"><ReturnType Type="Edm.String" /></Function>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const model = await parseCSDL(
+      `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="A" Alias="bf" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Root">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <edmx:Reference Uri="https://example.org/b.xml"><edmx:Include Namespace="BSvc" /></edmx:Reference>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`,
+      { loadExternal: async () => external },
+    );
+
+    // `bf` in the loaded document is `BFuncs`; ignoring the import's recorded
+    // document falls back to the root table, where `bf` is `A`.
+    expect(model.functionImports[0].qualifiedFunctionName).toBe('BFuncs.DoIt');
   });
 });

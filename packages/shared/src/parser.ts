@@ -182,7 +182,7 @@ function expandAlias(type: string, aliases: Map<string, string>, namespaces?: Se
   if (dot <= 0) return type;
 
   const prefix = type.slice(0, dot);
-  if (namespaces?.has(prefix.toLowerCase())) return type;
+  if (namespaces?.has(prefix)) return type;
 
   const namespace = aliases.get(prefix);
   return namespace ? `${namespace}${type.slice(dot)}` : type;
@@ -190,7 +190,11 @@ function expandAlias(type: string, aliases: Map<string, string>, namespaces?: Se
 
 function expandAliasesInMetadata(
   metadata: ODataMetadata,
-  aliasesForNamespace: (namespace: string | undefined, element?: object) => Map<string, string>,
+  aliasesForNamespace: (
+    namespace?: string,
+    element?: object,
+    document?: number,
+  ) => Map<string, string>,
   namespaces: Set<string>,
 ): void {
   /**
@@ -220,9 +224,11 @@ function expandAliasesInMetadata(
         : expand(nav.targetType);
       // V2 stores the association name here and a namespaced generator writes
       // `Self.R1`. V4 stores `'Collection'` or `''`, neither of which contains
-      // a dot, so expansion is a no-op for them. Idempotent with the
-      // derivation-time expansion: an expanded value has a known-namespace
-      // prefix. The `??` is a type-level assertion, not a fallback.
+      // a dot, so expansion is a no-op for them. Expanded exactly once, here:
+      // derivation expands a *copy* for the relationship name and never writes
+      // back to this field, so there is no double expansion even for a chained
+      // alias. The `??` is a type-level assertion, not a fallback — `expand`
+      // returns `undefined` only for `undefined` input, which the guard excludes.
       if (nav.relationship) nav.relationship = expand(nav.relationship) ?? nav.relationship;
     }
   }
@@ -374,7 +380,7 @@ export async function parseCSDL(
     const namespace = str(schema['@_Namespace']);
     if (!namespace || registry.has(namespace)) return;
     registry.set(namespace, schema);
-    documentOfNamespace.set(namespace.toLowerCase(), document);
+    documentOfNamespace.set(namespace, document);
     queue.push(schema);
   };
 
@@ -451,25 +457,24 @@ export async function parseCSDL(
 
   await loadReferences(rootDocument.references, nextDocumentId);
 
-  const registeredNamespaces = new Set([...registry.keys()].map((ns) => ns.toLowerCase()));
+  const registeredNamespaces = new Set(registry.keys());
   const aliasesForNamespace = (
-    namespace: string | undefined,
+    namespace?: string,
     element?: object,
+    document?: number,
   ): Map<string, string> => {
-    const document =
-      (element instanceof Object ? documentOfElement.get(element) : undefined) ??
-      (typeof (element as { document?: number } | undefined)?.document === 'number'
-        ? (element as { document: number }).document
-        : undefined) ??
-      (namespace ? documentOfNamespace.get(namespace.toLowerCase()) : undefined) ??
+    const resolved =
+      (element !== undefined ? documentOfElement.get(element) : undefined) ??
+      document ??
+      (namespace ? documentOfNamespace.get(namespace) : undefined) ??
       0;
-    return aliasesByDocument.get(document) ?? EMPTY_ALIASES;
+    return aliasesByDocument.get(resolved) ?? EMPTY_ALIASES;
   };
 
   while (queue.length > 0) {
     const schema = queue.shift() as XmlElement;
     const namespace = str(schema['@_Namespace']) || '';
-    const currentDocument = documentOfNamespace.get(namespace.toLowerCase()) ?? 0;
+    const currentDocument = documentOfNamespace.get(namespace) ?? 0;
     const entityTypeNames = new Set<string>();
 
     const entityTypes = childElements(schema, 'EntityType', 'edm');
@@ -505,9 +510,7 @@ export async function parseCSDL(
       }
     }
 
-    const typeDefElements = ensureArray(
-      schema['TypeDefinition'] || schema['edm:TypeDefinition'] || [],
-    );
+    const typeDefElements = childElements(schema, 'TypeDefinition', 'edm');
     for (const typeDefEl of typeDefElements) {
       const parsedTypeDef = parseTypeDefinition(typeDefEl, namespace);
       if (parsedTypeDef) {
@@ -539,9 +542,7 @@ export async function parseCSDL(
       }
     }
 
-    const containers = ensureArray(
-      schema['EntityContainer'] || schema['edm:EntityContainer'] || [],
-    );
+    const containers = childElements(schema, 'EntityContainer', 'edm');
     for (const container of containers) {
       const containerName = str(container['@_Name']) || '';
       const entitySets = childElements(container, 'EntitySet', 'edm');
@@ -556,9 +557,7 @@ export async function parseCSDL(
         entityContainers.push({ name: containerName, namespace, entitySets: parsedEntitySets });
       }
 
-      const funcImports = ensureArray(
-        container['FunctionImport'] || container['edm:FunctionImport'] || [],
-      );
+      const funcImports = childElements(container, 'FunctionImport', 'edm');
       for (const funcImport of funcImports) {
         const fi = parseFunctionImport(funcImport, functionDefs);
         if (fi) {
@@ -567,9 +566,7 @@ export async function parseCSDL(
         }
       }
 
-      const actImports = ensureArray(
-        container['ActionImport'] || container['edm:ActionImport'] || [],
-      );
+      const actImports = childElements(container, 'ActionImport', 'edm');
       for (const actionImport of actImports) {
         const ai = parseActionImport(actionImport, actionDefs);
         if (ai) {
@@ -599,9 +596,7 @@ export async function parseCSDL(
 
     // Schema-level annotations, applied after the model is complete so a target
     // may name anything in any schema.
-    for (const annotationsEl of ensureArray(
-      schema['Annotations'] || schema['edm:Annotations'] || [],
-    )) {
+    for (const annotationsEl of childElements(schema, 'Annotations', 'edm')) {
       const target = str(annotationsEl['@_Target']);
       if (!target) continue;
       const annotations = parseAnnotations(annotationsEl);
@@ -728,7 +723,11 @@ function relationshipFromNavigationProperty(
 function applyTargetedAnnotations(
   metadata: ODataMetadata,
   targeted: Array<{ target: string; annotations: Record<string, string>; document: number }>,
-  aliasesForNamespace: (namespace: string | undefined, element?: object) => Map<string, string>,
+  aliasesForNamespace: (
+    namespace?: string,
+    element?: object,
+    document?: number,
+  ) => Map<string, string>,
   namespaces: Set<string>,
 ): void {
   const merge = (
@@ -740,7 +739,11 @@ function applyTargetedAnnotations(
     // The namespace guard added in #25 matters here too: a prefix that names an
     // actual schema is a namespace, not an alias, so an annotation target
     // cannot be rewritten into another document's namespace.
-    const expanded = expandAlias(target, aliasesForNamespace(undefined, { document }), namespaces);
+    const expanded = expandAlias(
+      target,
+      aliasesForNamespace(undefined, undefined, document),
+      namespaces,
+    );
     const segments = expanded.split('/');
 
     // `NS.Type/Prop`. Per CSDL a schema child must be namespace-qualified, so
@@ -800,9 +803,7 @@ function parseEntitySet(entitySet: XmlElement): ODataEntitySet | null {
   if (!name || !rawType) return null;
 
   const entityType = shortName(rawType);
-  const bindings = ensureArray(
-    entitySet['NavigationPropertyBinding'] || entitySet['edm:NavigationPropertyBinding'] || [],
-  )
+  const bindings = childElements(entitySet, 'NavigationPropertyBinding', 'edm')
     .map(parseNavigationPropertyBinding)
     .filter((b): b is ODataNavigationPropertyBinding => b !== null);
 
@@ -1020,9 +1021,7 @@ function parseEntityType(entityType: XmlElement, namespace: string): ODataEntity
     properties.push(parseProperty(prop, keys));
   }
 
-  const navPropElements = ensureArray(
-    entityType['NavigationProperty'] || entityType['edm:NavigationProperty'] || [],
-  );
+  const navPropElements = childElements(entityType, 'NavigationProperty', 'edm');
   for (const navProp of navPropElements) {
     navigationProperties.push(parseNavigationProperty(navProp));
   }
@@ -1057,9 +1056,7 @@ function parseComplexType(complexType: XmlElement, namespace: string): ODataEnti
     properties.push(parseProperty(prop, []));
   }
 
-  const navPropElements = ensureArray(
-    complexType['NavigationProperty'] || complexType['edm:NavigationProperty'] || [],
-  );
+  const navPropElements = childElements(complexType, 'NavigationProperty', 'edm');
   for (const navProp of navPropElements) {
     navigationProperties.push(parseNavigationProperty(navProp));
   }
@@ -1207,7 +1204,7 @@ function annotationValue(ann: XmlElement): string {
     return 'null';
   }
 
-  const collection = ann['Collection'] ?? ann['edm:Collection'];
+  const collection = childElements(ann, 'Collection', 'edm')[0];
   if (collection !== undefined) {
     const items: string[] = [];
     for (const item of ensureArray(collection)) {
@@ -1231,9 +1228,11 @@ function annotationValue(ann: XmlElement): string {
 }
 
 function firstChildText(el: XmlElement, childName: string): string | undefined {
-  const child = el[childName] ?? el[`edm:${childName}`];
-  if (child === undefined) return undefined;
-  const items = Array.isArray(child) ? (child as unknown[]) : [child];
+  // Both spellings, not just the first — an element carrying `<String>` and
+  // `<edm:String>` otherwise lost one group of scalar annotation values.
+  const child = childElements(el, childName, 'edm');
+  if (child.length === 0) return undefined;
+  const items = child as unknown[];
   const values = items
     .map((item) => {
       if (item !== null && typeof item === 'object') {
@@ -1263,7 +1262,10 @@ function labelFromAnnotations(annotations: Record<string, string> | undefined): 
  * repeats as an array; `ensureArray` normalises both.
  */
 function childElements(owner: XmlElement, name: string, ...prefixes: string[]): XmlElement[] {
-  const elements = ensureArray(owner[name]);
+  // Copy rather than `push` into `ensureArray`'s return value: it hands back
+  // the caller's own array for a repeated element, so pushing would mutate the
+  // parsed tree.
+  const elements: XmlElement[] = [...ensureArray(owner[name])];
   for (const prefix of prefixes) {
     elements.push(...ensureArray(owner[`${prefix}:${name}`]));
   }
