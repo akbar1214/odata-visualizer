@@ -210,6 +210,21 @@ function resolveEntityArg(
   };
 }
 
+/**
+ * Filter items whose endpoint names answer to `name`.
+ *
+ * The project-wide case policy (#40): an exact-case match wins and a lowercased
+ * comparison is only the fallback. Two schemas differing only in case both
+ * answered to either spelling while both sides were lowercased, so neither
+ * namespace's relationships could be asked for precisely (#41).
+ */
+function matchNames<T>(items: T[], name: string, namesFor: (item: T) => string[]): T[] {
+  const exact = items.filter((item) => namesFor(item).includes(name));
+  if (exact.length > 0) return exact;
+  const needle = name.toLowerCase();
+  return items.filter((item) => namesFor(item).some((n) => n.toLowerCase() === needle));
+}
+
 function describeType(type: string, metadata: ODataMetadata): string {
   if (type.startsWith('Edm.')) return type;
 
@@ -847,7 +862,6 @@ export function createToolHandler(
         const entityName = asString(args['entityName']);
         let rels = metadata.relationships;
         if (entityName) {
-          const needle = entityName.toLowerCase();
           // Endpoints store the qualified identity. Match the argument against
           // the identity, its short name, and the resolved entity's names, so a
           // qualified argument reaches its own namespace rather than whichever
@@ -858,36 +872,27 @@ export function createToolHandler(
               ? identity.slice(identity.lastIndexOf('.') + 1)
               : identity;
             const entity = findEntityByName(metadata.entities, identity);
-            return [
-              identity,
-              short,
-              end.entity,
-              entity?.name ?? '',
-              entity?.qualifiedName ?? '',
-            ].map((name) => name.toLowerCase());
+            return [identity, short, end.entity, entity?.name ?? '', entity?.qualifiedName ?? ''];
           };
-          rels = rels.filter(
-            (r) => namesFor(r.from).includes(needle) || namesFor(r.to).includes(needle),
-          );
+          rels = matchNames(rels, entityName, (r) => [...namesFor(r.from), ...namesFor(r.to)]);
         }
 
         // Bound functions are not stored in `metadata.relationships`, so the
         // one tool an agent would call to ask "what connects A to C" never
         // mentioned them. They are edges in the traversal graph, and this is
-        // where that graph becomes visible.
-        const operationEdges = getTraversalEdges(metadata)
-          .filter(isFunctionEdge)
-          .filter((edge) => {
-            if (!entityName) return true;
-            const needle = entityName.toLowerCase();
-            const namesFor = (identity: string): string[] => {
-              const entity = findEntityByName(metadata.entities, identity);
-              return [identity, entity?.name ?? '', entity?.qualifiedName ?? ''].map((name) =>
-                name.toLowerCase(),
-              );
-            };
-            return namesFor(edge.from).includes(needle) || namesFor(edge.to).includes(needle);
-          });
+        // where that graph becomes visible. The same exact-case-first policy
+        // applies: a bound function's namespace is part of the question.
+        const edgeNamesFor = (identity: string): string[] => {
+          const entity = findEntityByName(metadata.entities, identity);
+          return [identity, entity?.name ?? '', entity?.qualifiedName ?? ''];
+        };
+        let operationEdges = getTraversalEdges(metadata).filter(isFunctionEdge);
+        if (entityName) {
+          operationEdges = matchNames(operationEdges, entityName, (edge) => [
+            ...edgeNamesFor(edge.from),
+            ...edgeNamesFor(edge.to),
+          ]);
+        }
 
         if (rels.length === 0 && operationEdges.length === 0) {
           return textResult(
@@ -1142,11 +1147,20 @@ function findCallableCandidates<T extends ODataAction | ODataFunction>(
   items: T[],
   name: string,
 ): T[] {
+  // #40's policy, applied here: an exact-case `qualifiedName` wins, then an
+  // exact-case `name`, and the lowercased comparison is only the fallback.
+  // Lowercasing first let `SHOP.DoIt` answer with `Shop.DoIt` — and its return
+  // type — whenever the two schemas differed only in case, so an agent built an
+  // invocation against the wrong operation signature.
+  const exactQualified = items.filter((i) => i.qualifiedName === name);
+  if (exactQualified.length > 0) return exactQualified;
+  const exactName = items.filter((i) => i.name === name);
+  if (exactName.length > 0) return exactName;
   const needle = name.toLowerCase();
-  const exact = items.filter(
+  const caseInsensitive = items.filter(
     (i) => (i.qualifiedName ?? '').toLowerCase() === needle || i.name.toLowerCase() === needle,
   );
-  if (exact.length > 0) return exact;
+  if (caseInsensitive.length > 0) return caseInsensitive;
   return items.filter((i) => i.name.toLowerCase() === shortName(name).toLowerCase());
 }
 

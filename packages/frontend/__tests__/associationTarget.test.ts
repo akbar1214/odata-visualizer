@@ -223,4 +223,114 @@ describe('association resolution does not guess', () => {
 
     expect(getTargetEntityName('Kids', widget, metadata)).toBe('Gadget');
   });
+
+  it('leaves a qualified reference to an unloaded namespace unresolved', async () => {
+    // #39. `Ext` is an `Include` alias for `doc2.xml`, which never loads, so the
+    // parser expands `Ext.R1` to `N2.R1` while N2's elements never arrive. N1's
+    // own `R1` merely shares the simple name and its roles (Widget/Gadget) match
+    // neither of the navigation property's (Alpha/Beta).
+    const metadata = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N1" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <edmx:Reference Uri="https://example.org/doc2.xml">
+        <edmx:Include Namespace="N2" Alias="Ext" />
+      </edmx:Reference>
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Kids" Relationship="Ext.R1" FromRole="Alpha" ToRole="Beta" />
+      </EntityType>
+      <EntityType Name="Gadget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Association Name="R1">
+        <End Type="N1.Widget" Role="Widget" Multiplicity="1" />
+        <End Type="N1.Gadget" Role="Gadget" Multiplicity="*" />
+      </Association>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(metadata.unresolvedReferences).toContain('https://example.org/doc2.xml');
+    expect(getTargetEntityName('Kids', widget, metadata)).toBeUndefined();
+  });
+
+  it('resolves through a same-named association whose roles agree', async () => {
+    // `Ghost` is neither a namespace in the model nor an alias the parser can
+    // expand, and the source entity's namespace declares no `R1` at all, so the
+    // only candidate is N2's. Its roles match the navigation property's, which
+    // is what makes following it corroboration rather than a guess.
+    const metadata = await parse(
+      schema(
+        'N2',
+        entity('Alpha') + entity('Beta') + association('N2', 'Alpha', 'Alpha', 'Beta', 'Beta'),
+      ) +
+        schema(
+          'N1',
+          entity(
+            'Widget',
+            '\n        <NavigationProperty Name="Kids" Relationship="Ghost.R1" FromRole="Alpha" ToRole="Beta" />',
+          ),
+        ),
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBe('Beta');
+  });
+
+  it('returns the end the ToRole names even when it is the source type', async () => {
+    // Ends declared target-first and `ToRole="Target"` names the *from* end,
+    // whose type is the source's own. Without the from-role check the identity
+    // fallthrough reads that end as the source and returns the other one.
+    const metadata = await parse(
+      schema(
+        'N',
+        entity(
+          'Widget',
+          '\n        <NavigationProperty Name="Buddy" Relationship="R1" FromRole="Other" ToRole="Target" />',
+        ) +
+          entity('Gadget') +
+          `
+      <Association Name="R1">
+        <End Type="N.Widget" Role="Target" Multiplicity="1" />
+        <End Type="N.Gadget" Role="Other" Multiplicity="*" />
+      </Association>`,
+      ),
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Buddy', widget, metadata)).toBe('Widget');
+  });
+
+  it('honours a qualifier declared only by an Association schema', async () => {
+    // N2 declares no entity types, so the qualifier is only a model namespace
+    // because relationships count too. Dropping them treats `N2.R1` as unknown
+    // and follows N1's `R1`, which points at `Frob`.
+    const metadata = await parse(
+      schema(
+        'N1',
+        entity(
+          'Widget',
+          '\n        <NavigationProperty Name="Kids" Relationship="N2.R1" FromRole="Widget" ToRole="Gadget" />',
+        ) +
+          entity('Gadget') +
+          entity('Frob') +
+          association('N1', 'Widget', 'Widget', 'Frob', 'Frob'),
+      ) +
+        schema(
+          'N2',
+          `
+      <Association Name="R1">
+        <End Type="N1.Widget" Role="Widget" Multiplicity="1" />
+        <End Type="N1.Gadget" Role="Gadget" Multiplicity="*" />
+      </Association>`,
+        ),
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBe('Gadget');
+  });
 });
