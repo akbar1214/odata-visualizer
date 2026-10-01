@@ -112,9 +112,9 @@ describe('XML Parser', () => {
     const rel = result.relationships[0];
 
     expect(rel.name).toBe('Order_Customer');
-    expect(rel.from.entity).toBe('Order');
+    expect(rel.from.entity).toBe('TestService.Models.Order');
     expect(rel.from.multiplicity).toBe('1');
-    expect(rel.to.entity).toBe('Customer');
+    expect(rel.to.entity).toBe('TestService.Models.Customer');
     expect(rel.to.multiplicity).toBe('*');
   });
 
@@ -256,8 +256,8 @@ describe('XML Parser', () => {
 
     expect(result.relationships).toHaveLength(1);
     const rel = result.relationships[0];
-    expect(rel.from.entity).toBe('Product');
-    expect(rel.to.entity).toBe('Category');
+    expect(rel.from.entity).toBe('Demo.Models.Product');
+    expect(rel.to.entity).toBe('Demo.Models.Category');
     expect(rel.from.multiplicity).toBe('1');
     expect(rel.to.multiplicity).toBe('*');
   });
@@ -288,8 +288,8 @@ describe('XML Parser', () => {
 
     expect(result.relationships).toHaveLength(1);
     const rel = result.relationships[0];
-    expect(rel.from.entity).toBe('Customer');
-    expect(rel.to.entity).toBe('Order');
+    expect(rel.from.entity).toBe('Demo.Models.Customer');
+    expect(rel.to.entity).toBe('Demo.Models.Order');
     expect(rel.from.multiplicity).toBe('*');
     expect(rel.to.multiplicity).toBe('1');
   });
@@ -467,7 +467,8 @@ describe('Windchill-like CSDL', () => {
   it('derives relationships from V4 navigation properties', async () => {
     const result = await parseCSDL(windchillCSDL);
     const rel = result.relationships.find(
-      (r) => r.from.entity === 'Part' && r.to.entity === 'CADDocument',
+      (r) =>
+        r.from.entity === 'PTC.ProdMgmt.Part' && r.to.entity === 'PTC.ProdMgmt.CADDocument',
     );
     expect(rel).toBeDefined();
     expect(rel?.name).toBe('Part_Documents');
@@ -531,10 +532,10 @@ describe('multi-namespace models', () => {
   it('derives relationships and multiplicities from Target attributes', async () => {
     const result = await parseCSDL(collidingCSDL);
     const single = result.relationships.find(
-      (r) => r.from.entity === 'Owner' && r.to.entity === 'Part',
+      (r) => r.from.entity === 'B.Owner' && r.to.entity === 'B.Part',
     );
     const collection = result.relationships.find(
-      (r) => r.from.entity === 'Owner' && r.name === 'Owner_ManyThings',
+      (r) => r.from.entity === 'B.Owner' && r.name === 'Owner_ManyThings',
     );
 
     expect(single).toBeDefined();

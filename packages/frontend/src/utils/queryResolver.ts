@@ -1,6 +1,7 @@
 import type {
   ODataMetadata,
   ODataEntity,
+  ODataAssociationEnd,
   ODataEntitySet,
   ODataProperty,
   ODataNavigationProperty,
@@ -132,15 +133,27 @@ export function getTargetEntityName(
     if (target) return target.name;
   }
 
-  // OData V3: resolve through the Association.
+  // OData V3: resolve through the Association. Association ends now store the
+  // qualified reference, so both the endpoint lookup and the source comparison
+  // work on identities; comparing `rel.from.entity === sourceEntity.name`
+  // stopped matching once the end was qualified.
   if (!nav.relationship) return undefined;
   const rel = metadata.relationships.find((r) => r.name === nav.relationship);
   if (!rel) return undefined;
 
+  const endIdentity = (end: ODataAssociationEnd): string => {
+    const target = findEntityByName(metadata.entities, end.entityQualified ?? end.entity);
+    return target
+      ? getEntitySelectionValue(target, metadata.entities)
+      : (end.entityQualified ?? end.entity);
+  };
+
   if (nav.toRole) {
-    return rel.from.role === nav.toRole ? rel.from.entity : rel.to.entity;
+    return endIdentity(rel.from.role === nav.toRole ? rel.from : rel.to);
   }
-  return rel.from.entity === sourceEntity.name ? rel.to.entity : rel.from.entity;
+  return endIdentity(rel.from) === getEntitySelectionValue(sourceEntity, metadata.entities)
+    ? endIdentity(rel.to)
+    : endIdentity(rel.from);
 }
 
 const STRING_OPERATORS = ['eq', 'ne', 'contains', 'startswith', 'endswith'];

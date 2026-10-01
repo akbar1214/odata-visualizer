@@ -55,8 +55,9 @@ function buildEndpointIndex(entities: ODataEntity[]): EndpointIndex {
 /**
  * Map a relationship endpoint to a diagram node id.
  *
- * Relationships store the *short* type name, which is not unique across
- * namespaces, so resolution happens in order of decreasing certainty:
+ * A parsed endpoint is already the qualified identity, but metadata can also be
+ * built by hand (or loaded from an older shape) with the short name in
+ * `entity`, so resolution still happens in order of decreasing certainty:
  *
  *   1. the qualified endpoint the parser recorded, if any;
  *   2. an exact-case short name that names exactly one type;
