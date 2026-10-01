@@ -156,10 +156,20 @@ function resolveEntityArg(
   }
   if (matches.length === 1) return { entity: matches[0] };
 
-  const exact = matches.find(
+  // Exact case first, then the lowercased comparison. `findEntityByName` in
+  // `shared` applies the same policy; this call site disambiguates for itself,
+  // so it has to apply it too — otherwise `SHOP.Order` answered with
+  // `Shop.Order`'s shape whenever both schemas declared the type.
+  // Same key as the comparison below, just exact-case first. Note it is
+  // `qualifiedName ?? name`, not `name`: a bare short name must still report
+  // ambiguity rather than resolving to the first type that happens to share it.
+  const exact = matches.find((e) => (e.qualifiedName ?? e.name) === name);
+  if (exact) return { entity: exact };
+
+  const caseInsensitive = matches.find(
     (e) => (e.qualifiedName ?? e.name).toLowerCase() === name.toLowerCase(),
   );
-  if (exact) return { entity: exact };
+  if (caseInsensitive) return { entity: caseInsensitive };
 
   return {
     error: errorResult(

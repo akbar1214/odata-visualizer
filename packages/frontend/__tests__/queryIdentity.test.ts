@@ -214,8 +214,13 @@ describe('a case-only collision is still an ambiguity', () => {
     const metadata = await parseCSDL(csdl);
     const widget = findEntity('A.Widget', metadata.entities)!;
 
-    // `part` alone resolves to A.Part, which is a different type.
-    expect(findEntity('part', metadata.entities)!.qualifiedName).toBe('A.Part');
+    // A bare short name is still not a safe identity. `PART` matches nothing
+    // exactly, so it falls back to document order and lands on A.Part.
+    expect(findEntity('PART', metadata.entities)!.qualifiedName).toBe('A.Part');
+    // A name spelled exactly resolves to the type spelled that way (#40's
+    // exact-case policy), so `part` reaches B.part. The identity below is still
+    // qualified: it must survive a caller who writes any other spelling.
+    expect(findEntity('part', metadata.entities)!.qualifiedName).toBe('B.part');
     expect(getTargetEntityName('Docs', widget, metadata)).toBe('B.part');
   });
 });
