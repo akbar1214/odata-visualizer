@@ -349,13 +349,26 @@ export function getTargetEntityName(
 
   // An unrecognised qualifier is almost always a namespace this model does not
   // contain: since #34 the parser expands `Schema/@Alias` and `Include` aliases
-  // inline, so an alias would have been rewritten before it arrived here. The
-  // named namespace's elements never loaded, so `sameName` can only offer
-  // associations that happen to share the simple name. The source namespace
-  // narrows that guess, but the navigation property's roles are what corroborate
-  // it; a namesake whose ends carry neither role is not the association that was
-  // meant (#39), and following it turned the pre-#35 `undefined` into a
-  // confident wrong answer.
+  // inline, so an alias would have been rewritten before it arrived here.
+  //
+  // When some referenced document never loaded, that qualifier may simply name
+  // the namespace that did not arrive — and no same-named association here can
+  // corroborate itself against the missing one. The one-role rule below accepts
+  // a namesake sharing a single role name (the pre-existing #35 test requires
+  // that), which turned this case into the confident wrong answer #39 was
+  // about, so an unresolved-qualifier reference stays unresolved (#73).
+  // Unqualified references are exempt: there is no namespace to be missing,
+  // and the source namespace's fallback is still the best available answer.
+  if (qualifier !== undefined && !qualified && metadata.unresolvedReferences?.length) {
+    return undefined;
+  }
+
+  // With every reference loaded the qualifier is a stray name (`Ghost` in the
+  // tests) rather than a missing document, and the navigation property's roles
+  // are what corroborate a namesake: one whose ends carry neither role is not
+  // the association that was meant (#39), and following it turned the pre-#35
+  // `undefined` into a confident wrong answer. The source namespace then
+  // narrows the guess.
   const guessed = sameName.filter(
     (r) =>
       !nav.toRole ||

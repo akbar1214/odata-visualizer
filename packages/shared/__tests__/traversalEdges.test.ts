@@ -371,12 +371,35 @@ describe('bound functions on a base type', () => {
   </edmx:DataServices>
 </edmx:Edmx>`;
 
+  /**
+   * A malformed-but-parseable document: the parser keeps both `Base`
+   * declarations, and both share the identity `N.Base`. Without the dedup
+   * guard the function would emit `N.Base -> C` once per declaration.
+   */
+  const DUPLICATE_DECLARATION = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base" />
+      <EntityType Name="Base" />
+      <EntityType Name="Derived" BaseType="N.Base" />
+      <EntityType Name="C" />
+      <Function Name="B" IsBound="true">
+        <Parameter Name="it" Type="N.Base" />
+        <ReturnType Type="N.C" />
+      </Function>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
   it('derives exactly one edge from the binding type and each derived type', async () => {
     const { edges } = await edgesOf(INHERITED);
     const operations = edges.filter(isFunctionEdge);
 
     expect(operations).toHaveLength(2);
-    expect(operations.map((e) => e.from).sort()).toEqual(['Base', 'Derived']);
+    // Entity document order: `Base` is declared before `Derived`, so its edge
+    // comes first. Not sorted — the order is promised and must stay pinned.
+    expect(operations.map((e) => e.from)).toEqual(['Base', 'Derived']);
     expect(operations.map((e) => e.to)).toEqual(['C', 'C']);
     expect(operations.every((e) => e.functionName === 'B')).toBe(true);
   });
@@ -424,8 +447,23 @@ describe('bound functions on a base type', () => {
 </edmx:Edmx>`);
     const operations = edges.filter(isFunctionEdge);
 
-    expect(operations.map((e) => e.from).sort()).toEqual(['Base', 'Derived', 'Mid']);
+    // Declaration order, not inheritance distance: `Base` then `Mid` then
+    // `Derived`, each one step deeper.
+    expect(operations.map((e) => e.from)).toEqual(['Base', 'Mid', 'Derived']);
     expect(findPaths('Derived', 'C', metadata)).toHaveLength(1);
+  });
+
+  it('emits one edge per identity when a type is declared twice', async () => {
+    // #70.1: the dedup guard in the inheritor index. Both `Base` entries carry
+    // the identity `N.Base`, so without `!sources.includes(from)` the function's
+    // edge from that identity is emitted twice.
+    const { metadata, edges } = await edgesOf(DUPLICATE_DECLARATION);
+    const operations = edges.filter(isFunctionEdge);
+
+    expect(metadata.entities.filter((e) => e.name === 'Base')).toHaveLength(2);
+    expect(operations.map((e) => e.from)).toEqual(['N.Base', 'Derived']);
+    expect(operations.map((e) => e.to)).toEqual(['C', 'C']);
+    expect(findPaths('N.Base', 'C', metadata)).toHaveLength(1);
   });
 
   it('does not walk an edge from a type that only inherits from the binding type', async () => {
@@ -448,8 +486,50 @@ describe('bound functions on a base type', () => {
 </edmx:Edmx>`);
     const operations = edges.filter(isFunctionEdge);
 
-    expect(operations.map((e) => e.from).sort()).toEqual(['Derived', 'Mid']);
+    // The binding type first (declared before its inheritors), then the
+    // inheriting type.
+    expect(operations.map((e) => e.from)).toEqual(['Mid', 'Derived']);
     expect(findPaths('Base', 'C', metadata)).toEqual([]);
+  });
+});
+
+/**
+ * #70.3: a function bound to a base type and returning one of its inheritors
+ * gives the returned type a self-loop (`Derived -> Derived`) beside the base's
+ * edge. `getReachableEntities` keys its visited set by edge, so the returned
+ * type is enqueued once and then visited again, listing the self-loop step once
+ * per visit. The duplication predates #68 — a pure navigation self-loop does
+ * the same on unmodified code — and is recorded here rather than fixed:
+ * consumers that need distinct steps (PathFinder) dedup through a Set, and
+ * changing the walk would change the navigation-edge output.
+ */
+describe('a base-bound function returning a derived type', () => {
+  const SELF_LOOP = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base" />
+      <EntityType Name="Derived" BaseType="N.Base" />
+      <Function Name="T" IsBound="true">
+        <Parameter Name="it" Type="N.Base" />
+        <ReturnType Type="N.Derived" />
+      </Function>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('lists the self-loop step once per visit', async () => {
+    const metadata = await parseCSDL(SELF_LOOP);
+    const steps = getReachableEntities('Derived', metadata).get('Derived') ?? [];
+
+    expect(steps.map((s) => s.to)).toEqual(['Derived', 'Derived']);
+    expect(steps.every((s) => isFunctionEdge(s.edge) && s.edge.functionName === 'T')).toBe(true);
+    // The base type still reaches the derived type through the same function.
+    expect(
+      getReachableEntities('Base', metadata)
+        .get('Base')
+        ?.map((s) => s.to),
+    ).toEqual(['Derived']);
   });
 });
 
