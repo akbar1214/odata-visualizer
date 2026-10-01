@@ -437,6 +437,11 @@ const SELECT_ITEM =
 const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // prettier-ignore
+// The `\[` is required, not useless: under the `u` flag an unescaped `[` inside
+// a character class does not match literally, so removing it silently drops the
+// bracket from the guard — which is exactly what the linter suggested and what
+// `queryValidation.test.ts` caught.
+// eslint-disable-next-line no-useless-escape
 const KEY_QUOTED_INNER = /^(?:[^'%/\\?#&\s\p{Cc}\[\]{}]|%(?:[01345689A-Fa-f][0-9A-Fa-f]|2[01345689A-Fa-f])|'')*$/u;
 
 const KEY_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
