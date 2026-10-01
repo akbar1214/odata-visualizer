@@ -398,6 +398,13 @@ function sampleScalar(type: string, metadata: ODataMetadata): unknown {
  * Values are treated as raw data, never as pre-encoded URL text: a literal `%`
  * becomes `%25`. Accepting a caller's `%2F` would otherwise smuggle a path
  * separator through.
+ *
+ * `+` and `;` are RFC-legal raw in a path and curl accepts both, but their
+ * meaning is not stable across stacks: `;` is a path-parameter delimiter to
+ * servlet containers (`/Parts;jsessionid=…`) and some legacy decoders read `+`
+ * as a space outside the query string. Path values are data, so both are
+ * encoded. The query side keeps `;` raw because a nested `$expand` uses it as a
+ * separator — there it is structure, not data.
  */
 const PATH_UNSAFE = new Set([
   ' ',
@@ -416,6 +423,8 @@ const PATH_UNSAFE = new Set([
   ']',
   '%',
   '/',
+  '+',
+  ';',
 ]);
 
 /**

@@ -128,6 +128,45 @@ describe('metadata-derived identifiers are encoded', () => {
 });
 
 /**
+ * `+` and `;` are RFC-legal raw in a path and curl accepts both, but their
+ * meaning is not stable across stacks: servlet containers treat `;` as a
+ * path-parameter delimiter (`/Parts;jsessionid=…`), and legacy decoders turn
+ * `+` into a space outside the query string. Path values are data, and a server
+ * percent-decodes before matching, so encoding both is the safe side of the
+ * trade. The query side has the opposite policy for `;` because nested
+ * `$expand` uses it as a separator — there it is structure, not data.
+ */
+describe('path values encode + and ;', () => {
+  it('encodes + and ; in an inline parameter value', async () => {
+    const handler = await hostileHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'Get#It',
+      parameters: { 'P#1': 'a+b;c' },
+      baseUrl: 'https://host/svc',
+    });
+
+    const url = emittedUrl(result.content[0].text);
+    expect(url).toContain("P%231='a%2Bb%3Bc'");
+    expect(decodeURIComponent(url)).toContain("'a+b;c'");
+  });
+
+  it('encodes + and ; in a key value', async () => {
+    const handler = await hostileHandler();
+    const result = await handler('build_action_invocation', {
+      actionName: 'Do#It',
+      entitySet: 'Th#ings',
+      keys: { 'A#1': 'x+y;z', B: 'b' },
+      parameters: { Note: 'n' },
+      baseUrl: 'https://host/svc',
+    });
+
+    const url = emittedUrl(result.content[0].text);
+    expect(url).toContain("(A%231='x%2By%3Bz',B='b')");
+    expect(decodeURIComponent(url)).toContain("'x+y;z'");
+  });
+});
+
+/**
  * Every MCP tool that splices a caller-supplied `baseUrl` in front of a path
  * must validate it: a space makes curl reject the whole URL, a `#` turns the
  * generated path into a fragment, and a `?` folds it into a query string.
