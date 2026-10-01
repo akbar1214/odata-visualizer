@@ -503,10 +503,18 @@ function placeholderKeySegment(
   const literalFor = (keyName: string) =>
     placeholderKeyLiteral(properties.find((p) => p.name === keyName)?.type);
 
+  if (keys.length === 0) {
+    // A keyless type has no key to replace the placeholder with, so the
+    // generic "replace it" note would be misleading: no valid single-entity
+    // path exists, and the placeholder only sketches the shape.
+    onWarning?.(
+      `${entityName} declares no key, so no single-entity path can be built; the placeholder ${PLACEHOLDER_KEY} sketches the shape only.`,
+    );
+    return `(${PLACEHOLDER_KEY})`;
+  }
   onWarning?.(
     `The preview uses key placeholder ${PLACEHOLDER_KEY} on ${entityName}; replace it with a real key.`,
   );
-  if (keys.length === 0) return `(${PLACEHOLDER_KEY})`;
   if (keys.length === 1) return `(${literalFor(keys[0])})`;
   return `(${keys.map((key) => `${key}=${literalFor(key)}`).join(',')})`;
 }

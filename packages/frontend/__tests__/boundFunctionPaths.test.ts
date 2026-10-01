@@ -295,6 +295,43 @@ describe('the query builder emits the function segment', () => {
     expect(url).toBe("/Ms(Num=1,Code='1')/N.FromM()");
   });
 
+  it('says a keyless type cannot be addressed rather than asking for a key', async () => {
+    const keyless = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="K"><Property Name="Name" Type="Edm.String" /></EntityType>
+      <Function Name="FromK" IsBound="true">
+        <Parameter Name="it" Type="N.K" />
+        <ReturnType Type="N.K" />
+      </Function>
+      <EntityContainer Name="C1"><EntitySet Name="Ks" EntityType="N.K" /></EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    const warnings: string[] = [];
+    const url = buildODataQuery(
+      segmentQuery({
+        entityName: 'K',
+        sourceEntity: 'K',
+        segment: {
+          name: 'FromK',
+          qualifiedName: 'N.FromK',
+          parameters: [],
+          bindingIsCollection: false,
+          returnsCollection: false,
+        },
+      }),
+      keyless,
+      (message) => warnings.push(message),
+    );
+
+    expect(url).toBe("/Ks('1')/N.FromK()");
+    expect(warnings).toEqual([
+      "K declares no key, so no single-entity path can be built; the placeholder '1' sketches the shape only.",
+    ]);
+  });
+
   it('refuses an invalid qualified function name with a warning', async () => {
     const metadata = await model();
     const warnings: string[] = [];
