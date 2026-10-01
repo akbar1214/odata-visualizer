@@ -1,4 +1,4 @@
-import { parseCSDL, type ODataMetadata } from '@odata-visualizer/shared';
+import { normalizeBaseUrl, parseCSDL, type ODataMetadata } from '@odata-visualizer/shared';
 import { parseCSDLFile, parseCSDLUrl } from '@odata-visualizer/shared/load';
 import type { MetadataSourceType } from './store.js';
 
@@ -28,10 +28,9 @@ export async function loadMetadataFromSource(source: MetadataSource): Promise<OD
 
 /** Fetch the metadata the backend currently holds for the uploaded file. */
 async function loadFromBackend(baseUrl?: string): Promise<ODataMetadata> {
-  const base = (baseUrl || process.env['ODATA_BACKEND_URL'] || DEFAULT_BACKEND_URL).replace(
-    /\/+$/,
-    '',
-  );
+  // Validated, not spliced: a `#` here silently truncated the request to the
+  // path before it, and the error message then named a URL never requested.
+  const base = normalizeBaseUrl(baseUrl || process.env['ODATA_BACKEND_URL'] || DEFAULT_BACKEND_URL);
 
   const response = await fetch(`${base}/api/metadata/current`, {
     headers: { Accept: 'application/json' },

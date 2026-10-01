@@ -863,6 +863,55 @@ function validateExpand(expands: ExpandNode[]): void {
 }
 
 /**
+ * Characters a `baseUrl` may never contain.
+ *
+ * `new URL()` is the shape check, but on its own it is not enough: WHATWG URL
+ * percent-encodes a raw space in a path, silently strips tab, newline and
+ * carriage return, and rewrites `\` to `/` in special schemes. A baseUrl that
+ * is quietly rewritten is worse than one that is refused, so those are rejected
+ * before parsing. `#` and `?` parse fine but are wrong for a service root: a `#`
+ * makes everything after it a fragment, and a `?` folds the generated resource
+ * path into the query string. Both fail silently, which is the point.
+ */
+// `\[`, `\]`, `\{` and `\}` are curl glob syntax: `a[b]` is a range and
+// `a{b,c}d` expands into *two* requests, so a brace in a service root
+// silently fans out to two resources. `\p{Cs}` catches a lone surrogate,
+// which cannot be represented in a URL at all.
+// eslint-disable-next-line no-useless-escape -- required under the `u` flag
+const BASE_URL_REJECTED = /[\s\p{Cc}\p{Cf}\p{Cs}\\#?\[\]{}]/u;
+
+/**
+ * Validate a service root and strip trailing slashes.
+ *
+ * `baseUrl` is a URL prefix, not data, so it is validated rather than encoded:
+ * percent-encoding it would change its structure instead of preserving it. The
+ * check lives in `shared` because every consumer splices it into a URL — the
+ * query builder and the MCP invocation builders — and one implementation keeps
+ * them from drifting.
+ */
+export function normalizeBaseUrl(baseUrl: string): string {
+  if (BASE_URL_REJECTED.test(baseUrl)) {
+    throw new Error(
+      `Invalid baseUrl: ${JSON.stringify(baseUrl)}. A service root must be a URL with no whitespace, backslash, "#" or "?" — a "#" would turn the generated path into a fragment and a "?" would fold it into a query string.`,
+    );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error(
+      `Invalid baseUrl: ${JSON.stringify(baseUrl)}. Expected an absolute URL, e.g. "https://host/service".`,
+    );
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      `Invalid baseUrl: ${JSON.stringify(baseUrl)}. Expected an http or https URL, got "${parsed.protocol}".`,
+    );
+  }
+  return baseUrl.replace(/\/+$/, '');
+}
+
+/**
  * Build an OData V4 query URL (relative to the service root, or absolute
  * when baseUrl is given).
  */
@@ -974,8 +1023,7 @@ export function buildQueryUrl(options: QueryOptions): string {
 
   const path = `/${entitySet}${params.length > 0 ? `?${params.join('&')}` : ''}`;
   if (options.baseUrl) {
-    const base = options.baseUrl.replace(/\/+$/, '');
-    return `${base}${path}`;
+    return `${normalizeBaseUrl(options.baseUrl)}${path}`;
   }
   return path;
 }

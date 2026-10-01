@@ -19,6 +19,7 @@ import {
   getEffectiveNavigationProperties,
   getEffectiveProperties,
   INTEGER_TYPES,
+  normalizeBaseUrl,
   resolveInheritanceChain,
   resourcePathOf,
   suggestNames,
@@ -321,7 +322,7 @@ function formatCallableDetails(
         s.entityTypeQualified === shortName(bindingType) ||
         s.entityType === bindingType,
     );
-    const setPath = set?.name ?? '<EntitySet>';
+    const setPath = set ? encodeIdentifierForUrl(set.name) : '<EntitySet>';
     const setEntity = set
       ? findEntityByName(metadata.entities, set.entityTypeQualified ?? set.entityType)
       : undefined;
@@ -329,19 +330,23 @@ function formatCallableDetails(
     const keyLiteral =
       keyNames.length > 0
         ? keyNames.length === 1
-          ? `${keyNames[0]}=<${keyNames[0]}>`
-          : keyNames.map((k) => `${k}=<${k}>`).join(',')
+          ? `${encodeIdentifierForUrl(keyNames[0])}=<${encodeIdentifierForUrl(keyNames[0])}>`
+          : keyNames
+              .map((k) => `${encodeIdentifierForUrl(k)}=<${encodeIdentifierForUrl(k)}>`)
+              .join(',')
         : '<key>';
-    const root = baseUrl ? baseUrl.replace(/\/+$/, '') : '<serviceRoot>';
-    lines.push(`  ${root}/${setPath}(${keyLiteral})/${item.qualifiedName ?? item.name}`);
+    const root = baseUrl ? normalizeBaseUrl(baseUrl) : '<serviceRoot>';
+    lines.push(
+      `  ${root}/${setPath}(${keyLiteral})/${encodeIdentifierForUrl(item.qualifiedName ?? item.name)}`,
+    );
     if (set && !setEntity) {
       lines.push(
         `  Note: entity set "${set.name}" references type "${set.entityTypeQualified ?? set.entityType}", which is not defined in the loaded metadata.`,
       );
     }
   } else {
-    const root = baseUrl ? baseUrl.replace(/\/+$/, '') : '<serviceRoot>';
-    lines.push(`  ${root}/${importName ?? item.name}`);
+    const root = baseUrl ? normalizeBaseUrl(baseUrl) : '<serviceRoot>';
+    lines.push(`  ${root}/${encodeIdentifierForUrl(importName ?? item.name)}`);
   }
   lines.push(`  Parameters: ${JSON.stringify(example)}`);
   lines.push(
@@ -393,6 +398,13 @@ function sampleScalar(type: string, metadata: ODataMetadata): unknown {
  * Values are treated as raw data, never as pre-encoded URL text: a literal `%`
  * becomes `%25`. Accepting a caller's `%2F` would otherwise smuggle a path
  * separator through.
+ *
+ * `+` and `;` are RFC-legal raw in a path and curl accepts both, but their
+ * meaning is not stable across stacks: `;` is a path-parameter delimiter to
+ * servlet containers (`/Parts;jsessionid=…`) and some legacy decoders read `+`
+ * as a space outside the query string. Path values are data, so both are
+ * encoded. The query side keeps `;` raw because a nested `$expand` uses it as a
+ * separator — there it is structure, not data.
  */
 const PATH_UNSAFE = new Set([
   ' ',
@@ -411,6 +423,11 @@ const PATH_UNSAFE = new Set([
   ']',
   '%',
   '/',
+  // `+` and `;` are encoded in values this layer *renders*. Caller-supplied key
+  // predicates are used verbatim (`KEY_QUOTED_INNER` accepts both raw), so the
+  // rule is not global — see the note in `shared/src/query.ts`.
+  '+',
+  ';',
 ]);
 
 /**
@@ -422,6 +439,25 @@ const PATH_UNSAFE = new Set([
  */
 function encodeLiteralForUrl(literal: string): string {
   return percentEncode(literal, PATH_UNSAFE);
+}
+
+/**
+ * Characters that are structural in the positions an identifier occupies, on
+ * top of the path-unsafe set.
+ *
+ * Metadata names are emitted where OData syntax also uses `(` and `)` (key
+ * predicates and inline parameter lists), `,` and `=` (compound keys, parameter
+ * lists) and `'` (string literals). A name containing one of those is invalid
+ * CSDL, but the parser accepts it on purpose, and emitting it raw would
+ * silently address a different resource. Encoding keeps the name inside one
+ * segment and unambiguous; the server percent-decodes before matching, so a
+ * lenient server spelling a set `Th#ings` still answers to `Th%23ings`.
+ */
+const IDENTIFIER_UNSAFE = new Set([...PATH_UNSAFE, '(', ')', ',', '=', "'"]);
+
+/** Percent-encode a metadata-derived identifier for its position in a URL. */
+function encodeIdentifierForUrl(identifier: string): string {
+  return percentEncode(identifier, IDENTIFIER_UNSAFE);
 }
 
 function buildKeySegment(
@@ -444,7 +480,7 @@ function buildKeySegment(
   return `(${keyNames
     .map((name) => {
       const type = properties.find((p) => p.name === name)?.type;
-      return `${name}=${encodeLiteralForUrl(formatV4Literal(keys[name], type))}`;
+      return `${encodeIdentifierForUrl(name)}=${encodeLiteralForUrl(formatV4Literal(keys[name], type))}`;
     })
     .join(',')})`;
 }
@@ -859,9 +895,15 @@ export function createToolHandler(
         const importName = metadata.actionImports.find(
           (i) => i.qualifiedActionName === action.qualifiedName || i.actionName === action.name,
         )?.name;
-        return textResult(
-          formatCallableDetails(action, metadata, importName, asString(args['baseUrl']), false),
-        );
+        try {
+          return textResult(
+            formatCallableDetails(action, metadata, importName, asString(args['baseUrl']), false),
+          );
+        } catch (error) {
+          return errorResult(
+            `Error building invocation sketch: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          );
+        }
       }
 
       case 'get_function_details': {
@@ -883,9 +925,15 @@ export function createToolHandler(
         const importName = metadata.functionImports.find(
           (i) => i.qualifiedFunctionName === func.qualifiedName || i.functionName === func.name,
         )?.name;
-        return textResult(
-          formatCallableDetails(func, metadata, importName, asString(args['baseUrl']), true),
-        );
+        try {
+          return textResult(
+            formatCallableDetails(func, metadata, importName, asString(args['baseUrl']), true),
+          );
+        } catch (error) {
+          return errorResult(
+            `Error building invocation sketch: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          );
+        }
       }
 
       case 'list_enums': {
@@ -1079,7 +1127,7 @@ function buildInvocationUnsafe(
   const keys = (args['keys'] as Record<string, string> | undefined) ?? {};
   const rawParameters = (args['parameters'] as Record<string, unknown> | undefined) ?? {};
   const baseUrl = asString(args['baseUrl']);
-  const root = (baseUrl ?? '<serviceRoot>').replace(/\/+$/, '');
+  const root = baseUrl ? normalizeBaseUrl(baseUrl) : '<serviceRoot>';
 
   assertKnownParameters(item, rawParameters);
 
@@ -1122,7 +1170,7 @@ function buildInvocationUnsafe(
     } catch (error) {
       return errorResult(`Error: ${error instanceof Error ? error.message : 'Invalid keys'}`);
     }
-    path = `${set.name}${keySegment}/${item.qualifiedName ?? item.name}`;
+    path = `${encodeIdentifierForUrl(set.name)}${keySegment}/${encodeIdentifierForUrl(item.qualifiedName ?? item.name)}`;
   } else {
     const importName = isFunction
       ? metadata.functionImports.find(
@@ -1133,7 +1181,7 @@ function buildInvocationUnsafe(
         )?.name;
     // V4 addresses an unbound operation by its import name, or by the
     // qualified operation name when no import exists.
-    path = importName ?? item.qualifiedName ?? item.name;
+    path = encodeIdentifierForUrl(importName ?? item.qualifiedName ?? item.name);
   }
 
   const inline = isFunction ? formatInlineParams(item, parameters) : '';
@@ -1182,8 +1230,9 @@ function formatInlineParams(
     const type = declaredParameterType(item, name);
     const literal = type ? formatFunctionParamLiteral(type, value) : formatV4Literal(String(value));
     // Only the value is encoded; the `name=` and the joining commas are OData
-    // syntax, not data.
-    return `${name}=${encodeLiteralForUrl(literal)}`;
+    // syntax, not data. The name itself is metadata-derived, so it is encoded
+    // for the identifier position rather than emitted verbatim.
+    return `${encodeIdentifierForUrl(name)}=${encodeLiteralForUrl(literal)}`;
   });
   return `(${rendered.join(',')})`;
 }
