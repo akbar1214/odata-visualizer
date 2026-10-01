@@ -60,6 +60,24 @@ describe('aliases are scoped to their own document', () => {
   });
 
   it('keeps an Include alias scoped to the document that declared it', async () => {
+    // The loaded document declares `O` as well, pointing at itself. A global
+    // first-wins table let the referencing document's `O` win, so the loaded
+    // document's own types resolved through a stranger's alias. The external
+    // assertion below is the discriminating one; the nav relationship alone
+    // passes either way.
+    const colliding = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="B" Alias="O" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base">
+        <Key><PropertyRef Name="Bid" /></Key>
+        <Property Name="Bid" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityType Name="Ext" BaseType="O.Base" />
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
     const model = await parseCSDL(
       `<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
@@ -76,9 +94,11 @@ describe('aliases are scoped to their own document', () => {
     </Schema>
   </edmx:DataServices>
 </edmx:Edmx>`,
-      { loadExternal: async () => external },
+      { loadExternal: async () => colliding },
     );
 
+    // The loaded document's `O` is its own; it must not resolve to `External`.
+    expect(model.entities.find((e) => e.qualifiedName === 'B.Ext')!.baseType).toBe('B.Base');
     // The reference's `Include` alias belongs to the referencing document.
     expect(model.entities[0].navigationProperties[0].relationship).toBe('External.R9');
   });
@@ -168,6 +188,10 @@ describe('alias registration precedence', () => {
     expect(model.entities[0].navigationProperties[0].relationship).toBe('Mine.R9');
   });
 
+  // Passes against unfixed `main` too, but for the wrong reason: main never
+  // expanded `NavigationProperty/@Relationship` at all, so it returned the raw
+  // value whatever the guard said. Against this branch it is meaningful —
+  // disabling the guard fails it.
   it('gives a schema its own namespace back, never another document aliasing it', async () => {
     const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
@@ -451,5 +475,129 @@ describe('imports resolve in their own document', () => {
     // `bf` in the loaded document is `BFuncs`; ignoring the import's recorded
     // document falls back to the root table, where `bf` is `A`.
     expect(model.functionImports[0].qualifiedFunctionName).toBe('BFuncs.DoIt');
+  });
+});
+
+/**
+ * A relationship derived from a navigation property is named during parsing,
+ * so its `@Relationship` is expanded against the *schema's* document. Using the
+ * root document's table instead still produced a plausible name — the root's
+ * alias — while disagreeing with the navigation property it came from.
+ */
+describe('derived relationships resolve in their own document', () => {
+  it('expands a relationship against the document that declares it', async () => {
+    const external = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="E2" Alias="Self" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Kids" Type="Collection(Self.Widget)" Relationship="Self.R1" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const model = await parseCSDL(
+      `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="A" Alias="Self" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Root">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <edmx:Reference Uri="https://example.org/e2.xml"><edmx:Include Namespace="E2" /></edmx:Reference>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`,
+      { loadExternal: async () => external },
+    );
+
+    // Both documents alias `Self`. Against the root table this expands to the
+    // root's `A.R1` — a name belonging to a document that never declared it.
+    expect(model.relationships.find((r) => r.from.entityQualified === 'E2.Widget')!.name).toBe(
+      'E2.R1',
+    );
+    // And it must agree with the navigation property it was derived from.
+    expect(
+      model.entities.find((e) => e.qualifiedName === 'E2.Widget')!.navigationProperties[0]
+        .relationship,
+    ).toBe('E2.R1');
+  });
+});
+
+/**
+ * Merging the two spellings by reading each in turn put every unprefixed
+ * element first, reordering a document that declares the prefixed form first.
+ * Order is observable: an unqualified annotation target is resolved with
+ * `findEntityByName`, which is first-match-wins.
+ */
+describe('mixed spellings are merged in document order', () => {
+  it('keeps entity types in the order the document declares them', async () => {
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm"
+            xmlns:edm="http://docs.oasis-open.org/odata/ns/edm">
+      <edm:EntityType Name="Zebra">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </edm:EntityType>
+      <EntityType Name="Apple">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+    expect(model.entities.map((e) => e.name)).toEqual(['Zebra', 'Apple']);
+  });
+});
+
+/**
+ * A reference's `Include` aliases are declared by the *referencing* document,
+ * so they must apply whether or not the referenced document loads. Root-level
+ * references already behaved that way; a nested one registered its aliases only
+ * after a successful fetch, so a failed load silently dropped them.
+ */
+describe('a reference keeps its aliases when its target cannot load', () => {
+  it('expands types through an alias whose document never arrived', async () => {
+    const midDoc = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:Reference Uri="https://example.org/missing.xml">
+    <edmx:Include Namespace="Missing" Alias="miss" />
+  </edmx:Reference>
+  <edmx:DataServices>
+    <Schema Namespace="Mid" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="T" BaseType="miss.Base" />
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const model = await parseCSDL(
+      `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="A" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Root">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <edmx:Reference Uri="https://example.org/mid.xml"><edmx:Include Namespace="Mid" /></edmx:Reference>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`,
+      {
+        loadExternal: async (uri: string) => {
+          if (uri.includes('mid.xml')) return midDoc;
+          throw new Error(`unreachable: ${uri}`);
+        },
+      },
+    );
+
+    expect(model.entities.find((e) => e.qualifiedName === 'Mid.T')!.baseType).toBe('Missing.Base');
   });
 });

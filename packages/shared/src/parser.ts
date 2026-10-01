@@ -419,6 +419,12 @@ export async function parseCSDL(
   const loadReferences = async (references: XmlElement[], document: number): Promise<void> => {
     for (const reference of references) {
       const uri = str(reference['@_Uri']);
+      // A reference's `Include` aliases are declared by the *referencing*
+      // document, so they belong to it whether or not the referenced document
+      // loads and whether or not it was already visited. Registering this
+      // inside the `try` below meant a failed fetch silently dropped aliases
+      // that a root-level reference would have kept.
+      registerAliases(reference, document);
       if (!uri) continue;
 
       if (!options.loadExternal) {
@@ -446,8 +452,6 @@ export async function parseCSDL(
           registerSchema(schema, externalDocumentId);
           registerAliases(schema, externalDocumentId);
         }
-        // Includes on the reference describe aliases the *including* document uses.
-        registerAliases(reference, document);
         await loadReferences(externalDocument.references, externalDocumentId);
       } catch {
         if (!unresolvedReferences.includes(uri)) unresolvedReferences.push(uri);
@@ -457,6 +461,10 @@ export async function parseCSDL(
 
   await loadReferences(rootDocument.references, nextDocumentId);
 
+  // Model-global, matching #25. CSDL aliases are document-local, so a document
+  // that declares an alias equal to a *different* document's namespace does not
+  // get that alias expanded here. Scoping this set per document is a behaviour
+  // change that belongs with the rest of the #25 work — tracked in #28.
   const registeredNamespaces = new Set(registry.keys());
   const aliasesForNamespace = (
     namespace?: string,
@@ -1262,12 +1270,20 @@ function labelFromAnnotations(annotations: Record<string, string> | undefined): 
  * repeats as an array; `ensureArray` normalises both.
  */
 function childElements(owner: XmlElement, name: string, ...prefixes: string[]): XmlElement[] {
-  // Copy rather than `push` into `ensureArray`'s return value: it hands back
-  // the caller's own array for a repeated element, so pushing would mutate the
-  // parsed tree.
-  const elements: XmlElement[] = [...ensureArray(owner[name])];
-  for (const prefix of prefixes) {
-    elements.push(...ensureArray(owner[`${prefix}:${name}`]));
+  // Walk the owner's own keys rather than reading each spelling in turn, so
+  // the two groups come back in document order. Reading them in turn put every
+  // unprefixed element first, which moved elements that the document declared
+  // later — observable wherever first-wins ordering is used, such as an
+  // unqualified annotation target resolved against `findEntityByName`.
+  //
+  // `xml2js` groups repeats under one key, so this is the order of the key
+  // groups rather than of individual elements, which is as much as the parsed
+  // tree preserves. It also never pushes into `ensureArray`'s return value,
+  // which is the caller's own array for a repeated element.
+  const wanted = new Set([name, ...prefixes.map((prefix) => `${prefix}:${name}`)]);
+  const elements: XmlElement[] = [];
+  for (const [key, value] of Object.entries(owner)) {
+    if (wanted.has(key)) elements.push(...ensureArray(value));
   }
   return elements;
 }
