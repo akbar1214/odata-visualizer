@@ -60,9 +60,11 @@ describe('findPaths with qualified navigation targets', () => {
     const paths = findPaths('IDPMilestone', 'User', metadata);
 
     expect(paths).toHaveLength(1);
-    expect(paths[0]).toEqual([
-      { fromEntity: 'IDPMilestone', navProperty: 'User', toEntity: 'User' },
-    ]);
+    expect(paths[0][0]).toMatchObject({
+      from: 'IDPMilestone',
+      to: 'User',
+      edge: { kind: 'nav', name: 'User' },
+    });
   });
 
   it('finds a two-hop path across namespaces', async () => {
@@ -70,8 +72,8 @@ describe('findPaths with qualified navigation targets', () => {
     const paths = findPaths('Project', 'User', metadata);
 
     expect(paths.length).toBeGreaterThan(0);
-    expect(paths[0][0].navProperty).toBe('Milestones');
-    expect(paths[0][paths[0].length - 1].toEntity).toBe('User');
+    expect(paths[0][0].edge).toMatchObject({ kind: 'nav', name: 'Milestones' });
+    expect(paths[0][paths[0].length - 1].to).toBe('User');
   });
 });
 
@@ -79,7 +81,7 @@ describe('getReachableEntities', () => {
   it('lists reachable entities by their short names', async () => {
     const metadata = await model();
     const reachable = getReachableEntities('IDPMilestone', metadata);
-    const names = [...reachable.values()].flat().map((entry) => entry.entity.name);
+    const names = [...reachable.values()].flat().map((step) => step.to);
 
     expect(names).toContain('User');
     expect(names).toContain('Team');

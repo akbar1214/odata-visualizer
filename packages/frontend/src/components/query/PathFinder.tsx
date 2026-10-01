@@ -1,19 +1,30 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { ODataMetadata } from '@odata-visualizer/shared';
-import { findPaths, getReachableEntities, type EntityPath } from '../../utils/graphState';
+import { isComposableEdge } from '@odata-visualizer/shared';
+import {
+  findPaths,
+  getReachableEntities,
+  isComposablePath,
+  type TraversalPath,
+} from '../../utils/graphState';
 import { getEntitySelectionValue } from '../../utils/queryResolver';
 import { SearchableSelect } from './SearchableSelect';
 
 interface PathFinderProps {
   metadata: ODataMetadata;
   currentEntity: string;
-  onSelectPath: (sourceEntity: string, path: EntityPath) => void;
+  onSelectPath: (sourceEntity: string, path: TraversalPath) => void;
+}
+
+/** The step label: `.Name` for a navigation property, `B()` for a function. */
+function stepLabel(step: TraversalPath[number]): string {
+  return step.edge.kind === 'nav' ? `.${step.edge.name}` : `${step.edge.functionName}()`;
 }
 
 export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinderProps) {
   const [sourceEntity, setSourceEntity] = useState(currentEntity);
   const [targetEntity, setTargetEntity] = useState('');
-  const [foundPaths, setFoundPaths] = useState<EntityPath[]>([]);
+  const [foundPaths, setFoundPaths] = useState<TraversalPath[]>([]);
   const [searched, setSearched] = useState(false);
 
   // `currentEntity` was only read on mount, so changing the query root left the
@@ -27,15 +38,15 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
   }, [currentEntity]);
 
   // The dropdown values are graph identities, exactly what `findPaths`
-  // compares. Keying on `entity.name` collapsed the two `Part` entries to one
-  // string, so the chosen option could not say which namespace's type it meant.
+  // compares. An edge whose bound function needs parameters this builder
+  // cannot supply is not offered as a target.
   const reachableEntities = useMemo(() => {
     if (!sourceEntity) return new Set<string>();
     const reachable = getReachableEntities(sourceEntity, metadata);
     const identities = new Set<string>();
-    for (const targets of reachable.values()) {
-      for (const t of targets) {
-        identities.add(getEntitySelectionValue(t.entity, metadata.entities));
+    for (const steps of reachable.values()) {
+      for (const step of steps) {
+        if (isComposableEdge(step.edge)) identities.add(step.to);
       }
     }
     return identities;
@@ -57,6 +68,16 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
     setSearched(true);
   };
 
+  // A bound function with parameters cannot be composed without values the
+  // builder has no input for, and a function that is not the first hop cannot
+  // be a resource-path segment; those paths are hidden rather than emitted
+  // with a missing parameter.
+  const selectablePaths = useMemo(
+    () => foundPaths.filter((path) => isComposablePath(path)),
+    [foundPaths],
+  );
+  const hiddenPathCount = foundPaths.length - selectablePaths.length;
+
   const handleSourceChange = useCallback((name: string) => {
     setSourceEntity(name);
     setTargetEntity('');
@@ -65,7 +86,7 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
   }, []);
 
   const handleSelectPath = useCallback(
-    (path: EntityPath) => {
+    (path: TraversalPath) => {
       onSelectPath(sourceEntity, path);
     },
     [onSelectPath, sourceEntity],
@@ -113,9 +134,16 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
             {foundPaths.length === 0 ? 'No paths found' : `${foundPaths.length} path(s) found`}
           </div>
 
-          {foundPaths.map((path, index) => (
+          {hiddenPathCount > 0 && (
+            <div className="text-[10px] text-engineering-400">
+              {hiddenPathCount} path(s) hidden: this builder cannot compose them (a bound function
+              needs parameters, or is not the first hop).
+            </div>
+          )}
+
+          {selectablePaths.map((path, index) => (
             <button
-              key={path.map((s) => s.navProperty).join('-') || `path-${index}`}
+              key={path.map((s) => stepLabel(s)).join('-') || `path-${index}`}
               onClick={() => handleSelectPath(path)}
               className="w-full text-left p-2 rounded border border-engineering-200 hover:border-primary-300 hover:bg-primary-50 transition-colors"
             >
@@ -125,14 +153,14 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
               <div className="space-y-0.5">
                 {path.map((step) => (
                   <div
-                    key={`${step.fromEntity}-${step.navProperty}-${step.toEntity}`}
+                    key={`${step.from}-${stepLabel(step)}-${step.to}`}
                     className="flex items-center gap-1 text-[10px]"
                   >
-                    <span className="text-engineering-500">{step.fromEntity}</span>
+                    <span className="text-engineering-500">{step.from}</span>
                     <span className="text-primary-500">→</span>
-                    <span className="text-primary-500 font-medium">.{step.navProperty}</span>
+                    <span className="text-primary-500 font-medium">{stepLabel(step)}</span>
                     <span className="text-primary-500">→</span>
-                    <span className="text-engineering-500">{step.toEntity}</span>
+                    <span className="text-engineering-500">{step.to}</span>
                   </div>
                 ))}
               </div>

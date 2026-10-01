@@ -343,7 +343,18 @@ function GraphNodeComponent({ data }: NodeProps) {
           isRoot ? 'bg-primary-600' : 'bg-engineering-100 border-b border-engineering-200'
         }`}
       >
-        <span>{nodeState.entityName}</span>
+        <span className="flex items-center gap-1 min-w-0">
+          <span className="truncate">{nodeState.entityName}</span>
+          {nodeState.step?.edge.kind === 'boundFunction' && (
+            <span
+              className={`text-[9px] font-normal shrink-0 ${
+                isRoot ? 'text-white/70' : 'text-engineering-400'
+              }`}
+            >
+              via {nodeState.step.edge.functionName}()
+            </span>
+          )}
+        </span>
         {!isRoot && (
           <button
             onClick={handleRemove}
