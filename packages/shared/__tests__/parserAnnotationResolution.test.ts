@@ -508,3 +508,29 @@ describe('annotation labels are derived consistently', () => {
     expect(action.label).toBe('Resets the model');
   });
 });
+
+/**
+ * The attribute spelling of a qualifier. Non-conformant for XML CSDL, but it
+ * used to land in the map under a mangled key (`Core.Description#Phone`) while
+ * the canonical `Qualifier="Phone"` spelling was rejected — an inconsistency in
+ * a policy the resolver describes as complete.
+ */
+describe('a hash-qualified term is rejected like the qualifier attribute', () => {
+  it('does not store the mangled term', async () => {
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Annotation Term="Core.Description#Phone" String="hash-term" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    const widget = model.entities.find((e) => e.qualifiedName === 'N.Widget')!;
+
+    expect(widget.annotations).toBeUndefined();
+  });
+});

@@ -1344,6 +1344,11 @@ function parseAnnotations(el: XmlElement): Record<string, string> | undefined {
     // `Record<term, string>` and cannot represent it, so a qualified
     // annotation is rejected rather than flattened into the unqualified map.
     if (str(ann['@_Qualifier'])) continue;
+    // `Term="Core.Description#Phone"` is the other spelling of a qualifier. It
+    // is non-conformant for XML CSDL — the qualifier has its own attribute —
+    // but it reached the map under a mangled key while the canonical spelling
+    // was rejected, so the policy was not the complete one it claimed.
+    if (term.includes('#')) continue;
     out[term] = annotationValue(ann);
   }
   return Object.keys(out).length > 0 ? out : undefined;
