@@ -303,6 +303,99 @@ describe('buildQueryUrl input validation', () => {
 });
 
 /**
+ * The `$select` grammar #23 implemented covered `*`, `NS.*` and property paths,
+ * but three other `selectItem` alternatives from the OData V4.01 ABNF were
+ * still refused:
+ *
+ *   annotationInQuery = AT [ namespace "." ] termName [ HASH annotationQualifier ]
+ *   selectItem        = ... / optionallyQualifiedFunctionName
+ *   selectPath        = complexProperty [ "/" optionallyQualifiedTypeName ] ...
+ *
+ * The fourth alternative — `selectProperty` with `selectOption` values, e.g.
+ * `Addresses($filter=…;$top=5)` — is deliberately left unsupported: its values
+ * are arbitrary expressions this module has no parser for, so accepting them
+ * would emit URLs whose content it cannot check. That decision is pinned below
+ * and stated in the `SELECT_ITEM` doc comment.
+ */
+describe('$select forms beyond star and plain paths', () => {
+  it('accepts instance annotations, with and without a qualifier', () => {
+    expect(buildQueryUrl({ entitySet: 'Parts', select: ['@PTC.DisplayName'] })).toBe(
+      '/Parts?$select=@PTC.DisplayName',
+    );
+    // HASH is "%23" in the ABNF; the caller writes the raw "#" and the query
+    // encoder emits the percent-encoded form.
+    expect(buildQueryUrl({ entitySet: 'Parts', select: ['@PTC.DisplayName#short'] })).toBe(
+      '/Parts?$select=@PTC.DisplayName%23short',
+    );
+    expect(buildQueryUrl({ entitySet: 'Parts', select: ['@A.B.Term#q'] })).toBe(
+      '/Parts?$select=@A.B.Term%23q',
+    );
+  });
+
+  it('accepts mid-path type casts', () => {
+    expect(buildQueryUrl({ entitySet: 'Parts', select: ['Address/PTC.Addr/City'] })).toBe(
+      '/Parts?$select=Address/PTC.Addr/City',
+    );
+    expect(buildQueryUrl({ entitySet: 'Parts', select: ['PTC.Part/Address/PTC.Addr/City'] })).toBe(
+      '/Parts?$select=PTC.Part/Address/PTC.Addr/City',
+    );
+  });
+
+  it('accepts function calls with parameter names, at the root and after a type', () => {
+    expect(buildQueryUrl({ entitySet: 'Parts', select: ['Fn(ID,Name)'] })).toBe(
+      '/Parts?$select=Fn(ID,Name)',
+    );
+    expect(buildQueryUrl({ entitySet: 'Parts', select: ['PTC.Fn(ID,Name)'] })).toBe(
+      '/Parts?$select=PTC.Fn(ID,Name)',
+    );
+    expect(buildQueryUrl({ entitySet: 'Parts', select: ['PTC.Part/Fn(ID,Name)'] })).toBe(
+      '/Parts?$select=PTC.Part/Fn(ID,Name)',
+    );
+    // `[ OPEN parameterNames CLOSE ]`: an overload with no parameters.
+    expect(buildQueryUrl({ entitySet: 'Parts', select: ['Fn()'] })).toBe('/Parts?$select=Fn()');
+  });
+
+  it('does not warn that annotation or function select items are not properties', () => {
+    // `checkProperty` skips `*` and structural paths for exactly this reason;
+    // the other non-property selectItem shapes must not produce a bogus
+    // "not a property" warning either.
+    const warnings: string[] = [];
+    buildQueryUrl({
+      entitySet: 'Parts',
+      metadata,
+      select: ['@PTC.DisplayName', 'Fn(ID,Name)', 'Address/PTC.Addr/City'],
+      onWarning: (message) => warnings.push(message),
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it('accepts the same forms inside a nested $expand $select', () => {
+    expect(
+      buildQueryUrl({
+        entitySet: 'Parts',
+        expand: [{ navProperty: 'Documents', select: ['@PTC.DisplayName'] }],
+      }),
+    ).toBe('/Parts?$expand=Documents($select=@PTC.DisplayName)');
+  });
+
+  it('still rejects malformed annotations and function calls', () => {
+    for (const item of ['@', '@PTC.', '@PTC.Term#', 'Fn(ID,)', 'Fn(1)', 'Fn(ID']) {
+      expect(() => buildQueryUrl({ entitySet: 'Parts', select: [item] }), item).toThrow(/\$select/);
+    }
+  });
+
+  it('documents select options as unsupported rather than accepting unvalidated content', () => {
+    expect(() =>
+      buildQueryUrl({
+        entitySet: 'Parts',
+        select: ["Addresses($filter=Name eq 'x';$top=5)"],
+      }),
+    ).toThrow(/\$select/);
+    expect(() => buildQueryUrl({ entitySet: 'Parts', select: ['Qty($top=5)'] })).toThrow(/\$select/);
+  });
+});
+
+/**
  * A quoted key value admitted `[`, `]`, `{` and `}` raw, and the builder emits
  * the resource segment verbatim, so `Parts('[a]')` produced a URL `curl`
  * rejects (`bad range in URL`) — the same headline symptom as the query options,
