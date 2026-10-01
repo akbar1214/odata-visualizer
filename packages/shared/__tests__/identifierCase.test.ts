@@ -115,3 +115,36 @@ describe('a base type reference resolves by exact case', () => {
     expect(properties).not.toContain('ShopOnly');
   });
 });
+
+/**
+ * The short-name clause of the exact-case preference was a mutation survivor:
+ * deleting it passed every test in the repo. It only changes behaviour when two
+ * schemas declare type names differing *only* by case, which no fixture did —
+ * so this is the one input that pins it.
+ */
+describe('a bare short name resolves to the type spelled that way', () => {
+  const shortNameCollision = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="A" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Order">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="B" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="order">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('matches the exact-case short name rather than the first declared', async () => {
+    const model = await parseCSDL(shortNameCollision);
+
+    expect(findEntityByName(model.entities, 'Order')?.qualifiedName).toBe('A.Order');
+    expect(findEntityByName(model.entities, 'order')?.qualifiedName).toBe('B.order');
+  });
+});
