@@ -347,13 +347,26 @@ export function getTargetEntityName(
   }
   const qualified = qualifier !== undefined && modelNamespaces.has(qualifier);
 
+  // An unrecognised qualifier is almost always a namespace this model does not
+  // contain: since #34 the parser expands `Schema/@Alias` and `Include` aliases
+  // inline, so an alias would have been rewritten before it arrived here. The
+  // named namespace's elements never loaded, so `sameName` can only offer
+  // associations that happen to share the simple name. The source namespace
+  // narrows that guess, but the navigation property's roles are what corroborate
+  // it; a namesake whose ends carry neither role is not the association that was
+  // meant (#39), and following it turned the pre-#35 `undefined` into a
+  // confident wrong answer.
+  const guessed = sameName.filter(
+    (r) =>
+      !nav.toRole ||
+      r.from.role === nav.toRole ||
+      r.to.role === nav.toRole ||
+      r.from.role === nav.fromRole ||
+      r.to.role === nav.fromRole,
+  );
   const rel = qualified
     ? sameName.find((r) => r.namespace === qualifier)
-    : // An unrecognised qualifier is most likely an alias this layer cannot
-      // expand, so the source entity's own namespace is the better guess. There
-      // is no separate exact-name clause: `sameName` already matches both
-      // spellings, so it would only ever return an element of this list.
-      (sameName.find((r) => r.namespace === sourceEntity.namespace) ?? sameName[0]);
+    : (guessed.find((r) => r.namespace === sourceEntity.namespace) ?? guessed[0]);
   if (!rel) return undefined;
 
   const endIdentity = (end: ODataAssociationEnd): string => {
