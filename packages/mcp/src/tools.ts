@@ -322,7 +322,7 @@ function formatCallableDetails(
         s.entityTypeQualified === shortName(bindingType) ||
         s.entityType === bindingType,
     );
-    const setPath = set?.name ?? '<EntitySet>';
+    const setPath = set ? encodeIdentifierForUrl(set.name) : '<EntitySet>';
     const setEntity = set
       ? findEntityByName(metadata.entities, set.entityTypeQualified ?? set.entityType)
       : undefined;
@@ -330,11 +330,15 @@ function formatCallableDetails(
     const keyLiteral =
       keyNames.length > 0
         ? keyNames.length === 1
-          ? `${keyNames[0]}=<${keyNames[0]}>`
-          : keyNames.map((k) => `${k}=<${k}>`).join(',')
+          ? `${encodeIdentifierForUrl(keyNames[0])}=<${encodeIdentifierForUrl(keyNames[0])}>`
+          : keyNames
+              .map((k) => `${encodeIdentifierForUrl(k)}=<${encodeIdentifierForUrl(k)}>`)
+              .join(',')
         : '<key>';
     const root = baseUrl ? normalizeBaseUrl(baseUrl) : '<serviceRoot>';
-    lines.push(`  ${root}/${setPath}(${keyLiteral})/${item.qualifiedName ?? item.name}`);
+    lines.push(
+      `  ${root}/${setPath}(${keyLiteral})/${encodeIdentifierForUrl(item.qualifiedName ?? item.name)}`,
+    );
     if (set && !setEntity) {
       lines.push(
         `  Note: entity set "${set.name}" references type "${set.entityTypeQualified ?? set.entityType}", which is not defined in the loaded metadata.`,
@@ -342,7 +346,7 @@ function formatCallableDetails(
     }
   } else {
     const root = baseUrl ? normalizeBaseUrl(baseUrl) : '<serviceRoot>';
-    lines.push(`  ${root}/${importName ?? item.name}`);
+    lines.push(`  ${root}/${encodeIdentifierForUrl(importName ?? item.name)}`);
   }
   lines.push(`  Parameters: ${JSON.stringify(example)}`);
   lines.push(
@@ -425,6 +429,25 @@ function encodeLiteralForUrl(literal: string): string {
   return percentEncode(literal, PATH_UNSAFE);
 }
 
+/**
+ * Characters that are structural in the positions an identifier occupies, on
+ * top of the path-unsafe set.
+ *
+ * Metadata names are emitted where OData syntax also uses `(` and `)` (key
+ * predicates and inline parameter lists), `,` and `=` (compound keys, parameter
+ * lists) and `'` (string literals). A name containing one of those is invalid
+ * CSDL, but the parser accepts it on purpose, and emitting it raw would
+ * silently address a different resource. Encoding keeps the name inside one
+ * segment and unambiguous; the server percent-decodes before matching, so a
+ * lenient server spelling a set `Th#ings` still answers to `Th%23ings`.
+ */
+const IDENTIFIER_UNSAFE = new Set([...PATH_UNSAFE, '(', ')', ',', '=', "'"]);
+
+/** Percent-encode a metadata-derived identifier for its position in a URL. */
+function encodeIdentifierForUrl(identifier: string): string {
+  return percentEncode(identifier, IDENTIFIER_UNSAFE);
+}
+
 function buildKeySegment(
   entity: ODataEntity,
   metadata: ODataMetadata,
@@ -445,7 +468,7 @@ function buildKeySegment(
   return `(${keyNames
     .map((name) => {
       const type = properties.find((p) => p.name === name)?.type;
-      return `${name}=${encodeLiteralForUrl(formatV4Literal(keys[name], type))}`;
+      return `${encodeIdentifierForUrl(name)}=${encodeLiteralForUrl(formatV4Literal(keys[name], type))}`;
     })
     .join(',')})`;
 }
@@ -1135,7 +1158,7 @@ function buildInvocationUnsafe(
     } catch (error) {
       return errorResult(`Error: ${error instanceof Error ? error.message : 'Invalid keys'}`);
     }
-    path = `${set.name}${keySegment}/${item.qualifiedName ?? item.name}`;
+    path = `${encodeIdentifierForUrl(set.name)}${keySegment}/${encodeIdentifierForUrl(item.qualifiedName ?? item.name)}`;
   } else {
     const importName = isFunction
       ? metadata.functionImports.find(
@@ -1146,7 +1169,7 @@ function buildInvocationUnsafe(
         )?.name;
     // V4 addresses an unbound operation by its import name, or by the
     // qualified operation name when no import exists.
-    path = importName ?? item.qualifiedName ?? item.name;
+    path = encodeIdentifierForUrl(importName ?? item.qualifiedName ?? item.name);
   }
 
   const inline = isFunction ? formatInlineParams(item, parameters) : '';
@@ -1195,8 +1218,9 @@ function formatInlineParams(
     const type = declaredParameterType(item, name);
     const literal = type ? formatFunctionParamLiteral(type, value) : formatV4Literal(String(value));
     // Only the value is encoded; the `name=` and the joining commas are OData
-    // syntax, not data.
-    return `${name}=${encodeLiteralForUrl(literal)}`;
+    // syntax, not data. The name itself is metadata-derived, so it is encoded
+    // for the identifier position rather than emitted verbatim.
+    return `${encodeIdentifierForUrl(name)}=${encodeLiteralForUrl(literal)}`;
   });
   return `(${rendered.join(',')})`;
 }
