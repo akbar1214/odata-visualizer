@@ -82,3 +82,33 @@ describe('the loopback rewrite covers every server type and spelling', () => {
     byOptions.close();
   });
 });
+
+/**
+ * Four more spellings reach Node's `options.port = 0` path and were bypassing
+ * the rewrite, so the guard's "every spelling" claim was stronger than the code.
+ */
+describe('the remaining ephemeral spellings', () => {
+  it.each([
+    ['listen()', (s: import('node:net').Server) => s.listen()],
+    ['listen(null)', (s: import('node:net').Server) => s.listen(null as never)],
+    ['listen({ port: "0" })', (s: import('node:net').Server) => s.listen({ port: '0' } as never)],
+  ])('binds loopback for %s', async (_label, bind) => {
+    const { Server } = await import('node:net');
+    const server = new Server();
+    bind(server);
+    await once(server, 'listening');
+
+    expect((server.address() as AddressInfo).address).toBe('127.0.0.1');
+    server.close();
+  });
+
+  it('binds loopback for listen(cb)', async () => {
+    const { Server } = await import('node:net');
+    const server = new Server();
+    server.listen(() => {});
+    await once(server, 'listening');
+
+    expect((server.address() as AddressInfo).address).toBe('127.0.0.1');
+    server.close();
+  });
+});

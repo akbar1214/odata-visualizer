@@ -33,6 +33,16 @@ const originalListen = NetServer.prototype.listen;
 function withLoopback(args: unknown[]): unknown[] | null {
   const [portOrOptions, second, ...rest] = args;
 
+  // `listen()`, `listen(cb)`, `listen(null)` and `listen(undefined)` all reach
+  // Node's `options.port = 0` path — the same ephemeral unspecified bind this
+  // function exists to rewrite.
+  if (args.length === 0 || portOrOptions === null || portOrOptions === undefined) {
+    return [0, '127.0.0.1', ...rest];
+  }
+  if (typeof portOrOptions === 'function') {
+    return [0, '127.0.0.1', portOrOptions, ...rest];
+  }
+
   if (typeof portOrOptions === 'number') {
     if (portOrOptions !== 0 || typeof second === 'string') return null;
     return [0, '127.0.0.1', ...(second === undefined ? [] : [second]), ...rest];
@@ -46,7 +56,9 @@ function withLoopback(args: unknown[]): unknown[] | null {
   if (typeof portOrOptions === 'object' && portOrOptions !== null && 'port' in portOrOptions) {
     const options = portOrOptions as ListenOptions;
     // `host: ''` means "unspecified" to Node, so it is as ephemeral as no host.
-    if (options.port !== 0 || (options.host !== undefined && options.host !== '')) return null;
+    if (Number(options.port) !== 0 || (options.host !== undefined && options.host !== '')) {
+      return null;
+    }
     return [{ ...options, host: '127.0.0.1' }, ...(second === undefined ? [] : [second]), ...rest];
   }
 
@@ -105,7 +117,7 @@ if (!(NetServer.prototype as unknown as Record<symbol, unknown>)[PATCH_MARKER]) 
   ): NetServer {
     const rewritten = withLoopback(args);
     if (!rewritten) {
-      return (originalListen as (...a: unknown[]) => HttpServer).apply(this, args);
+      return (originalListen as (...a: unknown[]) => NetServer).apply(this, args);
     }
     return bindLoopback(this, rewritten);
   } as unknown as typeof NetServer.prototype.listen;
