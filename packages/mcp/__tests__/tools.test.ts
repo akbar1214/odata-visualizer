@@ -1476,3 +1476,220 @@ describe('entity lookup under a case-only collision', () => {
     expect(text).not.toContain('ShopOnly');
   });
 });
+
+/**
+ * Bound-function composition fixes: a collection binding composes on the
+ * collection (no key predicate), an overload is selected from the supplied
+ * parameter names, an omitted declared parameter is called out, and query
+ * options that do not apply to a non-entity return are dropped with a warning.
+ */
+const boundCompositionCSDL = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="A">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityType Name="C">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Related" Type="N.D" />
+      </EntityType>
+      <EntityType Name="D">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Function Name="AllOf" IsBound="true">
+        <Parameter Name="it" Type="Collection(N.A)" />
+        <ReturnType Type="Collection(N.C)" />
+      </Function>
+      <Function Name="B" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="B" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <Parameter Name="factor" Type="Edm.Int32" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="Count" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <ReturnType Type="Edm.Int32" />
+      </Function>
+      <Function Name="Numbers" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <ReturnType Type="Collection(Edm.Int32)" />
+      </Function>
+      <Function Name="NeedsParam" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <Parameter Name="required" Type="Edm.String" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <EntityContainer Name="C1">
+        <EntitySet Name="As" EntityType="N.A" />
+        <EntitySet Name="Cs" EntityType="N.C" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+async function boundCompositionHandler() {
+  const { parseCSDL } = await import('@odata-visualizer/shared');
+  const store = createMetadataStore();
+  store.set(await parseCSDL(boundCompositionCSDL), { sourceName: 'bound.xml', sourceType: 'file' });
+  return createToolHandler(store, { allowLoadMetadata: false });
+}
+
+describe('bound function composition', () => {
+  function emittedUrl(text: string): string {
+    const line = text.split('\n').find((l) => l.startsWith('GET ') || l.startsWith('POST '));
+    return (line ?? '').replace(/^(GET|POST) /, '');
+  }
+
+  it('composes a collection-bound function on the collection without keys', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'AllOf',
+      entitySet: 'As',
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(result.content[0].text)).toBe('<serviceRoot>/As/N.AllOf');
+  });
+
+  it('ignores keys supplied for a collection-bound function', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'AllOf',
+      entitySet: 'As',
+      keys: { Id: '1' },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(result.content[0].text)).toBe('<serviceRoot>/As/N.AllOf');
+  });
+
+  it('sketches a collection-bound invocation without a key predicate', async () => {
+    const handler = await boundCompositionHandler();
+    const details = await handler('get_function_details', { name: 'AllOf' });
+
+    expect(details.isError).toBeUndefined();
+    expect(details.content[0].text).toContain('<serviceRoot>/As/N.AllOf');
+    expect(details.content[0].text).not.toContain('<key>');
+  });
+
+  it('selects the overload whose declared parameters cover the supplied names', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'B',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      parameters: { factor: 2 },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(result.content[0].text)).toBe("<serviceRoot>/As('1')/N.B(factor=2)");
+  });
+
+  it('lists the overloads when none accepts the supplied parameters', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'B',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      parameters: { bogus: 1 },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = result.content[0].text;
+    expect(text).toContain('No overload of "B"');
+    expect(text).toContain('N.B(it)');
+    expect(text).toContain('N.B(it, factor)');
+  });
+
+  it('warns when a declared parameter is omitted', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'NeedsParam',
+      entitySet: 'As',
+      keys: { Id: '1' },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(result.content[0].text)).toBe("<serviceRoot>/As('1')/N.NeedsParam");
+    expect(result.content[0].text).toContain('"required"');
+    expect(result.content[0].text).toContain('was not supplied');
+  });
+
+  it('drops query options that do not apply to a scalar return', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'Count',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      select: ['Id'],
+      top: 3,
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(result.content[0].text)).toBe("<serviceRoot>/As('1')/N.Count");
+    const text = result.content[0].text;
+    expect(text).toContain('$select');
+    expect(text).toContain('$top');
+    expect(text).toContain('not applicable');
+    expect(text).toContain('Edm.Int32');
+  });
+
+  it('keeps $top on a collection of primitives and warns about $select', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'Numbers',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      select: ['Id'],
+      top: 3,
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(result.content[0].text)).toBe("<serviceRoot>/As('1')/N.Numbers()?$top=3");
+    expect(result.content[0].text).toContain('$select');
+    expect(result.content[0].text).toContain('not applicable');
+  });
+});
+
+/**
+ * `get_relationships` joins the operation edges whole, so a model with more
+ * bound functions than `limit` ignored the page size entirely.
+ */
+describe('operation edge pagination', () => {
+  it('paginates the Operation edges section', async () => {
+    const { parseCSDL } = await import('@odata-visualizer/shared');
+    const functions = Array.from(
+      { length: 60 },
+      (_, i) =>
+        `<Function Name="F${i}" IsBound="true"><Parameter Name="it" Type="N.A" /><ReturnType Type="N.C" /></Function>`,
+    ).join('');
+    const csdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="A"><Key><PropertyRef Name="Id" /></Key><Property Name="Id" Type="Edm.Int32" Nullable="false" /></EntityType>
+      <EntityType Name="C"><Key><PropertyRef Name="Id" /></Key><Property Name="Id" Type="Edm.Int32" Nullable="false" /></EntityType>
+      ${functions}
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const store = createMetadataStore();
+    store.set(await parseCSDL(csdl), { sourceName: 'many.xml' });
+    const handler = createToolHandler(store, { allowLoadMetadata: false });
+
+    const result = await handler('get_relationships', { entityName: 'A', limit: 5 });
+    const text = result.content[0].text;
+
+    expect(text).toContain('Operation edges:');
+    expect(text).toContain('Showing 1-5 of 60. Use limit/offset for more.');
+    expect(text.match(/N\.F\d+\(\):/g)).toHaveLength(5);
+  });
+});
