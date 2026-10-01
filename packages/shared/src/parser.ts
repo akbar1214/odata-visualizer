@@ -61,6 +61,9 @@ const XML_PARSER_OPTIONS: X2jOptions = {
 
 const parser = new XMLParser(XML_PARSER_OPTIONS);
 
+/** Shared empty table, so a document with no aliases needs no allocation. */
+const EMPTY_ALIASES: Map<string, string> = new Map();
+
 const MEMBER_VALUE_ATTRS = ['@_Value', '@_value'] as const;
 const ANNOTATION_SCALAR_ATTRS = [
   '@_String',
@@ -130,14 +133,14 @@ function parseEdmxDocument(xmlContent: string): EdmxDocument {
     throw new Error('Invalid OData CSDL: Missing DataServices element');
   }
 
-  const schemas = ensureArray(dataServices['Schema'] || dataServices['edm:Schema'] || []);
+  const schemas = childElements(dataServices, 'Schema', 'edm');
   // Per CSDL, `edmx:Reference` is a child of `edmx:Edmx`. It is also accepted
   // inside `DataServices` (and on a `Schema`), which is where this used to look
   // only — so a reference in its standard position was ignored entirely.
   const references = [
-    ...ensureArray(edmx['Reference'] || edmx['edmx:Reference'] || []),
-    ...ensureArray(dataServices['Reference'] || dataServices['edmx:Reference'] || []),
-    ...schemas.flatMap((s) => ensureArray(s['Reference'] || s['edmx:Reference'] || [])),
+    ...childElements(edmx, 'Reference', 'edmx'),
+    ...childElements(dataServices, 'Reference', 'edmx'),
+    ...schemas.flatMap((s) => childElements(s, 'Reference', 'edmx')),
   ];
 
   return {
@@ -179,7 +182,7 @@ function expandAlias(type: string, aliases: Map<string, string>, namespaces?: Se
   if (dot <= 0) return type;
 
   const prefix = type.slice(0, dot);
-  if (namespaces?.has(prefix.toLowerCase())) return type;
+  if (namespaces?.has(prefix)) return type;
 
   const namespace = aliases.get(prefix);
   return namespace ? `${namespace}${type.slice(dot)}` : type;
@@ -187,15 +190,29 @@ function expandAlias(type: string, aliases: Map<string, string>, namespaces?: Se
 
 function expandAliasesInMetadata(
   metadata: ODataMetadata,
-  aliases: Map<string, string>,
+  aliasesForNamespace: (
+    namespace?: string,
+    element?: object,
+    document?: number,
+  ) => Map<string, string>,
   namespaces: Set<string>,
 ): void {
-  if (aliases.size === 0) return;
+  /**
+   * Expansion is per element, not global: an alias is only valid inside the
+   * document that declares it, so each element resolves against its own
+   * document's table.
+   */
+  const expanderFor =
+    (namespace: string | undefined, element?: object) =>
+    (value: string | undefined): string | undefined =>
+      value === undefined
+        ? undefined
+        : expandAlias(value, aliasesForNamespace(namespace, element), namespaces);
 
-  const expand = (value: string | undefined): string | undefined =>
-    value === undefined ? undefined : expandAlias(value, aliases, namespaces);
+  let expand = expanderFor(undefined);
 
   for (const entity of metadata.entities) {
+    expand = expanderFor(entity.namespace);
     entity.baseType = expand(entity.baseType);
     for (const prop of entity.properties) {
       prop.type = expand(prop.type) ?? prop.type;
@@ -205,6 +222,14 @@ function expandAliasesInMetadata(
       nav.targetType = nav.targetTypeQualified
         ? shortName(nav.targetTypeQualified)
         : expand(nav.targetType);
+      // V2 stores the association name here and a namespaced generator writes
+      // `Self.R1`. V4 stores `'Collection'` or `''`, neither of which contains
+      // a dot, so expansion is a no-op for them. Expanded exactly once, here:
+      // derivation expands a *copy* for the relationship name and never writes
+      // back to this field, so there is no double expansion even for a chained
+      // alias. The `??` is a type-level assertion, not a fallback — `expand`
+      // returns `undefined` only for `undefined` input, which the guard excludes.
+      if (nav.relationship) nav.relationship = expand(nav.relationship) ?? nav.relationship;
     }
   }
 
@@ -213,11 +238,13 @@ function expandAliasesInMetadata(
   // it was derived from, and `layout.ts` prefers `entityQualified`, so the
   // diagram could not match the edge to a node.
   for (const relationship of metadata.relationships) {
+    expand = expanderFor(relationship.namespace);
     relationship.from.entityQualified = expand(relationship.from.entityQualified);
     relationship.to.entityQualified = expand(relationship.to.entityQualified);
   }
 
   for (const container of metadata.entityContainers) {
+    expand = expanderFor(container.namespace);
     for (const set of container.entitySets) {
       set.entityTypeQualified = expand(set.entityTypeQualified);
       set.entityType = set.entityTypeQualified
@@ -229,21 +256,25 @@ function expandAliasesInMetadata(
     }
   }
   for (const item of [...metadata.actions, ...metadata.functions]) {
+    expand = expanderFor(item.namespace);
     item.returnType = expand(item.returnType);
     for (const param of item.parameters) {
       param.type = expand(param.type) ?? param.type;
     }
   }
   for (const typeDefinition of metadata.typeDefinitions) {
+    expand = expanderFor(typeDefinition.namespace);
     typeDefinition.underlyingType =
       expand(typeDefinition.underlyingType) ?? typeDefinition.underlyingType;
   }
   for (const enumType of metadata.enumTypes) {
+    expand = expanderFor(enumType.namespace);
     if (enumType.underlyingType) {
       enumType.underlyingType = expand(enumType.underlyingType);
     }
   }
   for (const importRecord of metadata.actionImports) {
+    expand = expanderFor(undefined, importRecord);
     if (importRecord.qualifiedActionName) {
       importRecord.qualifiedActionName = expand(importRecord.qualifiedActionName);
     }
@@ -255,6 +286,7 @@ function expandAliasesInMetadata(
     }
   }
   for (const importRecord of metadata.functionImports) {
+    expand = expanderFor(undefined, importRecord);
     if (importRecord.qualifiedFunctionName) {
       importRecord.qualifiedFunctionName = expand(importRecord.qualifiedFunctionName);
     }
@@ -301,57 +333,98 @@ export async function parseCSDL(
    * inline, and `parseAnnotations` reads only direct `<Annotation>` children,
    * so these were dropped entirely.
    */
-  const targetedAnnotations: Array<{ target: string; annotations: Record<string, string> }> = [];
+  const targetedAnnotations: Array<{
+    target: string;
+    annotations: Record<string, string>;
+    document: number;
+  }> = [];
 
   const registry = new Map<string, XmlElement>();
-  const aliases = new Map<string, string>();
+  /**
+   * Aliases are scoped to the document that declares them (CSDL 4.01 §4.2: *"An
+   * alias is only valid within the document in which it is declared"*).
+   *
+   * A single document-global map made two documents that each declare the same
+   * alias collide on a first-wins basis, so a derived type in the second
+   * document silently inherited from the *first* document's base — wrong
+   * properties, wrong keys, wrong inheritance chain.
+   */
+  const aliasesByDocument = new Map<number, Map<string, string>>();
+  /** Which document each schema namespace came from. */
+  const documentOfNamespace = new Map<string, number>();
+  /** Imports carry no namespace, so their document is recorded directly. */
+  const documentOfElement = new WeakMap<object, number>();
+  let nextDocumentId = 0;
+
+  const aliasesFor = (document: number): Map<string, string> => {
+    let table = aliasesByDocument.get(document);
+    if (!table) {
+      table = new Map<string, string>();
+      aliasesByDocument.set(document, table);
+    }
+    return table;
+  };
+
   const queue: XmlElement[] = [];
   const visitedUris = new Set<string>();
   const maxExternalDocuments = options.maxExternalDocuments ?? 25;
   let externalDocumentsLoaded = 0;
 
-  const includesOf = (owner: XmlElement): XmlElement[] =>
-    ensureArray(owner['Include'] || owner['edmx:Include'] || owner['edm:Include'] || []);
+  const includesOf = (owner: XmlElement): XmlElement[] => [
+    ...ensureArray(owner['Include']),
+    ...ensureArray(owner['edmx:Include']),
+    ...ensureArray(owner['edm:Include']),
+  ];
 
-  const registerSchema = (schema: XmlElement): void => {
+  const registerSchema = (schema: XmlElement, document: number): void => {
     const namespace = str(schema['@_Namespace']);
     if (!namespace || registry.has(namespace)) return;
     registry.set(namespace, schema);
+    documentOfNamespace.set(namespace, document);
     queue.push(schema);
   };
 
-  const registerAliases = (owner: XmlElement): void => {
+  const registerAliases = (owner: XmlElement, document: number): void => {
     // A schema may alias its own namespace — `<Schema Namespace="N" Alias="Self">`
     // — and every generator that writes `Self.Type` references relies on it.
     // Reading only `Include` here left those references unexpanded, so
     // `BaseType="Self.Base"` produced no inheritance chain and `getEffectiveKeys`
     // returned nothing.
+    const table = aliasesFor(document);
     const ownerNamespace = str(owner['@_Namespace']);
     const ownerAlias = str(owner['@_Alias']);
-    if (ownerNamespace && ownerAlias && !aliases.has(ownerAlias)) {
-      aliases.set(ownerAlias, ownerNamespace);
+    if (ownerNamespace && ownerAlias && !table.has(ownerAlias)) {
+      table.set(ownerAlias, ownerNamespace);
     }
 
     for (const include of includesOf(owner)) {
       const namespace = str(include['@_Namespace']);
       const alias = str(include['@_Alias']);
-      if (namespace && alias && !aliases.has(alias)) {
-        aliases.set(alias, namespace);
+      if (namespace && alias && !table.has(alias)) {
+        table.set(alias, namespace);
       }
     }
   };
 
   for (const schema of rootDocument.schemas) {
-    registerSchema(schema);
-    registerAliases(schema);
+    registerSchema(schema, nextDocumentId);
+    registerAliases(schema, nextDocumentId);
   }
+  // A reference is declared *by* the document that contains it, so its
+  // `Include` aliases belong to that document, not to the one it loads.
   for (const reference of rootDocument.references) {
-    registerAliases(reference);
+    registerAliases(reference, nextDocumentId);
   }
 
-  const loadReferences = async (references: XmlElement[]): Promise<void> => {
+  const loadReferences = async (references: XmlElement[], document: number): Promise<void> => {
     for (const reference of references) {
       const uri = str(reference['@_Uri']);
+      // A reference's `Include` aliases are declared by the *referencing*
+      // document, so they belong to it whether or not the referenced document
+      // loads and whether or not it was already visited. Registering this
+      // inside the `try` below meant a failed fetch silently dropped aliases
+      // that a root-level reference would have kept.
+      registerAliases(reference, document);
       if (!uri) continue;
 
       if (!options.loadExternal) {
@@ -371,27 +444,48 @@ export async function parseCSDL(
       externalDocumentsLoaded += 1;
       try {
         const externalDocument = parseEdmxDocument(await options.loadExternal(absoluteUri));
+        // A loaded document gets its own alias scope, so an alias it declares
+        // cannot rewrite a reference in another document, and vice versa.
+        nextDocumentId += 1;
+        const externalDocumentId = nextDocumentId;
         for (const schema of externalDocument.schemas) {
-          registerSchema(schema);
-          registerAliases(schema);
+          registerSchema(schema, externalDocumentId);
+          registerAliases(schema, externalDocumentId);
         }
-        // Includes on the reference describe aliases the including document uses.
-        registerAliases(reference);
-        await loadReferences(externalDocument.references);
+        await loadReferences(externalDocument.references, externalDocumentId);
       } catch {
         if (!unresolvedReferences.includes(uri)) unresolvedReferences.push(uri);
       }
     }
   };
 
-  await loadReferences(rootDocument.references);
+  await loadReferences(rootDocument.references, nextDocumentId);
+
+  // Model-global, matching #25. CSDL aliases are document-local, so a document
+  // that declares an alias equal to a *different* document's namespace does not
+  // get that alias expanded here. Scoping this set per document is a behaviour
+  // change that belongs with the rest of the #25 work — tracked in #28.
+  const registeredNamespaces = new Set(registry.keys());
+  const aliasesForNamespace = (
+    namespace?: string,
+    element?: object,
+    document?: number,
+  ): Map<string, string> => {
+    const resolved =
+      (element !== undefined ? documentOfElement.get(element) : undefined) ??
+      document ??
+      (namespace ? documentOfNamespace.get(namespace) : undefined) ??
+      0;
+    return aliasesByDocument.get(resolved) ?? EMPTY_ALIASES;
+  };
 
   while (queue.length > 0) {
     const schema = queue.shift() as XmlElement;
     const namespace = str(schema['@_Namespace']) || '';
+    const currentDocument = documentOfNamespace.get(namespace) ?? 0;
     const entityTypeNames = new Set<string>();
 
-    const entityTypes = ensureArray(schema['EntityType'] || schema['edm:EntityType'] || []);
+    const entityTypes = childElements(schema, 'EntityType', 'edm');
     for (const entityType of entityTypes) {
       const entity = parseEntityType(entityType, namespace);
       if (entity.name) {
@@ -400,7 +494,7 @@ export async function parseCSDL(
       }
     }
 
-    const complexTypes = ensureArray(schema['ComplexType'] || schema['edm:ComplexType'] || []);
+    const complexTypes = childElements(schema, 'ComplexType', 'edm');
     for (const complexType of complexTypes) {
       const complex = parseComplexType(complexType, namespace);
       if (complex.name) {
@@ -408,7 +502,7 @@ export async function parseCSDL(
       }
     }
 
-    const associations = ensureArray(schema['Association'] || schema['edm:Association'] || []);
+    const associations = childElements(schema, 'Association', 'edm');
     for (const association of associations) {
       const rel = parseAssociation(association, namespace);
       if (rel) {
@@ -416,7 +510,7 @@ export async function parseCSDL(
       }
     }
 
-    const enumElements = ensureArray(schema['EnumType'] || schema['edm:EnumType'] || []);
+    const enumElements = childElements(schema, 'EnumType', 'edm');
     for (const enumEl of enumElements) {
       const parsedEnum = parseEnumType(enumEl, namespace);
       if (parsedEnum) {
@@ -424,9 +518,7 @@ export async function parseCSDL(
       }
     }
 
-    const typeDefElements = ensureArray(
-      schema['TypeDefinition'] || schema['edm:TypeDefinition'] || [],
-    );
+    const typeDefElements = childElements(schema, 'TypeDefinition', 'edm');
     for (const typeDefEl of typeDefElements) {
       const parsedTypeDef = parseTypeDefinition(typeDefEl, namespace);
       if (parsedTypeDef) {
@@ -435,7 +527,7 @@ export async function parseCSDL(
     }
 
     const actionDefs = new Map<string, ODataAction>();
-    const actionElements = ensureArray(schema['Action'] || schema['edm:Action'] || []);
+    const actionElements = childElements(schema, 'Action', 'edm');
     for (const actionEl of actionElements) {
       const action = parseAction(actionEl, namespace);
       if (action.name && !actionDefs.has(action.name)) {
@@ -447,7 +539,7 @@ export async function parseCSDL(
     }
 
     const functionDefs = new Map<string, ODataFunction>();
-    const functionElements = ensureArray(schema['Function'] || schema['edm:Function'] || []);
+    const functionElements = childElements(schema, 'Function', 'edm');
     for (const funcEl of functionElements) {
       const func = parseFunction(funcEl, namespace);
       if (func.name && !functionDefs.has(func.name)) {
@@ -458,12 +550,10 @@ export async function parseCSDL(
       }
     }
 
-    const containers = ensureArray(
-      schema['EntityContainer'] || schema['edm:EntityContainer'] || [],
-    );
+    const containers = childElements(schema, 'EntityContainer', 'edm');
     for (const container of containers) {
       const containerName = str(container['@_Name']) || '';
-      const entitySets = ensureArray(container['EntitySet'] || container['edm:EntitySet'] || []);
+      const entitySets = childElements(container, 'EntitySet', 'edm');
       const parsedEntitySets: ODataEntitySet[] = [];
       for (const entitySet of entitySets) {
         const es = parseEntitySet(entitySet);
@@ -475,22 +565,20 @@ export async function parseCSDL(
         entityContainers.push({ name: containerName, namespace, entitySets: parsedEntitySets });
       }
 
-      const funcImports = ensureArray(
-        container['FunctionImport'] || container['edm:FunctionImport'] || [],
-      );
+      const funcImports = childElements(container, 'FunctionImport', 'edm');
       for (const funcImport of funcImports) {
         const fi = parseFunctionImport(funcImport, functionDefs);
         if (fi) {
+          documentOfElement.set(fi, currentDocument);
           functionImports.push(fi);
         }
       }
 
-      const actImports = ensureArray(
-        container['ActionImport'] || container['edm:ActionImport'] || [],
-      );
+      const actImports = childElements(container, 'ActionImport', 'edm');
       for (const actionImport of actImports) {
         const ai = parseActionImport(actionImport, actionDefs);
         if (ai) {
+          documentOfElement.set(ai, currentDocument);
           actionImports.push(ai);
         }
       }
@@ -504,7 +592,9 @@ export async function parseCSDL(
       }
       for (const nav of entity.navigationProperties) {
         if (!nav.targetType) continue;
-        const rel = relationshipFromNavigationProperty(entity, nav, namespace);
+        const rel = relationshipFromNavigationProperty(entity, nav, namespace, (v) =>
+          expandAlias(v, aliasesForNamespace(namespace), registeredNamespaces),
+        );
         if (!rel) continue;
         if (!relationships.some((r) => isSameDerivedRelationship(r, rel))) {
           relationships.push(rel);
@@ -514,13 +604,11 @@ export async function parseCSDL(
 
     // Schema-level annotations, applied after the model is complete so a target
     // may name anything in any schema.
-    for (const annotationsEl of ensureArray(
-      schema['Annotations'] || schema['edm:Annotations'] || [],
-    )) {
+    for (const annotationsEl of childElements(schema, 'Annotations', 'edm')) {
       const target = str(annotationsEl['@_Target']);
       if (!target) continue;
       const annotations = parseAnnotations(annotationsEl);
-      if (annotations) targetedAnnotations.push({ target, annotations });
+      if (annotations) targetedAnnotations.push({ target, annotations, document: currentDocument });
     }
   }
 
@@ -538,17 +626,12 @@ export async function parseCSDL(
     typeDefinitions,
   };
 
-  expandAliasesInMetadata(
-    metadata,
-    aliases,
-    new Set([...registry.keys()].map((ns) => ns.toLowerCase())),
-  );
-
+  expandAliasesInMetadata(metadata, aliasesForNamespace, registeredNamespaces);
   applyTargetedAnnotations(
     metadata,
     targetedAnnotations,
-    aliases,
-    new Set([...registry.keys()].map((ns) => ns.toLowerCase())),
+    aliasesForNamespace,
+    registeredNamespaces,
   );
 
   // Derived types often omit <Key> (it is inherited). Backfill keys from
@@ -598,12 +681,16 @@ function relationshipFromNavigationProperty(
   entity: ODataEntity,
   nav: ODataNavigationProperty,
   namespace: string,
+  expand: (value: string) => string,
 ): ODataRelationship | null {
   if (!nav.targetType) return null;
   const isCollection = nav.relationship === 'Collection';
+  // Expanded here, not in the later pass: the relationship is derived *during*
+  // parsing, so expanding only `nav.relationship` afterwards left this copy
+  // saying `Self.R1` while the navigation property said `N.R1`.
   const associationName =
     nav.relationship && nav.relationship !== 'Collection'
-      ? nav.relationship
+      ? expand(nav.relationship)
       : `${entity.name}_${nav.name}`;
   return {
     name: associationName,
@@ -643,8 +730,12 @@ function relationshipFromNavigationProperty(
  */
 function applyTargetedAnnotations(
   metadata: ODataMetadata,
-  targeted: Array<{ target: string; annotations: Record<string, string> }>,
-  aliases: Map<string, string>,
+  targeted: Array<{ target: string; annotations: Record<string, string>; document: number }>,
+  aliasesForNamespace: (
+    namespace?: string,
+    element?: object,
+    document?: number,
+  ) => Map<string, string>,
   namespaces: Set<string>,
 ): void {
   const merge = (
@@ -652,11 +743,15 @@ function applyTargetedAnnotations(
     extra: Record<string, string>,
   ): Record<string, string> => ({ ...extra, ...current });
 
-  for (const { target, annotations } of targeted) {
+  for (const { target, annotations, document } of targeted) {
     // The namespace guard added in #25 matters here too: a prefix that names an
     // actual schema is a namespace, not an alias, so an annotation target
     // cannot be rewritten into another document's namespace.
-    const expanded = expandAlias(target, aliases, namespaces);
+    const expanded = expandAlias(
+      target,
+      aliasesForNamespace(undefined, undefined, document),
+      namespaces,
+    );
     const segments = expanded.split('/');
 
     // `NS.Type/Prop`. Per CSDL a schema child must be namespace-qualified, so
@@ -716,9 +811,7 @@ function parseEntitySet(entitySet: XmlElement): ODataEntitySet | null {
   if (!name || !rawType) return null;
 
   const entityType = shortName(rawType);
-  const bindings = ensureArray(
-    entitySet['NavigationPropertyBinding'] || entitySet['edm:NavigationPropertyBinding'] || [],
-  )
+  const bindings = childElements(entitySet, 'NavigationPropertyBinding', 'edm')
     .map(parseNavigationPropertyBinding)
     .filter((b): b is ODataNavigationPropertyBinding => b !== null);
 
@@ -804,7 +897,7 @@ function parseFunction(el: XmlElement, namespace: string): ODataFunction {
 
 function parseParameters(el: XmlElement, isBound: boolean): ODataParameter[] {
   const parameters: ODataParameter[] = [];
-  const paramElements = ensureArray(el['Parameter'] || el['edm:Parameter'] || []);
+  const paramElements = childElements(el, 'Parameter', 'edm');
   paramElements.forEach((param, index) => {
     const parsed = parseParameter(param);
     if (parsed) {
@@ -829,7 +922,7 @@ function parseParameter(param: XmlElement): ODataParameter | null {
 }
 
 function parseReturnType(el: XmlElement): string | undefined {
-  const returnTypes = ensureArray(el['ReturnType'] || el['edm:ReturnType'] || []);
+  const returnTypes = childElements(el, 'ReturnType', 'edm');
   const rt = returnTypes[0];
   if (!rt) return undefined;
   const type = str(rt['@_Type']);
@@ -872,7 +965,7 @@ function parseEnumType(el: XmlElement, namespace: string): ODataEnumType | null 
   if (!name) return null;
 
   const members: ODataEnumMember[] = [];
-  for (const memberEl of ensureArray(el['Member'] || el['edm:Member'] || [])) {
+  for (const memberEl of childElements(el, 'Member', 'edm')) {
     const memberName = str(memberEl['@_Name']);
     if (!memberName) continue;
     let value: string | undefined;
@@ -920,9 +1013,9 @@ function parseEntityType(entityType: XmlElement, namespace: string): ODataEntity
   const properties: ODataProperty[] = [];
   const navigationProperties: ODataNavigationProperty[] = [];
 
-  const keyElements = ensureArray(entityType['Key'] || entityType['edm:Key'] || []);
+  const keyElements = childElements(entityType, 'Key', 'edm');
   for (const key of keyElements) {
-    const propertyRefs = ensureArray(key['PropertyRef'] || key['edm:PropertyRef'] || []);
+    const propertyRefs = childElements(key, 'PropertyRef', 'edm');
     for (const propRef of propertyRefs) {
       const keyName = str(propRef['@_Name']);
       if (keyName) {
@@ -931,14 +1024,12 @@ function parseEntityType(entityType: XmlElement, namespace: string): ODataEntity
     }
   }
 
-  const propElements = ensureArray(entityType['Property'] || entityType['edm:Property'] || []);
+  const propElements = childElements(entityType, 'Property', 'edm');
   for (const prop of propElements) {
     properties.push(parseProperty(prop, keys));
   }
 
-  const navPropElements = ensureArray(
-    entityType['NavigationProperty'] || entityType['edm:NavigationProperty'] || [],
-  );
+  const navPropElements = childElements(entityType, 'NavigationProperty', 'edm');
   for (const navProp of navPropElements) {
     navigationProperties.push(parseNavigationProperty(navProp));
   }
@@ -968,14 +1059,12 @@ function parseComplexType(complexType: XmlElement, namespace: string): ODataEnti
   const properties: ODataProperty[] = [];
   const navigationProperties: ODataNavigationProperty[] = [];
 
-  const propElements = ensureArray(complexType['Property'] || complexType['edm:Property'] || []);
+  const propElements = childElements(complexType, 'Property', 'edm');
   for (const prop of propElements) {
     properties.push(parseProperty(prop, []));
   }
 
-  const navPropElements = ensureArray(
-    complexType['NavigationProperty'] || complexType['edm:NavigationProperty'] || [],
-  );
+  const navPropElements = childElements(complexType, 'NavigationProperty', 'edm');
   for (const navProp of navPropElements) {
     navigationProperties.push(parseNavigationProperty(navProp));
   }
@@ -1060,7 +1149,7 @@ function parseAssociation(association: XmlElement, namespace: string): ODataRela
   const name = str(association['@_Name']);
   if (!name) return null;
 
-  const ends = ensureArray(association['End'] || association['edm:End'] || []);
+  const ends = childElements(association, 'End', 'edm');
   if (ends.length < 2) return null;
 
   const fromEnd = parseAssociationEnd(ends[0]);
@@ -1093,7 +1182,7 @@ function parseAssociationEnd(end: XmlElement): ODataAssociationEnd | null {
 }
 
 function parseAnnotations(el: XmlElement): Record<string, string> | undefined {
-  const annElements = ensureArray(el['Annotation'] || el['edm:Annotation'] || []);
+  const annElements = childElements(el, 'Annotation', 'edm');
   const out: Record<string, string> = {};
   for (const ann of annElements) {
     const term = str(ann['@_Term']);
@@ -1123,7 +1212,7 @@ function annotationValue(ann: XmlElement): string {
     return 'null';
   }
 
-  const collection = ann['Collection'] ?? ann['edm:Collection'];
+  const collection = childElements(ann, 'Collection', 'edm')[0];
   if (collection !== undefined) {
     const items: string[] = [];
     for (const item of ensureArray(collection)) {
@@ -1147,9 +1236,22 @@ function annotationValue(ann: XmlElement): string {
 }
 
 function firstChildText(el: XmlElement, childName: string): string | undefined {
-  const child = el[childName] ?? el[`edm:${childName}`];
-  if (child === undefined) return undefined;
-  const items = Array.isArray(child) ? (child as unknown[]) : [child];
+  // Reads both spellings, but deliberately not through `childElements`: that
+  // helper is element-oriented and goes via `ensureArray`, which yields `[]`
+  // for a primitive. A text-only leaf is handed back as a plain string, so
+  // routing it through `childElements` dropped every singly-occurring
+  // `<String>`, `<Bool>` or one-item `<Collection>` — the common case, and
+  // silently, because repeated children still arrived as an array.
+  const items: unknown[] = [];
+  for (const [key, value] of Object.entries(el)) {
+    if (key !== childName && key !== `edm:${childName}`) continue;
+    if (Array.isArray(value)) {
+      items.push(...(value as unknown[]));
+    } else {
+      items.push(value);
+    }
+  }
+  if (items.length === 0) return undefined;
   const values = items
     .map((item) => {
       if (item !== null && typeof item === 'object') {
@@ -1167,6 +1269,35 @@ function firstChildText(el: XmlElement, childName: string): string | undefined {
 function labelFromAnnotations(annotations: Record<string, string> | undefined): string | undefined {
   if (!annotations) return undefined;
   return annotations['Core.Description'] || annotations['Core.Label'] || undefined;
+}
+
+/**
+ * Read an element under every spelling it may carry.
+ *
+ * XML allows the unprefixed and prefixed spellings of the same element to
+ * coexist in one parent, and `a || b` returns only the first — so a document
+ * mixing them silently loses a group, and nothing reports it. `isArray` does
+ * not list most of these names, so a single occurrence arrives as an object and
+ * repeats as an array; `ensureArray` normalises both.
+ */
+function childElements(owner: XmlElement, name: string, ...prefixes: string[]): XmlElement[] {
+  // Walk the owner's own keys rather than reading each spelling in turn, so the
+  // two spellings are interleaved rather than one being appended after the
+  // other. Reading them in turn put every unprefixed element first, which moved
+  // elements the document declared later — observable wherever first-wins
+  // ordering is used, such as an unqualified annotation target resolved against
+  // `findEntityByName`.
+  //
+  // `fast-xml-parser` groups repeats under one key, so this is the order of
+  // groups rather than of individual elements, which is as much as the parsed
+  // tree preserves. It also never pushes into `ensureArray`'s return value,
+  // which is the caller's own array for a repeated element.
+  const wanted = new Set([name, ...prefixes.map((prefix) => `${prefix}:${name}`)]);
+  const elements: XmlElement[] = [];
+  for (const [key, value] of Object.entries(owner)) {
+    if (wanted.has(key)) elements.push(...ensureArray(value));
+  }
+  return elements;
 }
 
 function ensureArray(value: unknown): XmlElement[] {
