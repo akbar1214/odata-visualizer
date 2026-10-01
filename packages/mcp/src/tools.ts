@@ -19,6 +19,7 @@ import {
   getEffectiveNavigationProperties,
   getEffectiveProperties,
   INTEGER_TYPES,
+  normalizeBaseUrl,
   resolveInheritanceChain,
   resourcePathOf,
   suggestNames,
@@ -332,7 +333,7 @@ function formatCallableDetails(
           ? `${keyNames[0]}=<${keyNames[0]}>`
           : keyNames.map((k) => `${k}=<${k}>`).join(',')
         : '<key>';
-    const root = baseUrl ? baseUrl.replace(/\/+$/, '') : '<serviceRoot>';
+    const root = baseUrl ? normalizeBaseUrl(baseUrl) : '<serviceRoot>';
     lines.push(`  ${root}/${setPath}(${keyLiteral})/${item.qualifiedName ?? item.name}`);
     if (set && !setEntity) {
       lines.push(
@@ -340,7 +341,7 @@ function formatCallableDetails(
       );
     }
   } else {
-    const root = baseUrl ? baseUrl.replace(/\/+$/, '') : '<serviceRoot>';
+    const root = baseUrl ? normalizeBaseUrl(baseUrl) : '<serviceRoot>';
     lines.push(`  ${root}/${importName ?? item.name}`);
   }
   lines.push(`  Parameters: ${JSON.stringify(example)}`);
@@ -859,9 +860,15 @@ export function createToolHandler(
         const importName = metadata.actionImports.find(
           (i) => i.qualifiedActionName === action.qualifiedName || i.actionName === action.name,
         )?.name;
-        return textResult(
-          formatCallableDetails(action, metadata, importName, asString(args['baseUrl']), false),
-        );
+        try {
+          return textResult(
+            formatCallableDetails(action, metadata, importName, asString(args['baseUrl']), false),
+          );
+        } catch (error) {
+          return errorResult(
+            `Error building invocation sketch: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          );
+        }
       }
 
       case 'get_function_details': {
@@ -883,9 +890,15 @@ export function createToolHandler(
         const importName = metadata.functionImports.find(
           (i) => i.qualifiedFunctionName === func.qualifiedName || i.functionName === func.name,
         )?.name;
-        return textResult(
-          formatCallableDetails(func, metadata, importName, asString(args['baseUrl']), true),
-        );
+        try {
+          return textResult(
+            formatCallableDetails(func, metadata, importName, asString(args['baseUrl']), true),
+          );
+        } catch (error) {
+          return errorResult(
+            `Error building invocation sketch: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          );
+        }
       }
 
       case 'list_enums': {
@@ -1079,7 +1092,7 @@ function buildInvocationUnsafe(
   const keys = (args['keys'] as Record<string, string> | undefined) ?? {};
   const rawParameters = (args['parameters'] as Record<string, unknown> | undefined) ?? {};
   const baseUrl = asString(args['baseUrl']);
-  const root = (baseUrl ?? '<serviceRoot>').replace(/\/+$/, '');
+  const root = baseUrl ? normalizeBaseUrl(baseUrl) : '<serviceRoot>';
 
   assertKnownParameters(item, rawParameters);
 
