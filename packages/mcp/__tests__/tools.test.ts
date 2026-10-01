@@ -283,6 +283,18 @@ describe('Windchill-like model tools', () => {
     expect(result.content[0].text).toContain('Parts');
   });
 
+  it('accepts a key predicate in entitySet, as the tool description advertises', async () => {
+    const result = await handleToolCall('build_query', {
+      entitySet: "Parts('OR:wt.part.WTPart:123')",
+      top: 1,
+    });
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("GET /Parts('OR:wt.part.WTPart:123')?$top=1");
+    // The keyed path resolves to the same set, so it must not draw the
+    // "not a known entity set" note.
+    expect(result.content[0].text).not.toContain('not a known entity set');
+  });
+
   it('builds a bound action invocation with typed body', async () => {
     const result = await handleToolCall('build_action_invocation', {
       actionName: 'GetPartStructure',
