@@ -25,6 +25,9 @@ const hostileCSDL = `<?xml version="1.0" encoding="utf-8"?>
         <Parameter Name="it" Type="Hostile.Thing" />
         <Parameter Name="Note" Type="Edm.String" />
       </Action>
+      <Function Name="F',=1">
+        <Parameter Name="P',=1" Type="Edm.String" />
+      </Function>
       <Function Name="Get#It">
         <Parameter Name="P#1" Type="Edm.String" />
       </Function>
@@ -41,6 +44,7 @@ const hostileCSDL = `<?xml version="1.0" encoding="utf-8"?>
         <EntitySet Name="Th#ings" EntityType="Hostile.Thing" />
         <EntitySet Name="Ones" EntityType="Hostile.One" />
         <FunctionImport Name="Imp#ort" Function="Hostile.Get#It" />
+        <FunctionImport Name="I,=1" Function="Hostile.F',=1" />
       </EntityContainer>
     </Schema>
   </edmx:DataServices>
@@ -303,5 +307,27 @@ describe('the backend source is validated like any other base URL', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('Invalid baseUrl');
+  });
+});
+
+/**
+ * `'`, `,` and `=` are the rest of `IDENTIFIER_UNSAFE`'s additions. Each could
+ * be dropped individually with both suites still green — only the four
+ * characters together were pinned — so an operation name and a parameter name
+ * carrying all three are exercised here.
+ */
+describe('the quote, comma and equals in an identifier position', () => {
+  it('encodes them in a function import and a parameter name', async () => {
+    const handler = await hostileHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: "F',=1",
+      parameters: { "P',=1": 'v' },
+      baseUrl: 'https://host/svc',
+    });
+
+    expect(result.isError).toBeUndefined();
+    const url = emittedUrl(result.content[0].text);
+    expect(url).toContain('I%2C%3D1');
+    expect(url).toContain('P%27%2C%3D1');
   });
 });

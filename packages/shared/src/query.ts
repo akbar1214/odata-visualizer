@@ -878,7 +878,7 @@ function validateExpand(expands: ExpandNode[]): void {
 // silently fans out to two resources. `\p{Cs}` catches a lone surrogate,
 // which cannot be represented in a URL at all.
 // eslint-disable-next-line no-useless-escape -- required under the `u` flag
-const BASE_URL_REJECTED = /[\s\p{Cc}\p{Cs}\\#?\[\]{}]/u;
+const BASE_URL_REJECTED = /[\s\p{Cc}\p{Cf}\p{Cs}\\#?\[\]{}]/u;
 
 /**
  * Validate a service root and strip trailing slashes.

@@ -423,6 +423,9 @@ const PATH_UNSAFE = new Set([
   ']',
   '%',
   '/',
+  // `+` and `;` are encoded in values this layer *renders*. Caller-supplied key
+  // predicates are used verbatim (`KEY_QUOTED_INNER` accepts both raw), so the
+  // rule is not global — see the note in `shared/src/query.ts`.
   '+',
   ';',
 ]);

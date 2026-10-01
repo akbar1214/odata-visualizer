@@ -102,3 +102,20 @@ describe('curl glob syntax, lone surrogates and foreign schemes are rejected', (
     );
   });
 });
+
+/**
+ * `\p{Cf}` (zero-width and bidi controls) is not rejected by `\s`, and curl and
+ * WHATWG rewrite it rather than refusing — so it round-trips rather than
+ * misroutes. It is rejected anyway: a bidi override inside emitted URL text is a
+ * display-spoofing hazard, and "used exactly as written or refused" is the
+ * contract this validator states.
+ */
+describe('zero-width and bidi controls are rejected', () => {
+  it.each([
+    ['https://host/a\u200Bb', 'zero-width space'],
+    ['https://host/a\u202Eb', 'right-to-left override'],
+    ['https://host/a\u00ADb', 'soft hyphen'],
+  ])('rejects %s — %s', (baseUrl) => {
+    expect(() => buildQueryUrl({ entitySet: 'Parts', baseUrl })).toThrow(/Invalid baseUrl/);
+  });
+});
