@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
+import request from 'supertest';
 import { createApp } from '../src/app.js';
 
 /**
@@ -21,5 +22,63 @@ describe('test server binding', () => {
 
     server.closeAllConnections?.();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("binds supertest's internal server to loopback too", async () => {
+    // The server that actually flaked is supertest's own, created inside its
+    // constructor — asserting only on `createApp().listen(0)` would miss the
+    // path the whole patch exists for. `_server` is internal to supertest; the
+    // assertion is deliberately on it, because that is the object whose address
+    // the failure depended on.
+    const pending = request(createApp()).get('/api/health');
+    const address = (
+      pending as unknown as { _server: { address(): AddressInfo } }
+    )._server.address();
+
+    expect(address.address).toBe('127.0.0.1');
+    expect(address.family).toBe('IPv4');
+    await pending;
+  });
+});
+
+/**
+ * The patch sits on `net.Server.prototype.listen`, not `http.Server`'s, because
+ * `https.Server`, `http2.Server` and a bare `net.Server` inherit the former and
+ * would otherwise bypass the invariant this file states. Nothing in the repo
+ * binds one today — these assertions are what keep that true.
+ *
+ * `listen('0')` and `host: ''` are the other two spellings Node coerces to an
+ * ephemeral unspecified bind.
+ */
+describe('the loopback rewrite covers every server type and spelling', () => {
+  const bindAndRead = async (server: import('node:net').Server): Promise<AddressInfo> => {
+    server.listen(0);
+    await once(server, 'listening');
+    const address = server.address() as AddressInfo;
+    server.close();
+    return address;
+  };
+
+  it('binds a bare net.Server to loopback', async () => {
+    const { Server } = await import('node:net');
+    const address = await bindAndRead(new Server());
+
+    expect(address.address).toBe('127.0.0.1');
+  });
+
+  it('rewrites the string port and the empty host', async () => {
+    const { Server } = await import('node:net');
+
+    const byString = new Server();
+    byString.listen('0');
+    await once(byString, 'listening');
+    expect((byString.address() as AddressInfo).address).toBe('127.0.0.1');
+    byString.close();
+
+    const byOptions = new Server();
+    byOptions.listen({ port: 0, host: '' });
+    await once(byOptions, 'listening');
+    expect((byOptions.address() as AddressInfo).address).toBe('127.0.0.1');
+    byOptions.close();
   });
 });

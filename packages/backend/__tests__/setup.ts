@@ -1,6 +1,5 @@
 import dns from 'node:dns';
-import { Server as HttpServer } from 'node:http';
-import type { ListenOptions } from 'node:net';
+import { Server as NetServer, type ListenOptions } from 'node:net';
 
 /**
  * Bind every ephemeral test HTTP server to 127.0.0.1.
@@ -24,7 +23,7 @@ import type { ListenOptions } from 'node:net';
  * (src/index.ts), so this only brings the tests in line with production.
  */
 const PATCH_MARKER = Symbol.for('odata-visualizer.loopback-test-listen');
-const originalListen = HttpServer.prototype.listen;
+const originalListen = NetServer.prototype.listen;
 
 /**
  * Rewrite `listen(0)`, `listen(0, cb)`, `listen(0, backlog, cb)` and
@@ -39,9 +38,15 @@ function withLoopback(args: unknown[]): unknown[] | null {
     return [0, '127.0.0.1', ...(second === undefined ? [] : [second]), ...rest];
   }
 
+  if (typeof portOrOptions === 'string' && Number(portOrOptions) === 0) {
+    if (typeof second === 'string') return null;
+    return [0, '127.0.0.1', ...(second === undefined ? [] : [second]), ...rest];
+  }
+
   if (typeof portOrOptions === 'object' && portOrOptions !== null && 'port' in portOrOptions) {
     const options = portOrOptions as ListenOptions;
-    if (options.port !== 0 || options.host !== undefined) return null;
+    // `host: ''` means "unspecified" to Node, so it is as ephemeral as no host.
+    if (options.port !== 0 || (options.host !== undefined && options.host !== '')) return null;
     return [{ ...options, host: '127.0.0.1' }, ...(second === undefined ? [] : [second]), ...rest];
   }
 
@@ -57,7 +62,7 @@ function withLoopback(args: unknown[]): unknown[] | null {
  * 'listening' event is still emitted on the next tick, and every other lookup
  * goes to the real resolver untouched.
  */
-function bindLoopback(server: HttpServer, args: unknown[]): HttpServer {
+function bindLoopback(server: NetServer, args: unknown[]): NetServer {
   const realLookup = dns.lookup;
 
   dns.lookup = function syncLoopbackLookup(
@@ -85,7 +90,7 @@ function bindLoopback(server: HttpServer, args: unknown[]): HttpServer {
   } as typeof dns.lookup;
 
   try {
-    return (originalListen as (...a: unknown[]) => HttpServer).apply(server, args);
+    return (originalListen as (...a: unknown[]) => NetServer).apply(server, args);
   } finally {
     dns.lookup = realLookup;
   }
@@ -93,16 +98,16 @@ function bindLoopback(server: HttpServer, args: unknown[]): HttpServer {
 
 // Built-in modules are shared between the per-file environments in one worker,
 // so the setup file can run against an already-patched prototype.
-if (!(HttpServer.prototype as unknown as Record<symbol, unknown>)[PATCH_MARKER]) {
-  HttpServer.prototype.listen = function patchedListen(
-    this: HttpServer,
+if (!(NetServer.prototype as unknown as Record<symbol, unknown>)[PATCH_MARKER]) {
+  NetServer.prototype.listen = function patchedListen(
+    this: NetServer,
     ...args: unknown[]
-  ): HttpServer {
+  ): NetServer {
     const rewritten = withLoopback(args);
     if (!rewritten) {
       return (originalListen as (...a: unknown[]) => HttpServer).apply(this, args);
     }
     return bindLoopback(this, rewritten);
-  } as unknown as typeof HttpServer.prototype.listen;
-  (HttpServer.prototype as unknown as Record<symbol, unknown>)[PATCH_MARKER] = true;
+  } as unknown as typeof NetServer.prototype.listen;
+  (NetServer.prototype as unknown as Record<symbol, unknown>)[PATCH_MARKER] = true;
 }
