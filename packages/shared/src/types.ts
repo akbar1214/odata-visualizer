@@ -81,7 +81,22 @@ export interface ODataEntityContainer {
   name: string;
   /** Namespace the container is declared in; targets may qualify the name. */
   namespace?: string;
+  label?: string;
   entitySets: ODataEntitySet[];
+  /** Container singletons; only present when the container declares one. */
+  singletons?: ODataSingleton[];
+  annotations?: Record<string, string>;
+}
+
+/** Singleton declared in an entity container */
+export interface ODataSingleton {
+  name: string;
+  /** Short type name */
+  type: string;
+  /** Fully qualified type name when available */
+  typeQualified?: string;
+  label?: string;
+  annotations?: Record<string, string>;
 }
 
 /** Navigation property binding on an entity set (V4) */
@@ -143,6 +158,8 @@ export interface ODataFunction {
 export interface ODataEnumMember {
   name: string;
   value?: string;
+  label?: string;
+  annotations?: Record<string, string>;
 }
 
 /** Enum type definition */
@@ -152,6 +169,7 @@ export interface ODataEnumType {
   namespace?: string;
   underlyingType?: string;
   members: ODataEnumMember[];
+  label?: string;
   annotations?: Record<string, string>;
 }
 
@@ -161,6 +179,7 @@ export interface ODataTypeDefinition {
   qualifiedName?: string;
   namespace?: string;
   underlyingType: string;
+  label?: string;
   annotations?: Record<string, string>;
 }
 
@@ -170,9 +189,12 @@ export interface ODataFunctionImport {
   functionName: string;
   qualifiedFunctionName?: string;
   entitySet?: string;
+  /** Qualified name of the declaring entity container. */
+  container?: string;
   parameter?: ODataParameter[];
   returnType?: string;
   isBound?: boolean;
+  label?: string;
   annotations?: Record<string, string>;
 }
 
@@ -182,9 +204,12 @@ export interface ODataActionImport {
   actionName: string;
   qualifiedActionName?: string;
   entitySet?: string;
+  /** Qualified name of the declaring entity container. */
+  container?: string;
   isBound?: boolean;
   parameter?: ODataParameter[];
   returnType?: string;
+  label?: string;
   annotations?: Record<string, string>;
 }
 

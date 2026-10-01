@@ -29,12 +29,16 @@ const minimalCSDL = `<?xml version="1.0" encoding="utf-8"?>
 </edmx:Edmx>`;
 
 async function writeFixture(): Promise<string> {
+  return writeCsdl(minimalCSDL);
+}
+
+async function writeCsdl(content: string): Promise<string> {
   const { mkdtemp, writeFile } = await import('fs/promises');
   const { tmpdir } = await import('os');
   const { join } = await import('path');
   const dir = await mkdtemp(join(tmpdir(), 'mcp-test-'));
   const file = join(dir, 'metadata.xml');
-  await writeFile(file, minimalCSDL, 'utf-8');
+  await writeFile(file, content, 'utf-8');
   return file;
 }
 
@@ -328,6 +332,40 @@ describe('Windchill-like model tools', () => {
     expect(result.content[0].text).toContain(
       "GET <serviceRoot>/Parts('OR:wt.part.WTPart:123')/PTC.ProdMgmt.GetPartEstimate(Quantity=12.5)",
     );
+  });
+});
+
+/**
+ * Populating annotations changes what MCP renders: `describeCallable` appends
+ * `label` and `formatCallableDetails` prints it as a Description. A targeted
+ * action annotation could never reach either before the resolver understood
+ * `NS.Action` targets.
+ */
+describe('targeted annotations reach tool output', () => {
+  it('renders an action description applied by a schema-level Annotations block', async () => {
+    resetMetadata();
+    const file = await writeCsdl(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Demo" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <Action Name="Reset">
+        <Parameter Name="Hard" Type="Edm.Boolean" Nullable="true" />
+      </Action>
+      <EntityContainer Name="Container">
+        <ActionImport Name="Reset" Action="Demo.Reset" />
+      </EntityContainer>
+      <Annotations Target="Demo.Reset">
+        <Annotation Term="Core.Description" String="Resets the whole model" />
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    const load = await handleToolCall('load_metadata', { source: file, type: 'file' });
+    expect(load.isError).toBeUndefined();
+
+    const details = await handleToolCall('get_action_details', { name: 'Reset' });
+    expect(details.isError).toBeUndefined();
+    expect(details.content[0].text).toContain('Description: Resets the whole model');
   });
 });
 
