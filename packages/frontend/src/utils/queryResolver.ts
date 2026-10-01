@@ -133,10 +133,9 @@ export function getTargetEntityName(
     if (target) return target.name;
   }
 
-  // OData V3: resolve through the Association. Association ends now store the
-  // qualified reference, so both the endpoint lookup and the source comparison
-  // work on identities; comparing `rel.from.entity === sourceEntity.name`
-  // stopped matching once the end was qualified.
+  // OData V3: resolve through the Association. The endpoint identity is
+  // resolved before it is compared, so both the endpoint lookup and the source
+  // comparison work on identities rather than short names.
   if (!nav.relationship) return undefined;
   // The association is stored under its *simple* name (`parseAssociation` keeps
   // `@_Name` verbatim), but a namespaced generator writes `Self.R1` — or `N.R1`
