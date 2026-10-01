@@ -14,6 +14,7 @@ import type {
   ODataAction,
   ODataEntityContainer,
   ODataEntitySet,
+  ODataSingleton,
   ODataParameter,
   ODataEnumType,
   ODataEnumMember,
@@ -44,6 +45,7 @@ const XML_PARSER_OPTIONS: X2jOptions = {
       'PropertyRef',
       'EntityContainer',
       'EntitySet',
+      'Singleton',
       'Function',
       'FunctionImport',
       'Action',
@@ -255,6 +257,12 @@ function expandAliasesInMetadata(
       for (const binding of set.navigationPropertyBindings ?? []) {
         binding.target = expand(binding.target) ?? binding.target;
       }
+    }
+    for (const singleton of container.singletons ?? []) {
+      singleton.typeQualified = expand(singleton.typeQualified);
+      singleton.type = singleton.typeQualified
+        ? shortName(singleton.typeQualified)
+        : singleton.type;
     }
   }
   for (const item of [...metadata.actions, ...metadata.functions]) {
@@ -566,13 +574,24 @@ export async function parseCSDL(
           parsedEntitySets.push(es);
         }
       }
-      if (containerName || parsedEntitySets.length > 0) {
-        entityContainers.push({ name: containerName, namespace, entitySets: parsedEntitySets });
+      const singletons = childElements(container, 'Singleton', 'edm')
+        .map(parseSingleton)
+        .filter((s): s is ODataSingleton => s !== null);
+      const containerAnnotations = parseAnnotations(container);
+      if (containerName || parsedEntitySets.length > 0 || singletons.length > 0) {
+        entityContainers.push({
+          name: containerName,
+          namespace,
+          label: labelFromAnnotations(containerAnnotations),
+          entitySets: parsedEntitySets,
+          singletons: singletons.length > 0 ? singletons : undefined,
+          annotations: containerAnnotations,
+        });
       }
 
       const funcImports = childElements(container, 'FunctionImport', 'edm');
       for (const funcImport of funcImports) {
-        const fi = parseFunctionImport(funcImport, functionDefs);
+        const fi = parseFunctionImport(funcImport, functionDefs, qualify(namespace, containerName));
         if (fi) {
           documentOfElement.set(fi, currentDocument);
           functionImports.push(fi);
@@ -581,7 +600,7 @@ export async function parseCSDL(
 
       const actImports = childElements(container, 'ActionImport', 'edm');
       for (const actionImport of actImports) {
-        const ai = parseActionImport(actionImport, actionDefs);
+        const ai = parseActionImport(actionImport, actionDefs, qualify(namespace, containerName));
         if (ai) {
           documentOfElement.set(ai, currentDocument);
           actionImports.push(ai);
@@ -758,12 +777,31 @@ function relationshipFromNavigationProperty(
  *   element's own declaration is the more specific statement.
  * - Among targeted blocks, the last one in document order wins, matching the
  *   rule one level down where the last `<Annotation>` in a block wins.
+ * - An annotation on a property of an entity in a particular entity set or
+ *   singleton overrides one targeted via the declaring structured type
+ *   (CSDL 4.01 §14.2.2), regardless of document order.
  * - A bare target (no dot in its first segment) resolves in the schema that
  *   declared the block first, then across the model. Every lookup is exact-case
  *   first with a case-insensitive fallback, per the project-wide case policy.
  * - A block carrying `Qualifier` is rejected: `annotations` is a
  *   `Record<term, string>` and cannot represent the qualifier, so attaching
  *   either value as if it were unqualified would be silently wrong.
+ *
+ * Supported target paths, from §14.2.2:
+ *
+ * - `NS.Type`, `NS.EnumType`, `NS.EnumType/Member`, `NS.TypeDefinition`,
+ *   `NS.Action`, `NS.Function` (with `(parameterTypes)` to pick one overload)
+ *   and `NS.Container`;
+ * - `NS.Type/Property/Nested` with property, navigation-property and type-cast
+ *   segments; a nested annotation is stored on the property of the complex
+ *   type that declares it, the closest shape the model has;
+ * - `NS.Container/EntitySet`, `NS.Container/Singleton`,
+ *   `NS.Container/ActionImport`, `NS.Container/FunctionImport`, and a
+ *   property/navigation path below a set or singleton;
+ * - the unqualified `Container/Set` spelling, for hand-written documents.
+ *
+ * Still unsupported: parameter and `$ReturnType` targets (the model has no
+ * field for them), term casts, and the trailing `@Term#Qualifier` form.
  *
  * Targets that name nothing in the document are ignored rather than reported:
  * an `Annotations` block commonly targets a type from an `edmx:Reference` that
@@ -789,7 +827,7 @@ function applyTargetedAnnotations(
   // element declared inline *before* any block is applied, so a later block
   // cannot overwrite one and a bare target cannot win by arriving first.
   const inlineTerms = new WeakMap<object, Set<string>>();
-  const rememberInline = (element: { annotations?: Record<string, string> }) => {
+  const rememberInline = (element: Annotatable) => {
     if (element.annotations) {
       inlineTerms.set(element, new Set(Object.keys(element.annotations)));
     }
@@ -800,13 +838,21 @@ function applyTargetedAnnotations(
     for (const navigation of entity.navigationProperties) rememberInline(navigation);
   }
   for (const container of metadata.entityContainers) {
+    rememberInline(container);
     for (const set of container.entitySets) rememberInline(set);
+    for (const singleton of container.singletons ?? []) rememberInline(singleton);
   }
+  for (const action of metadata.actions) rememberInline(action);
+  for (const func of metadata.functions) rememberInline(func);
+  for (const enumType of metadata.enumTypes) {
+    rememberInline(enumType);
+    for (const member of enumType.members) rememberInline(member);
+  }
+  for (const typeDefinition of metadata.typeDefinitions) rememberInline(typeDefinition);
+  for (const importRecord of metadata.actionImports) rememberInline(importRecord);
+  for (const importRecord of metadata.functionImports) rememberInline(importRecord);
 
-  const applyTo = (
-    element: { annotations?: Record<string, string>; label?: string },
-    extra: Record<string, string>,
-  ): void => {
+  const applyTo = (element: Annotatable, extra: Record<string, string>): void => {
     const protectedTerms = inlineTerms.get(element);
     const merged = { ...(element.annotations ?? {}) };
     let changed = false;
@@ -820,6 +866,11 @@ function applyTargetedAnnotations(
     element.label = labelFromAnnotations(merged) ?? element.label;
   };
 
+  // §14.2.2: a set- or singleton-qualified property annotation overrides one
+  // targeted via the declaring structured type. Defer those blocks to a second
+  // pass so the override wins wherever the block sits in the document.
+  const overrides: Array<{ element: Annotatable; annotations: Record<string, string> }> = [];
+
   for (const block of targeted) {
     // Rejected on purpose. The combination of target, term and qualifier
     // uniquely identifies an annotation (CSDL 4.01 §14.2.1), and `annotations`
@@ -831,54 +882,387 @@ function applyTargetedAnnotations(
     // The namespace guard added in #25 matters here too: a prefix that names an
     // actual schema is a namespace, not an alias, so an annotation target
     // cannot be rewritten into another document's namespace.
-    const expanded = expandAlias(
-      block.target,
-      aliasesForNamespace(undefined, undefined, block.document),
-      namespaces,
-    );
+    const aliases = aliasesForNamespace(undefined, undefined, block.document);
+    const expanded = expandAlias(block.target, aliases, namespaces);
     const segments = expanded.split('/');
+    const scope = block.namespace;
 
-    // `NS.Type/Prop`. Per CSDL a schema child must be namespace-qualified, so
-    // an unqualified first segment cannot be a type — requiring the dot keeps
-    // `C/Widgets` from matching a property named `Widgets` on some type `C`.
-    if (segments.length === 2 && segments[0].includes('.')) {
-      const owner = findTypeInScope(metadata.entities, segments[0], block.namespace);
-      if (owner) {
-        // Annotations apply to structural *or* navigation properties.
-        const property = findPropertyOrNavigation(owner, segments[1]);
-        if (property) {
-          applyTo(property, block.annotations);
-          continue;
+    const selector = splitOverloadSelector(segments[0]);
+    if (selector) {
+      // `NS.Function(Edm.String, Edm.Int32)` or `NS.Action(N.BindingType)` /
+      // `NS.Action()`. A further segment would target a parameter or
+      // `$ReturnType`, which the model has no field for.
+      if (segments.length > 1) continue;
+      const overloads = findOverloads(metadata, selector, scope, aliases, namespaces);
+      if (overloads) {
+        for (const overload of overloads) applyTo(overload, block.annotations);
+      }
+      continue;
+    }
+
+    if (segments.length >= 2) {
+      const first = findNamedTargets(metadata, segments[0], scope);
+
+      // `NS.Type/Property[/Nested...]`, including type-cast segments. The
+      // first segment must be qualified; an unqualified pair is a container
+      // child, which the branch below resolves.
+      if (segments[0].includes('.')) {
+        const owner = first.find((candidate) => candidate.kind === 'entity');
+        if (owner) {
+          const leaf = walkPropertyPath(metadata, owner.element as ODataEntity, segments.slice(1));
+          if (leaf) {
+            applyTo(leaf, block.annotations);
+            continue;
+          }
+        }
+
+        // `NS.EnumType/Member`.
+        const enumType = first.find((candidate) => candidate.kind === 'enum');
+        if (enumType && segments.length === 2) {
+          const member = findEnumMember(enumType.element as ODataEnumType, segments[1]);
+          if (member) {
+            applyTo(member, block.annotations);
+            continue;
+          }
         }
       }
+
+      // `NS.Container/Child` and the unqualified `Container/Child`.
+      const containerCandidate = first.find((candidate) => candidate.kind === 'container');
+      if (containerCandidate) {
+        const container = containerCandidate.element as ODataEntityContainer;
+        const child = segments[1];
+
+        const set = findSetIn(container, child);
+        if (set) {
+          if (segments.length === 2) {
+            applyTo(set, block.annotations);
+            continue;
+          }
+          const leaf = walkFromTypeReference(
+            metadata,
+            set.entityTypeQualified ?? set.entityType,
+            container.namespace ?? scope,
+            segments.slice(2),
+          );
+          if (leaf) {
+            overrides.push({ element: leaf, annotations: block.annotations });
+            continue;
+          }
+        }
+
+        const singleton = findSingletonIn(container, child);
+        if (singleton) {
+          if (segments.length === 2) {
+            applyTo(singleton, block.annotations);
+            continue;
+          }
+          const leaf = walkFromTypeReference(
+            metadata,
+            singleton.typeQualified ?? singleton.type,
+            container.namespace ?? scope,
+            segments.slice(2),
+          );
+          if (leaf) {
+            overrides.push({ element: leaf, annotations: block.annotations });
+            continue;
+          }
+        }
+
+        if (segments.length === 2) {
+          const importRecord =
+            findImportIn(metadata.actionImports, container, child) ??
+            findImportIn(metadata.functionImports, container, child);
+          if (importRecord) {
+            applyTo(importRecord, block.annotations);
+            continue;
+          }
+        }
+      }
+      continue;
     }
 
-    // `NS.Container/Set` — the spec form, and what `odata-demo-metadata.xml`
-    // uses (`ODataDemo.DemoService/Suppliers`). The unqualified `Container/Set`
-    // is accepted too, because it costs nothing and appears in hand-written
-    // documents.
-    if (segments.length === 2) {
-      const container = findContainer(metadata.entityContainers, segments[0], block.namespace);
-      const set = container ? findSetIn(container, segments[1]) : undefined;
-      if (set) {
-        applyTo(set, block.annotations);
-        continue;
+    // A single segment: a schema child, then a container-less entity-set name.
+    const named = findNamedTargets(metadata, expanded, scope);
+    if (named.length > 0) {
+      if (named[0].kind === 'action' || named[0].kind === 'function') {
+        // Every overload shares the name; a target without parentheses applies
+        // to all of them.
+        for (const candidate of named) {
+          if (candidate.kind === 'action' || candidate.kind === 'function') {
+            applyTo(candidate.element, block.annotations);
+          }
+        }
+      } else {
+        applyTo(named[0].element, block.annotations);
       }
+      continue;
     }
+    const set = findEntitySetInScope(metadata, expanded, scope);
+    if (set) applyTo(set, block.annotations);
+  }
 
-    if (segments.length === 1) {
-      // A type, or a container-less entity set name.
-      const entity = findTypeInScope(metadata.entities, expanded, block.namespace);
-      if (entity) {
-        applyTo(entity, block.annotations);
-        continue;
-      }
-      const set = findEntitySetInScope(metadata, expanded, block.namespace);
-      if (set) {
-        applyTo(set, block.annotations);
-      }
+  for (const override of overrides) applyTo(override.element, override.annotations);
+}
+
+/** Any model element a targeted block can decorate. */
+interface Annotatable {
+  annotations?: Record<string, string>;
+  label?: string;
+}
+
+/** A schema child a target's first segment can name, with its identities. */
+interface NamedCandidate {
+  kind: 'entity' | 'enum' | 'typeDefinition' | 'action' | 'function' | 'container';
+  qualified: string;
+  short: string;
+  namespace: string;
+  element: Annotatable;
+}
+
+/**
+ * Every schema child a target's first segment may name.
+ *
+ * Candidates are emitted in a fixed kind order (types, enums, type
+ * definitions, callables, containers), which decides a tie between two kinds
+ * that share a name — invalid CSDL, but the parser is lenient about it.
+ */
+function namedCandidates(metadata: ODataMetadata): NamedCandidate[] {
+  const candidates: NamedCandidate[] = [];
+  for (const entity of metadata.entities) {
+    candidates.push({
+      kind: 'entity',
+      qualified: entity.qualifiedName ?? entity.name,
+      short: entity.name,
+      namespace: entity.namespace ?? '',
+      element: entity,
+    });
+  }
+  for (const enumType of metadata.enumTypes) {
+    candidates.push({
+      kind: 'enum',
+      qualified: enumType.qualifiedName ?? enumType.name,
+      short: enumType.name,
+      namespace: enumType.namespace ?? '',
+      element: enumType,
+    });
+  }
+  for (const typeDefinition of metadata.typeDefinitions) {
+    candidates.push({
+      kind: 'typeDefinition',
+      qualified: typeDefinition.qualifiedName ?? typeDefinition.name,
+      short: typeDefinition.name,
+      namespace: typeDefinition.namespace ?? '',
+      element: typeDefinition,
+    });
+  }
+  for (const action of metadata.actions) {
+    candidates.push({
+      kind: 'action',
+      qualified: action.qualifiedName ?? action.name,
+      short: action.name,
+      namespace: action.namespace ?? '',
+      element: action,
+    });
+  }
+  for (const func of metadata.functions) {
+    candidates.push({
+      kind: 'function',
+      qualified: func.qualifiedName ?? func.name,
+      short: func.name,
+      namespace: func.namespace ?? '',
+      element: func,
+    });
+  }
+  for (const container of metadata.entityContainers) {
+    candidates.push({
+      kind: 'container',
+      qualified: container.namespace ? `${container.namespace}.${container.name}` : container.name,
+      short: container.name,
+      namespace: container.namespace ?? '',
+      element: container,
+    });
+  }
+  return candidates;
+}
+
+/**
+ * How well a candidate matches a target name; lower is better, -1 no match.
+ *
+ * Mirrors the project-wide case policy: exact case first, then a
+ * case-insensitive fallback, and for a bare name the declaring schema's
+ * namespace before the rest of the model.
+ */
+function nameMatchTier(
+  candidate: NamedCandidate,
+  name: string,
+  preferredNamespace: string,
+): number {
+  if (name.includes('.')) {
+    if (candidate.qualified === name) return 0;
+    if (candidate.qualified.toLowerCase() === name.toLowerCase()) return 1;
+    return -1;
+  }
+  if (candidate.namespace === preferredNamespace && candidate.short === name) return 0;
+  if (candidate.short === name) return 1;
+  if (
+    candidate.namespace.toLowerCase() === preferredNamespace.toLowerCase() &&
+    candidate.short.toLowerCase() === name.toLowerCase()
+  ) {
+    return 2;
+  }
+  if (candidate.short.toLowerCase() === name.toLowerCase()) return 3;
+  return -1;
+}
+
+/** The best-matching schema children for a single-segment target. */
+function findNamedTargets(
+  metadata: ODataMetadata,
+  name: string,
+  preferredNamespace: string,
+): NamedCandidate[] {
+  let best = Number.POSITIVE_INFINITY;
+  let found: NamedCandidate[] = [];
+  for (const candidate of namedCandidates(metadata)) {
+    const tier = nameMatchTier(candidate, name, preferredNamespace);
+    if (tier < 0) continue;
+    if (tier < best) {
+      best = tier;
+      found = [candidate];
+    } else if (tier === best) {
+      found.push(candidate);
     }
   }
+  return found;
+}
+
+/** Split `NS.Function(Edm.String, Edm.Int32)` into its name and parameter types. */
+function splitOverloadSelector(
+  segment: string,
+): { name: string; parameterTypes: string[] } | undefined {
+  const open = segment.indexOf('(');
+  if (open < 0 || !segment.endsWith(')')) return undefined;
+  const name = segment.slice(0, open);
+  if (!name) return undefined;
+  const inside = segment.slice(open + 1, -1).trim();
+  return {
+    name,
+    parameterTypes: inside === '' ? [] : inside.split(',').map((type) => type.trim()),
+  };
+}
+
+/** All overloads of `selector.name` whose parameter list matches the selector. */
+function findOverloads(
+  metadata: ODataMetadata,
+  selector: { name: string; parameterTypes: string[] },
+  preferredNamespace: string,
+  aliases: Map<string, string>,
+  namespaces: Set<string>,
+): Array<ODataAction | ODataFunction> | undefined {
+  const callables = findNamedTargets(metadata, selector.name, preferredNamespace).filter(
+    (candidate) => candidate.kind === 'action' || candidate.kind === 'function',
+  );
+  if (callables.length === 0) return undefined;
+
+  const parameterTypes = selector.parameterTypes.map((type) =>
+    expandAlias(type, aliases, namespaces),
+  );
+  const exact = callables.filter((candidate) => matchesOverload(candidate, parameterTypes, false));
+  if (exact.length > 0) {
+    return exact.map((candidate) => candidate.element as ODataAction | ODataFunction);
+  }
+  return callables
+    .filter((candidate) => matchesOverload(candidate, parameterTypes, true))
+    .map((candidate) => candidate.element as ODataAction | ODataFunction);
+}
+
+/**
+ * Does an overload match the parenthesised parameter list?
+ *
+ * For a function the list is every parameter type in order. For an action the
+ * spec uses the binding parameter type for a bound overload and an empty list
+ * for the unbound overload.
+ */
+function matchesOverload(
+  candidate: NamedCandidate,
+  parameterTypes: string[],
+  ignoreCase: boolean,
+): boolean {
+  const callable = candidate.element as ODataAction | ODataFunction;
+  const types = callable.parameters.map((parameter) => parameter.type);
+  const equal = (a: string, b: string) =>
+    ignoreCase ? a.toLowerCase() === b.toLowerCase() : a === b;
+
+  if (candidate.kind === 'action') {
+    if (parameterTypes.length === 0) return !callable.isBound;
+    return (
+      callable.isBound &&
+      parameterTypes.length === 1 &&
+      types.length > 0 &&
+      equal(types[0], parameterTypes[0])
+    );
+  }
+
+  return (
+    types.length === parameterTypes.length &&
+    types.every((type, index) => equal(type, parameterTypes[index]))
+  );
+}
+
+/**
+ * Walk property, navigation-property and type-cast segments from a type.
+ *
+ * Returns the property the last segment names. A nested path (`Type/Complex/
+ * Nested`) is stored on the property of the complex type that declares it —
+ * the model has no per-path slot, so the annotation is visible wherever that
+ * complex type is used.
+ */
+function walkPropertyPath(
+  metadata: ODataMetadata,
+  startType: ODataEntity,
+  segments: string[],
+): ODataProperty | ODataNavigationProperty | undefined {
+  let current: ODataEntity | undefined = startType;
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (segment.includes('.')) {
+      // A qualified segment is a type cast, not a property name.
+      current = findTypeInScope(metadata.entities, segment, current?.namespace);
+      if (!current) return undefined;
+      continue;
+    }
+    if (!current) return undefined;
+    const property = findPropertyOrNavigation(current, segment);
+    if (!property) return undefined;
+    if (index === segments.length - 1) return property;
+
+    const reference = isNavigationProperty(property)
+      ? (property.targetTypeQualified ?? property.targetType)
+      : property.type;
+    current = reference
+      ? findTypeInScope(metadata.entities, reference, current.namespace)
+      : undefined;
+    if (!current) return undefined;
+  }
+  return undefined;
+}
+
+/** Resolve a set's or singleton's declared type, then walk the path. */
+function walkFromTypeReference(
+  metadata: ODataMetadata,
+  reference: string,
+  scope: string,
+  segments: string[],
+): ODataProperty | ODataNavigationProperty | undefined {
+  const startType = findTypeInScope(metadata.entities, reference, scope);
+  if (!startType) return undefined;
+  return walkPropertyPath(metadata, startType, segments);
+}
+
+function isNavigationProperty(
+  property: ODataProperty | ODataNavigationProperty,
+): property is ODataNavigationProperty {
+  return 'relationship' in property;
 }
 
 /**
@@ -904,51 +1288,56 @@ function findPropertyOrNavigation(
   );
 }
 
-/**
- * A container by bare or namespace-qualified name, preferring the schema that
- * declared the annotation block. Exact case first, then case-insensitive.
- */
-function findContainer(
-  containers: ODataEntityContainer[],
-  name: string,
-  preferredNamespace: string,
-): ODataEntityContainer | undefined {
-  const qualified = (container: ODataEntityContainer) =>
-    container.namespace ? `${container.namespace}.${container.name}` : container.name;
-
-  const exactQualified = containers.find(
-    (container) => container.namespace && qualified(container) === name,
-  );
-  if (exactQualified) return exactQualified;
-
-  const exactSameNamespace = containers.find(
-    (container) => container.namespace === preferredNamespace && container.name === name,
-  );
-  if (exactSameNamespace) return exactSameNamespace;
-
-  const exactBare = containers.find((container) => container.name === name);
-  if (exactBare) return exactBare;
-
-  const needle = name.toLowerCase();
-  return (
-    containers.find(
-      (container) => container.namespace && qualified(container).toLowerCase() === needle,
-    ) ??
-    containers.find(
-      (container) =>
-        container.namespace?.toLowerCase() === preferredNamespace.toLowerCase() &&
-        container.name.toLowerCase() === needle,
-    ) ??
-    containers.find((container) => container.name.toLowerCase() === needle)
-  );
-}
-
 /** An entity set within one container. Exact case first, then case-insensitive. */
 function findSetIn(container: ODataEntityContainer, name: string): ODataEntitySet | undefined {
   const exact = container.entitySets.find((set) => set.name === name);
   if (exact) return exact;
   const needle = name.toLowerCase();
   return container.entitySets.find((set) => set.name.toLowerCase() === needle);
+}
+
+/** A singleton within one container. Exact case first, then case-insensitive. */
+function findSingletonIn(
+  container: ODataEntityContainer,
+  name: string,
+): ODataSingleton | undefined {
+  const singletons = container.singletons ?? [];
+  const exact = singletons.find((singleton) => singleton.name === name);
+  if (exact) return exact;
+  const needle = name.toLowerCase();
+  return singletons.find((singleton) => singleton.name.toLowerCase() === needle);
+}
+
+/** An enum member. Exact case first, then case-insensitive. */
+function findEnumMember(enumType: ODataEnumType, name: string): ODataEnumMember | undefined {
+  const exact = enumType.members.find((member) => member.name === name);
+  if (exact) return exact;
+  const needle = name.toLowerCase();
+  return enumType.members.find((member) => member.name.toLowerCase() === needle);
+}
+
+/**
+ * An action or function import belonging to a container.
+ *
+ * Imports parsed from CSDL record their container, so a target naming a
+ * different container does not attach here. A hand-built import without the
+ * field is accepted by name, since there is nothing to compare.
+ */
+function findImportIn<T extends ODataActionImport | ODataFunctionImport>(
+  imports: T[],
+  container: ODataEntityContainer,
+  name: string,
+): T | undefined {
+  const containerName = container.namespace
+    ? `${container.namespace}.${container.name}`
+    : container.name;
+  const owned = imports.filter(
+    (record) => record.container === undefined || record.container === containerName,
+  );
+  const exact = owned.find((record) => record.name === name);
+  if (exact) return exact;
+  const needle = name.toLowerCase();
+  return owned.find((record) => record.name.toLowerCase() === needle);
 }
 
 function parseEntitySet(entitySet: XmlElement): ODataEntitySet | null {
@@ -976,6 +1365,20 @@ function parseEntitySet(entitySet: XmlElement): ODataEntitySet | null {
   };
 }
 
+function parseSingleton(el: XmlElement): ODataSingleton | null {
+  const name = str(el['@_Name']);
+  const rawType = str(el['@_Type']);
+  if (!name || !rawType) return null;
+  const annotations = parseAnnotations(el);
+  return {
+    name,
+    type: shortName(rawType),
+    typeQualified: rawType || undefined,
+    label: labelFromAnnotations(annotations),
+    annotations,
+  };
+}
+
 function parseNavigationPropertyBinding(
   binding: XmlElement,
 ): ODataNavigationPropertyBinding | null {
@@ -988,6 +1391,7 @@ function parseNavigationPropertyBinding(
 function parseActionImport(
   actionImport: XmlElement,
   actionDefs: Map<string, ODataAction>,
+  container?: string,
 ): ODataActionImport | null {
   const name = str(actionImport['@_Name']);
   if (!name) return null;
@@ -996,16 +1400,19 @@ function parseActionImport(
   const actionName = shortName(rawAction);
   const def = actionDefs.get(actionName);
   const entitySet = str(actionImport['@_EntitySet']) || undefined;
+  const annotations = parseAnnotations(actionImport);
 
   return {
     name,
     actionName,
     qualifiedActionName: def?.qualifiedName || rawAction || undefined,
     entitySet,
+    container,
     isBound: def?.isBound,
     parameter: def && def.parameters.length > 0 ? def.parameters : undefined,
     returnType: def?.returnType,
-    annotations: parseAnnotations(actionImport),
+    label: labelFromAnnotations(annotations),
+    annotations,
   };
 }
 
@@ -1088,6 +1495,7 @@ function parseReturnType(el: XmlElement): string | undefined {
 function parseFunctionImport(
   funcImport: XmlElement,
   functionDefs: Map<string, ODataFunction>,
+  container?: string,
 ): ODataFunctionImport | null {
   const name = str(funcImport['@_Name']);
   if (!name) return null;
@@ -1099,16 +1507,19 @@ function parseFunctionImport(
   const parameters = parseParameters(funcImport, false);
   const returnType = def?.returnType;
   const effectiveParams = parameters.length > 0 ? parameters : def ? def.parameters : [];
+  const annotations = parseAnnotations(funcImport);
 
   return {
     name,
     functionName: shortName(functionName) || functionName,
     qualifiedFunctionName: def?.qualifiedName || functionName || undefined,
     entitySet,
+    container,
     parameter: effectiveParams.length > 0 ? effectiveParams : undefined,
     returnType,
     isBound: def?.isBound,
-    annotations: parseAnnotations(funcImport),
+    label: labelFromAnnotations(annotations),
+    annotations,
   };
 }
 
@@ -1127,16 +1538,24 @@ function parseEnumType(el: XmlElement, namespace: string): ODataEnumType | null 
         break;
       }
     }
-    members.push({ name: memberName, value });
+    const memberAnnotations = parseAnnotations(memberEl);
+    members.push({
+      name: memberName,
+      value,
+      label: labelFromAnnotations(memberAnnotations),
+      annotations: memberAnnotations,
+    });
   }
 
+  const annotations = parseAnnotations(el);
   return {
     name,
     qualifiedName: qualify(namespace, name),
     namespace,
     underlyingType: str(el['@_UnderlyingType']) || undefined,
     members,
-    annotations: parseAnnotations(el),
+    label: labelFromAnnotations(annotations),
+    annotations,
   };
 }
 
@@ -1144,13 +1563,15 @@ function parseTypeDefinition(el: XmlElement, namespace: string): ODataTypeDefini
   const name = str(el['@_Name']);
   const underlyingType = str(el['@_UnderlyingType']);
   if (!name || !underlyingType) return null;
+  const annotations = parseAnnotations(el);
 
   return {
     name,
     qualifiedName: qualify(namespace, name),
     namespace,
     underlyingType,
-    annotations: parseAnnotations(el),
+    label: labelFromAnnotations(annotations),
+    annotations,
   };
 }
 

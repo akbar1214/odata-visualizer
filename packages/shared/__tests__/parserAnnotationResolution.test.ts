@@ -80,6 +80,30 @@ describe('a bare target resolves in its declaring schema', () => {
     expect(entity.annotations?.['Core.Description']).toBe('cross-schema');
   });
 
+  it('falls back to a case-insensitive bare name across schemas', async () => {
+    // Neither the declaring schema nor an exact-case spelling matches, so the
+    // case-insensitive fallback across the model applies.
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="A" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <Annotations Target="onlyoverthere">
+        <Annotation Term="Core.Description" String="sloppy spelling" />
+      </Annotations>
+    </Schema>
+    <Schema Namespace="B" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="OnlyOverThere">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    const entity = model.entities[0];
+
+    expect(entity.annotations?.['Core.Description']).toBe('sloppy spelling');
+  });
+
   it('prefers a bare entity-set target in the declaring schema too', async () => {
     const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
