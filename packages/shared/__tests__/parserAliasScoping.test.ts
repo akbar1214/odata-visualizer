@@ -301,6 +301,18 @@ describe('namespaces differing only by case stay distinct', () => {
 describe('per-document scoping is pinned for each mechanism', () => {
   it('lets a nested reference declare aliases for the document that declares it', async () => {
     // root -> B, and B's own reference declares an alias B itself uses.
+    const docC = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="C" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
     const docB = `<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
   <edmx:Reference Uri="https://example.org/c.xml">
@@ -326,7 +338,7 @@ describe('per-document scoping is pinned for each mechanism', () => {
     </Schema>
   </edmx:DataServices>
 </edmx:Edmx>`,
-      { loadExternal: async (uri) => (uri.includes('b.xml') ? docB : docB) },
+      { loadExternal: async (uri) => (uri.includes('c.xml') ? docC : docB) },
     );
 
     // `co` is declared by document B's own reference, so B's type resolves it.
@@ -534,8 +546,8 @@ describe('derived relationships resolve in their own document', () => {
  * Order is observable: an unqualified annotation target is resolved with
  * `findEntityByName`, which is first-match-wins.
  */
-describe('mixed spellings are merged in document order', () => {
-  it('keeps entity types in the order the document declares them', async () => {
+describe('mixed spellings are interleaved, not appended', () => {
+  it('keeps entity types in key order rather than unprefixed-first', async () => {
     const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
   <edmx:DataServices>
@@ -599,5 +611,113 @@ describe('a reference keeps its aliases when its target cannot load', () => {
     );
 
     expect(model.entities.find((e) => e.qualifiedName === 'Mid.T')!.baseType).toBe('Missing.Base');
+  });
+});
+
+/**
+ * `firstChildText` must read both spellings without going through
+ * `childElements`: that helper is element-oriented, and a text-only leaf is
+ * handed back as a primitive, which `ensureArray` turns into `[]`. Routing it
+ * through the helper dropped every singly-occurring scalar annotation value —
+ * labels, descriptions, search terms — while repeated children still arrived as
+ * an array and worked, so the loss was invisible.
+ */
+describe('scalar annotation values survive', () => {
+  const withAnnotations = (body: string) => `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm"
+            xmlns:edm="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Annotations Target="N.Thing">
+${body}
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  const annotationsOf = async (body: string) => {
+    const model = await parseCSDL(withAnnotations(body));
+    return model.entities.find((e) => e.qualifiedName === 'N.Thing')!.annotations;
+  };
+
+  it('keeps a single unprefixed scalar', async () => {
+    const annotations = await annotationsOf(
+      '        <Annotation Term="Core.Description"><String>Customer</String></Annotation>',
+    );
+
+    expect(annotations?.['Core.Description']).toBe('Customer');
+  });
+
+  it('keeps a single edm-prefixed scalar', async () => {
+    const annotations = await annotationsOf(
+      '        <Annotation Term="T.Prefixed"><edm:String>Prefixed</edm:String></Annotation>',
+    );
+
+    expect(annotations?.['T.Prefixed']).toBe('Prefixed');
+  });
+
+  it('keeps a single Bool', async () => {
+    const annotations = await annotationsOf(
+      '        <Annotation Term="T.Bool"><Bool>true</Bool></Annotation>',
+    );
+
+    expect(annotations?.['T.Bool']).toBe('true');
+  });
+
+  it('keeps a one-item Collection', async () => {
+    const annotations = await annotationsOf(
+      '        <Annotation Term="T.One"><Collection><String>one</String></Collection></Annotation>',
+    );
+
+    expect(annotations?.['T.One']).toBe('one');
+  });
+
+  it('still joins a repeated Collection', async () => {
+    const annotations = await annotationsOf(
+      '        <Annotation Term="T.Many"><Collection><String>one</String><String>two</String></Collection></Annotation>',
+    );
+
+    expect(annotations?.['T.Many']).toBe('one, two');
+  });
+});
+
+/**
+ * The conversions at the `Annotations` and `NavigationPropertyBinding` sites
+ * were unpinned: dropping the prefix argument reverted them to first-spelling
+ * only and the suite stayed green, because no test declared the prefixed form
+ * *alone*. Worth pinning — both were supported before the conversion.
+ */
+describe('prefixed-only spellings survive', () => {
+  it('keeps a prefixed-only Annotations block and navigation binding', async () => {
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm"
+            xmlns:edm="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityContainer Name="C">
+        <EntitySet Name="Things" EntityType="N.Thing">
+          <edm:NavigationPropertyBinding Path="Others" Target="N.Others" />
+        </EntitySet>
+      </EntityContainer>
+      <edm:Annotations Target="N.Thing">
+        <Annotation Term="Core.Description" String="from the prefixed block" />
+      </edm:Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+    expect(
+      model.entities.find((e) => e.qualifiedName === 'N.Thing')!.annotations?.['Core.Description'],
+    ).toBe('from the prefixed block');
+    const things = model.entityContainers[0].entitySets.find((s) => s.name === 'Things')!;
+    expect(things.navigationPropertyBindings?.map((b) => b.path)).toEqual(['Others']);
   });
 });

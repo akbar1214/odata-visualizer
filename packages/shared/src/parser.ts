@@ -1236,11 +1236,22 @@ function annotationValue(ann: XmlElement): string {
 }
 
 function firstChildText(el: XmlElement, childName: string): string | undefined {
-  // Both spellings, not just the first — an element carrying `<String>` and
-  // `<edm:String>` otherwise lost one group of scalar annotation values.
-  const child = childElements(el, childName, 'edm');
-  if (child.length === 0) return undefined;
-  const items = child as unknown[];
+  // Reads both spellings, but deliberately not through `childElements`: that
+  // helper is element-oriented and goes via `ensureArray`, which yields `[]`
+  // for a primitive. A text-only leaf is handed back as a plain string, so
+  // routing it through `childElements` dropped every singly-occurring
+  // `<String>`, `<Bool>` or one-item `<Collection>` — the common case, and
+  // silently, because repeated children still arrived as an array.
+  const items: unknown[] = [];
+  for (const [key, value] of Object.entries(el)) {
+    if (key !== childName && key !== `edm:${childName}`) continue;
+    if (Array.isArray(value)) {
+      items.push(...(value as unknown[]));
+    } else {
+      items.push(value);
+    }
+  }
+  if (items.length === 0) return undefined;
   const values = items
     .map((item) => {
       if (item !== null && typeof item === 'object') {
@@ -1270,11 +1281,12 @@ function labelFromAnnotations(annotations: Record<string, string> | undefined): 
  * repeats as an array; `ensureArray` normalises both.
  */
 function childElements(owner: XmlElement, name: string, ...prefixes: string[]): XmlElement[] {
-  // Walk the owner's own keys rather than reading each spelling in turn, so
-  // the two groups come back in document order. Reading them in turn put every
-  // unprefixed element first, which moved elements that the document declared
-  // later — observable wherever first-wins ordering is used, such as an
-  // unqualified annotation target resolved against `findEntityByName`.
+  // Walk the owner's own keys rather than reading each spelling in turn, so the
+  // two spellings are interleaved rather than one being appended after the
+  // other. Reading them in turn put every unprefixed element first, which moved
+  // elements the document declared later — observable wherever first-wins
+  // ordering is used, such as an unqualified annotation target resolved against
+  // `findEntityByName`.
   //
   // `xml2js` groups repeats under one key, so this is the order of the key
   // groups rather than of individual elements, which is as much as the parsed
