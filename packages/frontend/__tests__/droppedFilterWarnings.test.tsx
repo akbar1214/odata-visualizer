@@ -627,7 +627,9 @@ describe('QueryBuilder explains a filter it had to leave out', () => {
     fireEvent.change(functionSelect, { target: { value: 'TopItems' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add to Canvas' }));
 
-    expect(preview().textContent).toBe('TopItems');
+    // The function query is an absolute path addressed by the import name; the
+    // import has no parameters, so no parentheses.
+    expect(preview().textContent).toBe('/TopItems');
     expect(within(warningList()).queryByText(/Filter on "Id"/)).toBeNull();
     expect(screen.queryByRole('button', { name: /filter omitted/i })).toBeNull();
   });
