@@ -138,11 +138,23 @@ export function getTargetEntityName(
   // `@_Name` verbatim), but a namespaced generator writes `Self.R1` — or `N.R1`
   // once the parser expands `Schema/@Alias`. Matching the two directly missed
   // every such document, so the whole V3 pathfinder branch was dead.
-  const localName = nav.relationship.slice(nav.relationship.lastIndexOf('.') + 1);
+  //
+  // A qualified reference names the association's *namespace*, and that is what
+  // the qualifier is for: two namespaces may declare the same simple name.
+  // Preferring the source entity's namespace instead picked the wrong
+  // association whenever the two differed — which is the only case where a
+  // generator writes the qualified form at all.
+  const dot = nav.relationship.lastIndexOf('.');
+  const qualifier = dot > 0 ? nav.relationship.slice(0, dot) : undefined;
+  const localName = dot > 0 ? nav.relationship.slice(dot + 1) : nav.relationship;
   const candidates = metadata.relationships.filter(
     (r) => r.name === nav.relationship || r.name === localName,
   );
-  const rel = candidates.find((r) => r.namespace === sourceEntity.namespace) ?? candidates[0];
+  const rel =
+    metadata.relationships.find((r) => r.name === nav.relationship) ??
+    (qualifier ? candidates.find((r) => r.namespace === qualifier) : undefined) ??
+    candidates.find((r) => r.namespace === sourceEntity.namespace) ??
+    candidates[0];
   if (!rel) return undefined;
 
   if (nav.toRole) {
