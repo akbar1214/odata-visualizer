@@ -638,6 +638,15 @@ describe('edmx:Include and edmx:Reference', () => {
     expect(result.entities.map((e) => e.qualifiedName)).not.toContain('Ext.RefType');
   });
 
+  it('records the Include names an unresolved reference could have supplied', async () => {
+    // #73: the resolve guard tests a stray qualifier against these names, so a
+    // failure unrelated to the qualifier does not disable the fallback.
+    const result = await parseCSDL(mainWithReference);
+
+    expect(result.unresolvedReferences).toEqual(['ext.xml']);
+    expect(result.unresolvedReferenceIncludes).toEqual(['Ext', 'ext']);
+  });
+
   it('does not loop on circular references', async () => {
     const circular = mainWithReference.replace(
       '<Schema Namespace="Main"',

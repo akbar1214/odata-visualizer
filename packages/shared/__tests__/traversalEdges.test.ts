@@ -496,12 +496,12 @@ describe('bound functions on a base type', () => {
 /**
  * #70.3: a function bound to a base type and returning one of its inheritors
  * gives the returned type a self-loop (`Derived -> Derived`) beside the base's
- * edge. `getReachableEntities` keys its visited set by edge, so the returned
- * type is enqueued once and then visited again, listing the self-loop step once
- * per visit. The duplication predates #68 — a pure navigation self-loop does
- * the same on unmodified code — and is recorded here rather than fixed:
- * consumers that need distinct steps (PathFinder) dedup through a Set, and
- * changing the walk would change the navigation-edge output.
+ * edge. `getReachableEntities` keys its visited set by edge, so `Derived` is
+ * enqueued again through the self-loop and the step is listed once per visit.
+ * The duplication predates #68 — a pure navigation self-loop does the same on
+ * unmodified code — and consumers that need distinct steps deduplicate
+ * (PathFinder does, through a `Set`). The fan-in shape below is the same
+ * mechanism without a self-loop.
  */
 describe('a base-bound function returning a derived type', () => {
   const SELF_LOOP = `<?xml version="1.0" encoding="utf-8"?>
@@ -530,6 +530,47 @@ describe('a base-bound function returning a derived type', () => {
         .get('Base')
         ?.map((s) => s.to),
     ).toEqual(['Derived']);
+  });
+});
+
+/**
+ * Fan-in is the general shape the edge-keyed visited set duplicates: `Hub` is
+ * reached through two different edges and enqueued once per inbound edge, so
+ * each visit re-lists its outbound step. No self-loop is involved.
+ */
+describe('fan-in under getReachableEntities', () => {
+  const DIAMOND = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Root"><Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="ToP0" Type="N.P0" />
+        <NavigationProperty Name="ToP1" Type="N.P1" /></EntityType>
+      <EntityType Name="P0"><Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="ToHub" Type="N.Hub" /></EntityType>
+      <EntityType Name="P1"><Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="ToHub" Type="N.Hub" /></EntityType>
+      <EntityType Name="Hub"><Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="ToSink" Type="N.Sink" /></EntityType>
+      <EntityType Name="Sink"><Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" /></EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('lists the fan-in node’s outbound step once per inbound edge', async () => {
+    const metadata = await parseCSDL(DIAMOND);
+    const reachable = getReachableEntities('Root', metadata);
+
+    expect(reachable.get('Root')?.map((step) => step.to)).toEqual(['P0', 'P1']);
+    expect(reachable.get('P0')?.map((step) => step.to)).toEqual(['Hub']);
+    expect(reachable.get('P1')?.map((step) => step.to)).toEqual(['Hub']);
+    // Two enqueues, two visits, two emissions of the same step.
+    expect(reachable.get('Hub')?.map((step) => step.to)).toEqual(['Sink', 'Sink']);
   });
 });
 
@@ -567,6 +608,41 @@ describe('nav edges and traversal', () => {
     expect(navs.find((e) => e.name === 'Ys')).toMatchObject({ from: 'X', to: 'Y' });
     // Navigation edges are always composable; they carry no parameters.
     expect(navs.every(isComposableEdge)).toBe(true);
+  });
+
+  it('keeps a V3 nav edge when an unrelated reference is unfetched', async () => {
+    // The upload path parses with no loader, so this reference is recorded
+    // unresolved; it included `Other`, not `Ghost`, so the stray qualifier the
+    // navigation property carries still resolves through its namesake.
+    const metadata = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <edmx:Reference Uri="shared.xml"><edmx:Include Namespace="Other" /></edmx:Reference>
+      <EntityType Name="Customer">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Orders" Relationship="Ghost.R1" FromRole="Customer" ToRole="Order" />
+      </EntityType>
+      <EntityType Name="Order">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Association Name="R1">
+        <End Type="N.Customer" Role="Customer" Multiplicity="1" />
+        <End Type="N.Order" Role="Order" Multiplicity="*" />
+      </Association>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+    expect(metadata.unresolvedReferences).toContain('shared.xml');
+    expect(
+      getTraversalEdges(metadata)
+        .filter((edge) => edge.kind === 'nav')
+        .map((edge) => `${edge.from}->${edge.to}[${edge.name}]`),
+    ).toEqual(['Customer->Order[Orders]']);
+    expect(findPaths('Customer', 'Order', metadata)).toHaveLength(1);
   });
 
   it('finds a mixed nav + function path A -> X -> C', async () => {
