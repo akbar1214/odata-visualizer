@@ -28,8 +28,18 @@ const hostileCSDL = `<?xml version="1.0" encoding="utf-8"?>
       <Function Name="Get#It">
         <Parameter Name="P#1" Type="Edm.String" />
       </Function>
+      <EntityType Name="One">
+        <Key>
+          <PropertyRef Name="A#1" />
+        </Key>
+        <Property Name="A#1" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Action Name="Do(It)" IsBound="true">
+        <Parameter Name="it" Type="Hostile.One" />
+      </Action>
       <EntityContainer Name="Container">
         <EntitySet Name="Th#ings" EntityType="Hostile.Thing" />
+        <EntitySet Name="Ones" EntityType="Hostile.One" />
         <FunctionImport Name="Imp#ort" Function="Hostile.Get#It" />
       </EntityContainer>
     </Schema>
@@ -239,5 +249,59 @@ describe('baseUrl is validated at every MCP splice point', () => {
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toContain('GET https://host/svc/Anything');
     expect(result.content[0].text).not.toContain('https://host/svc//');
+  });
+});
+
+/**
+ * `IDENTIFIER_UNSAFE` adds `( ) , = '` on top of the path set, because those are
+ * OData *structure* in an identifier position — and `IDENTIFIER_UNSAFE =
+ * PATH_UNSAFE` survived the whole suite, since no fixture name contained any of
+ * them. The single-key branch of the invocation sketch was unexercised for the
+ * same reason: the other fixture type has two keys, so the ternary always took
+ * the compound branch.
+ */
+describe('the full identifier set and the single-key branch', () => {
+  it('encodes OData-structure characters in an operation name', async () => {
+    const handler = await hostileHandler();
+    const result = await handler('get_action_details', {
+      name: 'Do(It)',
+      baseUrl: 'https://host/svc',
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain('/Hostile.Do%28It%29');
+  });
+
+  it('encodes the key name twice in the single-key branch', async () => {
+    const handler = await hostileHandler();
+    const result = await handler('get_action_details', {
+      name: 'Do(It)',
+      baseUrl: 'https://host/svc',
+    });
+
+    // The single-key branch spells the name on both sides of the `=`; both must
+    // be encoded, and the raw `#` would start a fragment.
+    const line = result.content[0].text.split('\n').find((l) => l.includes('/Ones('))!;
+    expect(line.trim()).toBe('https://host/svc/Ones(A%231=<A%231>)/Hostile.Do%28It%29');
+    expect(new URL(line.trim()).hash).toBe('');
+  });
+});
+
+/**
+ * The fourth `baseUrl` splice, in `loadFromBackend`. It was reached by
+ * `load_metadata { type: 'server' }`, and a `#` there truncated the request to
+ * the path before it while the error message named a URL that was never
+ * requested. Validation throws before any fetch, so this needs no network.
+ */
+describe('the backend source is validated like any other base URL', () => {
+  it('refuses a server source whose base URL carries a fragment', async () => {
+    const { handleToolCall } = await import('../src/tools.js');
+    const result = await handleToolCall('load_metadata', {
+      source: 'http://127.0.0.1:9/svc#frag',
+      type: 'server',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Invalid baseUrl');
   });
 });

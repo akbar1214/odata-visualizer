@@ -73,3 +73,32 @@ describe('baseUrl is validated, not spliced verbatim', () => {
     );
   });
 });
+
+/**
+ * `{` and `}` are curl glob syntax, not merely illegal characters: `a{b,c}d`
+ * expands into **two** requests, so a brace in a service root silently fans out
+ * to two resources — the same class of silent misrouting as `#`. A template
+ * placeholder like `{tenant}` is plausible input from a model.
+ *
+ * `\p{Cs}` catches a lone surrogate, which no URL can represent, and a scheme
+ * other than http(s) produces a URL nothing can fetch.
+ */
+describe('curl glob syntax, lone surrogates and foreign schemes are rejected', () => {
+  it.each([
+    ['https://host/svc/{tenant}', 'unmatched brace'],
+    ['https://host/a{b,c}d', 'curl expands this into two requests'],
+    ['https://host/a[b]', 'bad range'],
+    ['https://host/a\u0001b', 'a C0 control that \\s does not cover'],
+    ['https://host/a\uD800b', 'a lone surrogate'],
+    ['javascript:alert(1)', 'a scheme nothing can fetch'],
+    ['file:///etc/passwd', 'a local file URL'],
+  ])('rejects %s — %s', (baseUrl) => {
+    expect(() => buildQueryUrl({ entitySet: 'Parts', baseUrl })).toThrow(/Invalid baseUrl/);
+  });
+
+  it('still accepts an http or https service root', () => {
+    expect(buildQueryUrl({ entitySet: 'Parts', baseUrl: 'https://host/svc/' })).toBe(
+      'https://host/svc/Parts',
+    );
+  });
+});

@@ -873,7 +873,12 @@ function validateExpand(expands: ExpandNode[]): void {
  * makes everything after it a fragment, and a `?` folds the generated resource
  * path into the query string. Both fail silently, which is the point.
  */
-const BASE_URL_REJECTED = /[\s\p{Cc}\\#?]/u;
+// `\[`, `\]`, `\{` and `\}` are curl glob syntax: `a[b]` is a range and
+// `a{b,c}d` expands into *two* requests, so a brace in a service root
+// silently fans out to two resources. `\p{Cs}` catches a lone surrogate,
+// which cannot be represented in a URL at all.
+// eslint-disable-next-line no-useless-escape -- required under the `u` flag
+const BASE_URL_REJECTED = /[\s\p{Cc}\p{Cs}\\#?\[\]{}]/u;
 
 /**
  * Validate a service root and strip trailing slashes.
@@ -890,11 +895,17 @@ export function normalizeBaseUrl(baseUrl: string): string {
       `Invalid baseUrl: ${JSON.stringify(baseUrl)}. A service root must be a URL with no whitespace, backslash, "#" or "?" — a "#" would turn the generated path into a fragment and a "?" would fold it into a query string.`,
     );
   }
+  let parsed: URL;
   try {
-    new URL(baseUrl);
+    parsed = new URL(baseUrl);
   } catch {
     throw new Error(
       `Invalid baseUrl: ${JSON.stringify(baseUrl)}. Expected an absolute URL, e.g. "https://host/service".`,
+    );
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      `Invalid baseUrl: ${JSON.stringify(baseUrl)}. Expected an http or https URL, got "${parsed.protocol}".`,
     );
   }
   return baseUrl.replace(/\/+$/, '');
