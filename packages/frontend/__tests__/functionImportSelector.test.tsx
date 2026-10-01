@@ -20,11 +20,16 @@ const csdl = `<?xml version="1.0" encoding="utf-8"?>
     <Schema Namespace="Shop" xmlns="http://docs.oasis-open.org/odata/ns/edm">
       <Function Name="PartsByName">
         <Parameter Name="Name" Type="Edm.String" />
+        <Parameter Name="Flag" Type="Edm.Boolean" />
         <ReturnType Type="Edm.String" />
       </Function>
       <EntityContainer Name="Container">
         <FunctionImport Name="FindParts" Function="Shop.PartsByName">
           <Parameter Name="Name" Type="Edm.String" />
+          <Parameter Name="Flag" Type="Edm.Boolean" />
+        </FunctionImport>
+        <FunctionImport Name="Find&amp;Parts" Function="Shop.PartsByName">
+          <Parameter Name="A&amp;B" Type="Edm.String" />
         </FunctionImport>
       </EntityContainer>
     </Schema>
@@ -87,5 +92,43 @@ describe('FunctionImportSelector builds an encoded, absolute query', () => {
     typeName('A#B');
 
     expect(preview()).toBe("/FindParts(Name='A%23B')");
+  });
+
+  it('percent-encodes an ampersand in a parameter and in an import name', async () => {
+    // Names are metadata-derived, but the preview is copied as a fragment and
+    // may be read as a query string, where a raw `&` splits it. The selector
+    // therefore adds `&` to the shared identifier policy; MCP keeps that policy
+    // because it emits whole URLs, where `&` is legal in the path.
+    const metadata = await parseCSDL(csdl);
+    render(<FunctionImportSelector metadata={metadata} onSelect={vi.fn()} />);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Find&Parts' } });
+    typeName('v');
+
+    expect(preview()).toBe("/Find%26Parts(A%26B='v')");
+  });
+
+  it('leaves an empty parameter out, the one documented divergence from MCP', async () => {
+    // MCP receives values explicitly and emits `Name=''` for an empty string.
+    // A text input cannot tell "explicitly empty" from "not filled in", so the
+    // value is skipped; when it is the only parameter, the preview collapses to
+    // the no-parameter shape.
+    await renderSelector();
+    expect(preview()).toBe('/FindParts');
+
+    typeName('x');
+    expect(preview()).toBe("/FindParts(Name='x')");
+
+    typeName('');
+    expect(preview()).toBe('/FindParts');
+  });
+
+  it('renders a non-boolean value as a quoted literal instead of silently coercing it', async () => {
+    // `yes` is not an `Edm.Boolean` literal. `formatODataValue` falls back to a
+    // quoted string so the preview stays renderable while typing; the service
+    // answers 400, which is louder than the old silent `false`.
+    await renderSelector();
+    fireEvent.change(screen.getByPlaceholderText('Boolean'), { target: { value: 'yes' } });
+
+    expect(preview()).toBe("/FindParts(Flag='yes')");
   });
 });

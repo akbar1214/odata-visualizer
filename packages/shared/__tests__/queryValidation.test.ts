@@ -315,7 +315,7 @@ describe('buildQueryUrl input validation', () => {
  * `Addresses($filter=…;$top=5)` — is deliberately left unsupported: its values
  * are arbitrary expressions this module has no parser for, so accepting them
  * would emit URLs whose content it cannot check. That decision is pinned below
- * and stated in the `SELECT_ITEM` doc comment.
+ * and stated in the `isValidSelectItem` doc comment.
  */
 describe('$select forms beyond star and plain paths', () => {
   it('accepts instance annotations, with and without a qualifier', () => {
@@ -379,8 +379,55 @@ describe('$select forms beyond star and plain paths', () => {
     // `selectItem` allows `optionallyQualifiedFunctionName` directly, or after
     // a *single* optionally-qualified type prefix — never after a `selectPath`.
     for (const item of ['Address/PTC.Addr/Fn(ID)', 'PTC.Part/Address/Fn(ID)']) {
-      expect(() => buildQueryUrl({ entitySet: 'Parts', select: [item] }), item).toThrow(
-        /\$select/,
+      expect(() => buildQueryUrl({ entitySet: 'Parts', select: [item] }), item).toThrow(/\$select/);
+    }
+  });
+
+  it('rejects a second qualified segment inside a select path', () => {
+    // A qualified name can only be a cast directly after a plain identifier,
+    // or the single optionally-qualified type prefix at the start of
+    // `selectItem`; inside `selectProperty` it can never begin a step or
+    // follow another qualified segment. `A/NS.B/NS.C/@T` only passed before
+    // because the old path matcher treated every `/`-separated part as
+    // interchangeable.
+    for (const item of ['A/NS.B/NS.C', 'A/NS.B/NS.C/D', 'NS.C/NS.D/NS.E', 'A/NS.B/NS.C/@T']) {
+      expect(() => buildQueryUrl({ entitySet: 'Parts', select: [item] }), item).toThrow(/\$select/);
+    }
+  });
+
+  it('rejects a long malformed path promptly instead of backtracking', () => {
+    // The path matcher was a nested optional group, so `/B/B/…` could be read
+    // as plain steps or as cast-plus-step blocks; on a mismatch the engine
+    // tried every partition of the run. A 40-step path with a typo at the end
+    // blocked the event loop for tens of seconds. A blocking regex cannot be
+    // interrupted by vitest's timeout, so the elapsed time is asserted
+    // explicitly — the check must fail, not merely run late.
+    const started = performance.now();
+    for (const item of [`A${'/B'.repeat(40)}!`, `A${'/B'.repeat(40)}/`]) {
+      expect(() => buildQueryUrl({ entitySet: 'Parts', select: [item] })).toThrow(
+        /Invalid \$select/,
+      );
+    }
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  it('accepts a selectProperty recursion after an annotation or a cast', () => {
+    // `selectPath` is `(complexProperty / complexAnnotationInQuery)
+    // [ "/" optionallyQualifiedComplexTypeName ]` followed by
+    // `[ "/" selectProperty ]`, so an annotation or a cast starts a new
+    // selectProperty step rather than ending the item.
+    for (const item of [
+      '@T/More',
+      '@T/NS.Cast',
+      '@T/@T2',
+      'A/@T/More',
+      'A/@T/NS.Cast',
+      '@T/NS.Cast/More',
+      'A/@T/NS.Cast/More',
+      '@NS.Term/NS.Type',
+    ]) {
+      expect(buildQueryUrl({ entitySet: 'Parts', select: [item] }), item).toBe(
+        `/Parts?$select=${item}`,
       );
     }
   });

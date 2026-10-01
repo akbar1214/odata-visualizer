@@ -401,20 +401,49 @@ const RESOURCE_SEGMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/
 /**
  * A `$select` item (OData V4.01 ABNF `selectItem`).
  *
- *   `*`                     all structural properties (STAR)
- *   `NS.*`                  all operations of a schema (allOperationsInSchema)
- *   `Name`                  property, action or function name
- *   `Address/City`          structural path
- *   `NS.Part/Name`          path from a qualified type
- *   `Address/NS.Addr/City`  mid-path type cast (selectPath)
- *   `@NS.Term`              instance annotation (annotationInQuery)
- *   `@NS.Term#Qualifier`    annotated term; the caller writes the raw `#`,
- *                           which `encodeQueryValue` emits as `%23`
- *   `Address/@NS.Term`      annotation after a structural path
- *   `NS.Part/@NS.Term`      annotation after a type prefix
- *   `Fn(ID,Name)`           function call with parameter names; the name may
- *                           be qualified and may follow a single
- *                           optionally-qualified type prefix
+ *   `*`                       all structural properties (STAR)
+ *   `NS.*`                    all operations of a schema
+ *   `Name`                    property, action or function name
+ *   `NS.Name`                 optionally-qualified action or function name
+ *   `Fn(ID,Name)`             function call with parameter names
+ *   `NS.Fn(ID,Name)`          ... optionally qualified
+ *   `Address/City`            structural path (selectProperty)
+ *   `Address/NS.Addr/City`    mid-path type cast (selectPath)
+ *   `NS.Part/Address/City`    path from `selectItem`'s type prefix
+ *   `NS.Part/Fn(ID,Name)`     operation called on the type prefix
+ *   `@NS.Term`                instance annotation (annotationInQuery)
+ *   `@NS.Term#Qualifier`      annotated term; the caller writes the raw `#`,
+ *                             which `encodeQueryValue` emits as `%23`
+ *   `Address/@NS.Term`        annotation at the end of a path
+ *   `@T/More`, `@T/NS.Cast`   annotation followed by a selectProperty step
+ *
+ * `selectProperty` is recursive:
+ *
+ *   selectProperty = primitiveProperty / ... / selectPath [ "/" selectProperty ]
+ *   selectPath     = ( complexProperty / complexColProperty /
+ *                      complexAnnotationInQuery )
+ *                    [ "/" optionallyQualifiedComplexTypeName ]
+ *
+ * so a path is a sequence of plain identifiers and annotations, and a
+ * qualified name appears in it only as a cast *between* two of those (or at
+ * the end). Two qualified segments in a row are never legal: the qualified
+ * name at the front of an item is `selectItem`'s type prefix, not part of the
+ * path, and it cannot be followed by another one. That is why
+ * `NS.C/A/B` is legal but `A/NS.B/NS.C` is not.
+ *
+ * The path part used to be one regular expression with a nested optional
+ * group:
+ *
+ *   step ( "/" ( qualifiedName "/" )? step )* ( "/" qualifiedName )?
+ *
+ * That group is ambiguous: a run like `A/B/B/B/…` can be consumed as `/B`
+ * steps or as `/B/B` cast-plus-step blocks, so a mismatch makes the engine try
+ * every partition of the run (Fibonacci-like backtracking). A 40-step path
+ * with a trailing typo took tens of seconds — reachable without a length cap
+ * through the HTTP-exposed MCP server, hence a denial of service. The same
+ * language is accepted by `isValidSelectItem` below, which scans the
+ * `/`-separated segments once; the non-path alternatives stay anchored
+ * regexes.
  *
  * The ABNF also allows select options on a property path
  * (`Addresses($filter=…;$top=5)`, `selectProperty` / `selectOption`). They are
@@ -429,15 +458,75 @@ const RESOURCE_SEGMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/
  */
 const SELECT_IDENTIFIER = '[A-Za-z_][A-Za-z0-9_]*';
 const SELECT_QUALIFIED_NAME = `(?:${SELECT_IDENTIFIER}\\.)*${SELECT_IDENTIFIER}`;
+const SELECT_ANNOTATION = `@${SELECT_QUALIFIED_NAME}(?:#${SELECT_IDENTIFIER})?`;
 // `parameterNames` is one-or-more: the ABNF's optional group is around the
 // whole `OPEN parameterNames CLOSE`, not the list. `Fn()` is therefore not a
 // legal select item — a no-parameter overload is spelled `Fn`.
 const SELECT_FUNCTION_CALL = `${SELECT_QUALIFIED_NAME}\\(${SELECT_IDENTIFIER}(?:,${SELECT_IDENTIFIER})*\\)`;
-const SELECT_ANNOTATION = `@${SELECT_QUALIFIED_NAME}(?:#${SELECT_IDENTIFIER})?`;
-const SELECT_PATH = `${SELECT_QUALIFIED_NAME}(?:\\/${SELECT_QUALIFIED_NAME})*`;
-const SELECT_ITEM = new RegExp(
-  `^(?:\\*|${SELECT_QUALIFIED_NAME}\\.\\*|${SELECT_ANNOTATION}|${SELECT_FUNCTION_CALL}|${SELECT_QUALIFIED_NAME}\\/${SELECT_FUNCTION_CALL}|${SELECT_PATH}|${SELECT_PATH}\\/${SELECT_ANNOTATION})$`,
-);
+
+/** One anchored matcher per non-path `selectItem` alternative. */
+const SELECT_IDENTIFIER_RE = new RegExp(`^${SELECT_IDENTIFIER}$`);
+const SELECT_QUALIFIED_NAME_RE = new RegExp(`^${SELECT_QUALIFIED_NAME}$`);
+const SELECT_ANNOTATION_RE = new RegExp(`^${SELECT_ANNOTATION}$`);
+const SELECT_FUNCTION_CALL_RE = new RegExp(`^${SELECT_FUNCTION_CALL}$`);
+const SELECT_TYPED_STAR_RE = new RegExp(`^${SELECT_QUALIFIED_NAME}\\.\\*$`);
+
+/** One `selectProperty` step is a plain identifier or an annotation. */
+function isSelectStep(segment: string): boolean {
+  return SELECT_IDENTIFIER_RE.test(segment) || SELECT_ANNOTATION_RE.test(segment);
+}
+
+/**
+ * Do the `/`-separated segments from `start` form the rest of a
+ * `selectProperty`?
+ *
+ *   selectProperty = step *( "/" [ qualifiedName "/" ] step ) [ "/" qualifiedName ]
+ *
+ * so every segment must be a step or a qualified name, and a qualified name
+ * is a cast, which must be followed by a step — except for a single cast that
+ * ends the path. Walking the segments once implements exactly that rule (and
+ * with it "no two qualified segments in a row") in linear time.
+ */
+function isSelectPropertyRest(segments: string[], start: number): boolean {
+  for (let i = start; i < segments.length; i += 1) {
+    const step = isSelectStep(segments[i]);
+    if (!step && !SELECT_QUALIFIED_NAME_RE.test(segments[i])) return false;
+    if (!step && i + 1 < segments.length && !isSelectStep(segments[i + 1])) return false;
+  }
+  return true;
+}
+
+/**
+ * Is `value` one of the accepted `selectItem` shapes? An item with `/` is a
+ * `selectProperty`, a leading type prefix followed by one, or a prefix
+ * followed by a qualified name or function call.
+ */
+function isValidSelectItem(value: string): boolean {
+  if (value === '*' || SELECT_TYPED_STAR_RE.test(value)) return true;
+
+  const segments = value.split('/');
+  if (segments.length === 1) {
+    return (
+      isSelectStep(value) ||
+      SELECT_QUALIFIED_NAME_RE.test(value) ||
+      SELECT_FUNCTION_CALL_RE.test(value)
+    );
+  }
+
+  const firstIsStep = isSelectStep(segments[0]);
+  const firstIsQualifiedName = SELECT_QUALIFIED_NAME_RE.test(segments[0]);
+
+  if (firstIsStep && isSelectPropertyRest(segments, 1)) return true;
+  if (firstIsQualifiedName && isSelectStep(segments[1]) && isSelectPropertyRest(segments, 2)) {
+    return true;
+  }
+
+  return (
+    segments.length === 2 &&
+    firstIsQualifiedName &&
+    (SELECT_QUALIFIED_NAME_RE.test(segments[1]) || SELECT_FUNCTION_CALL_RE.test(segments[1]))
+  );
+}
 
 /**
  * A key predicate appended to a resource segment: `('P1')`, `(1)`,
@@ -719,7 +808,7 @@ export function assertResourceSegment(entitySet: string): string {
 }
 
 function assertSelectItem(value: string): string {
-  if (!SELECT_ITEM.test(value)) {
+  if (!isValidSelectItem(value)) {
     throw new Error(`Invalid $select: ${JSON.stringify(value)}`);
   }
   return value;

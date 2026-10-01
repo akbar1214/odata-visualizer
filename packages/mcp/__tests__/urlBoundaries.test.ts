@@ -286,7 +286,9 @@ describe('the full identifier set and the single-key branch', () => {
 
     // The single-key branch spells the name on both sides of the `=`; both must
     // be encoded, and the raw `#` would start a fragment.
-    const line = textOf(result).split('\n').find((l) => l.includes('/Ones('))!;
+    const line = textOf(result)
+      .split('\n')
+      .find((l) => l.includes('/Ones('))!;
     expect(line.trim()).toBe('https://host/svc/Ones(A%231=<A%231>)/Hostile.Do%28It%29');
     expect(new URL(line.trim()).hash).toBe('');
   });
