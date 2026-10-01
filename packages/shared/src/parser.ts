@@ -800,6 +800,13 @@ function relationshipFromNavigationProperty(
  *   property/navigation path below a set or singleton;
  * - the unqualified `Container/Set` spelling, for hand-written documents.
  *
+ * **Known limitation.** A property path below a set or singleton is stored on
+ * the property of the set's *type*, because that is the only shape the model
+ * has. §14.2.2 scopes such an annotation to the set, so two sets over one type
+ * share one slot and the last block wins. Nothing renders property-level
+ * annotations today, so storing them per set would add a field no consumer
+ * reads; the collision is recorded and pinned by a test instead.
+ *
  * Still unsupported: parameter and `$ReturnType` targets (the model has no
  * field for them), term casts, and the trailing `@Term#Qualifier` form.
  *

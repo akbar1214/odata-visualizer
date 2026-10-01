@@ -575,3 +575,46 @@ describe('cast segments written with an alias, and inherited properties', () => 
     expect(baseProp(model).annotations?.['T.Inherited']).toBe('inherited');
   });
 });
+
+/**
+ * A characterization test, not a requirement: it pins the limitation documented
+ * on `applyTargetedAnnotations`. §14.2.2 scopes a set-qualified property
+ * annotation to that set, but the model stores it on the property of the set's
+ * *type*, so two sets over one type share one slot. Nothing renders
+ * property-level annotations yet, so the fix (a per-set map) would add a field
+ * no consumer reads — this records the collision so it is not discovered as a
+ * surprise by whoever adds the first consumer.
+ */
+describe('two sets over one type share the property annotation slot', () => {
+  const csdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Name" Type="Edm.String" />
+      </EntityType>
+      <EntityContainer Name="Container">
+        <EntitySet Name="Widgets" EntityType="N.Widget" />
+        <EntitySet Name="AlsoWidgets" EntityType="N.Widget" />
+      </EntityContainer>
+      <Annotations Target="N.Container/Widgets/Name">
+        <Annotation Term="Core.Description" String="setA-desc" />
+      </Annotations>
+      <Annotations Target="N.Container/AlsoWidgets/Name">
+        <Annotation Term="Core.Description" String="setB-desc" />
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('keeps the last block on the shared type property', async () => {
+    const model = await parseCSDL(csdl);
+    const name = model.entities
+      .find((e) => e.qualifiedName === 'N.Widget')!
+      .properties.find((p) => p.name === 'Name')!;
+
+    expect(name.annotations?.['Core.Description']).toBe('setB-desc');
+  });
+});
