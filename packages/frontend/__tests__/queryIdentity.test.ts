@@ -219,3 +219,34 @@ describe('a case-only collision is still an ambiguity', () => {
     expect(getTargetEntityName('Docs', widget, metadata)).toBe('B.part');
   });
 });
+
+/**
+ * A navigation property may name a type from an `edmx:Reference` that was never
+ * loaded. Falling back to the short name would silently resolve to a *different*
+ * type of the same name in this model, so the qualified reference is returned
+ * even though nothing in the model answers to it.
+ */
+describe('an unresolvable qualified target is still reported qualified', () => {
+  it('returns the reference rather than a colliding short name', async () => {
+    const metadata = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Docs" Type="Collection(Other.Part)" />
+      </EntityType>
+      <EntityType Name="Part">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    const widget = findEntity('N.Widget', metadata.entities)!;
+
+    // `Part` exists here, but it is not what the navigation property names.
+    expect(getTargetEntityName('Docs', widget, metadata)).toBe('Other.Part');
+  });
+});
