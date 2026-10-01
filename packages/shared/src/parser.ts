@@ -222,6 +222,10 @@ function expandAliasesInMetadata(
       // disagree with every other type reference in the same document.
       // A V4 value is `'Collection'` or `''`, neither of which has a dot, so
       // expansion is a no-op for them.
+      // Idempotent with the derivation-time expansion above: an already
+      // expanded value has a known-namespace prefix, so this is a no-op. The
+      // `??` is a type-level assertion, not a fallback — `expand` returns
+      // `undefined` only for `undefined` input, which the guard excludes.
       if (nav.relationship) nav.relationship = expand(nav.relationship) ?? nav.relationship;
     }
   }
@@ -328,8 +332,15 @@ export async function parseCSDL(
   const maxExternalDocuments = options.maxExternalDocuments ?? 25;
   let externalDocumentsLoaded = 0;
 
-  const includesOf = (owner: XmlElement): XmlElement[] =>
-    ensureArray(owner['Include'] || owner['edmx:Include'] || owner['edm:Include'] || []);
+  // All three spellings are valid, and XML allows them to coexist in one
+  // parent — `a || b || c` returned only the first, so a reference carrying
+  // both `<Include>` and `<edmx:Include>` silently lost a group of alias
+  // declarations. Same defect class as the `<Reference>` fix.
+  const includesOf = (owner: XmlElement): XmlElement[] => [
+    ...ensureArray(owner['Include']),
+    ...ensureArray(owner['edmx:Include']),
+    ...ensureArray(owner['edm:Include']),
+  ];
 
   const registerSchema = (schema: XmlElement): void => {
     const namespace = str(schema['@_Namespace']);
@@ -403,6 +414,12 @@ export async function parseCSDL(
   };
 
   await loadReferences(rootDocument.references);
+
+  // Aliases and the namespace registry are complete by now (`loadReferences`
+  // above loads every external document), so relationship derivation can expand
+  // association names immediately instead of leaving a stale copy behind.
+  const knownNamespaces = new Set([...registry.keys()].map((ns) => ns.toLowerCase()));
+  const expandReference = (value: string): string => expandAlias(value, aliases, knownNamespaces);
 
   while (queue.length > 0) {
     const schema = queue.shift() as XmlElement;
@@ -522,7 +539,7 @@ export async function parseCSDL(
       }
       for (const nav of entity.navigationProperties) {
         if (!nav.targetType) continue;
-        const rel = relationshipFromNavigationProperty(entity, nav, namespace);
+        const rel = relationshipFromNavigationProperty(entity, nav, namespace, expandReference);
         if (!rel) continue;
         if (!relationships.some((r) => isSameDerivedRelationship(r, rel))) {
           relationships.push(rel);
@@ -556,11 +573,7 @@ export async function parseCSDL(
     typeDefinitions,
   };
 
-  expandAliasesInMetadata(
-    metadata,
-    aliases,
-    new Set([...registry.keys()].map((ns) => ns.toLowerCase())),
-  );
+  expandAliasesInMetadata(metadata, aliases, knownNamespaces);
 
   applyTargetedAnnotations(
     metadata,
@@ -616,12 +629,17 @@ function relationshipFromNavigationProperty(
   entity: ODataEntity,
   nav: ODataNavigationProperty,
   namespace: string,
+  expand: (value: string) => string,
 ): ODataRelationship | null {
   if (!nav.targetType) return null;
   const isCollection = nav.relationship === 'Collection';
+  // Expanded here rather than in the later pass: the relationship is derived
+  // during parsing, so expanding only `nav.relationship` afterwards left this
+  // copy saying `Self.R1` while the navigation property said `N.R1` — the
+  // navigation property disagreeing with the relationship derived from it.
   const associationName =
     nav.relationship && nav.relationship !== 'Collection'
-      ? nav.relationship
+      ? expand(nav.relationship)
       : `${entity.name}_${nav.name}`;
   return {
     name: associationName,
