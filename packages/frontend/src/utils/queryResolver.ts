@@ -134,7 +134,15 @@ export function getTargetEntityName(
 
   // OData V3: resolve through the Association.
   if (!nav.relationship) return undefined;
-  const rel = metadata.relationships.find((r) => r.name === nav.relationship);
+  // The association is stored under its *simple* name (`parseAssociation` keeps
+  // `@_Name` verbatim), but a namespaced generator writes `Self.R1` — or `N.R1`
+  // once the parser expands `Schema/@Alias`. Matching the two directly missed
+  // every such document, so the whole V3 pathfinder branch was dead.
+  const localName = nav.relationship.slice(nav.relationship.lastIndexOf('.') + 1);
+  const candidates = metadata.relationships.filter(
+    (r) => r.name === nav.relationship || r.name === localName,
+  );
+  const rel = candidates.find((r) => r.namespace === sourceEntity.namespace) ?? candidates[0];
   if (!rel) return undefined;
 
   if (nav.toRole) {
