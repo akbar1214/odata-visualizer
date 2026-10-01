@@ -1,5 +1,18 @@
 import { useState, useMemo, useCallback } from 'react';
-import type { ODataMetadata } from '@odata-visualizer/shared';
+import {
+  encodeIdentifierForUrl,
+  encodeLiteralForUrl,
+  PATH_UNSAFE,
+  type ODataMetadata,
+} from '@odata-visualizer/shared';
+import { formatODataValue } from '../../utils/queryResolver';
+
+/**
+ * The shared path set plus `&`: the selector's output is copied as a fragment
+ * and may be read as a query string, where a raw `&` splits the value off as a
+ * separate parameter.
+ */
+const FUNCTION_VALUE_UNSAFE: ReadonlySet<string> = new Set([...PATH_UNSAFE, '&']);
 
 interface FunctionImportSelectorProps {
   metadata: ODataMetadata;
@@ -35,19 +48,20 @@ export function FunctionImportSelector({ metadata, onSelect }: FunctionImportSel
     for (const param of params) {
       const value = paramValues[param.name];
       if (value !== undefined && value !== '') {
-        // Format value based on type
-        let formattedValue = value;
-        if (param.type === 'Edm.String') {
-          formattedValue = `'${value}'`;
-        } else if (param.type === 'Edm.Boolean') {
-          formattedValue = value.toLowerCase() === 'true' ? 'true' : 'false';
-        }
-        paramParts.push(`${param.name}=${formattedValue}`);
+        // The same literal and encoding path as MCP's inline parameters: the
+        // shared formatter doubles a quote (`O'Brien` -> `'O''Brien'`) and the
+        // shared encoder keeps a space, `&` or `#` inside the value.
+        const literal = formatODataValue(value, param.type);
+        paramParts.push(
+          `${encodeIdentifierForUrl(param.name)}=${encodeLiteralForUrl(literal, FUNCTION_VALUE_UNSAFE)}`,
+        );
       }
     }
 
     const queryString = paramParts.length > 0 ? `(${paramParts.join(',')})` : '';
-    return `${selectedFunc.name}${queryString}`;
+    // An unbound function is addressed by its import name, and the selector's
+    // options come from `metadata.functionImports`, so `name` is that name.
+    return `/${encodeIdentifierForUrl(selectedFunc.name)}${queryString}`;
   };
 
   const handleFunctionChangeEvent = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {

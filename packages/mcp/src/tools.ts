@@ -11,6 +11,8 @@ import type {
 import {
   buildQueryOptions,
   buildQueryUrl,
+  encodeIdentifierForUrl,
+  encodeLiteralForUrl,
   findEntitiesByName,
   findEntityByName,
   findEntitySet,
@@ -33,7 +35,6 @@ import {
   type QueryOptions,
   type TraversalFunctionEdge,
 } from '@odata-visualizer/shared';
-import { percentEncode } from '@odata-visualizer/shared';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { loadMetadataFromSource, type MetadataSource } from './metadata-loader.js';
 import { createMetadataStore, type MetadataAccessors } from './store.js';
@@ -408,90 +409,6 @@ function sampleScalar(type: string, metadata: ODataMetadata): unknown {
   const enumType = metadata.enumTypes.find((e) => e.qualifiedName === type || e.name === type);
   if (enumType) return enumType.members[0]?.name ?? '';
   return 'string';
-}
-
-/**
- * Characters that cannot appear raw in a URL path segment (RFC 3986 §3.3:
- * `pchar` is unreserved, pct-encoded, sub-delims, `:` and `@` — it excludes
- * `/`) and would corrupt the request rather than travel as data.
- *
- * Encoding is deliberately narrow. `'`, `:`, `(`, `)`, `,` and `=` are all
- * legal in a path, and leaving them readable keeps OData structure legible
- * (`Parts('OR:wt.part:1')/NS.Action`) — which matters because the caller copies
- * this URL by hand. A raw space, `#` or `/`, by contrast, changes where the
- * request goes: `curl` rejects the first outright (`URL rejected: Malformed
- * input to a URL function`), `#` silently truncates the URL at a fragment
- * boundary, and `/` splits the value across extra path segments so a different
- * resource is addressed.
- *
- * `/` becomes `%2F`. Most OData servers decode that back correctly; Tomcat
- * rejects encoded slashes by default (`encodedSolidusHandling`), so a value
- * containing a slash may have to be sent as a key rather than an inline
- * parameter.
- *
- * Values are treated as raw data, never as pre-encoded URL text: a literal `%`
- * becomes `%25`. Accepting a caller's `%2F` would otherwise smuggle a path
- * separator through.
- *
- * `+` and `;` are RFC-legal raw in a path and curl accepts both, but their
- * meaning is not stable across stacks: `;` is a path-parameter delimiter to
- * servlet containers (`/Parts;jsessionid=…`) and some legacy decoders read `+`
- * as a space outside the query string. Path values are data, so both are
- * encoded. The query side keeps `;` raw because a nested `$expand` uses it as a
- * separator — there it is structure, not data.
- */
-const PATH_UNSAFE = new Set([
-  ' ',
-  '"',
-  '<',
-  '>',
-  '\\',
-  '^',
-  '`',
-  '{',
-  '|',
-  '}',
-  '?',
-  '#',
-  '[',
-  ']',
-  '%',
-  '/',
-  // `+` and `;` are encoded in values this layer *renders*. Caller-supplied key
-  // predicates are used verbatim (`KEY_QUOTED_INNER` accepts both raw), so the
-  // rule is not global — see the note in `shared/src/query.ts`.
-  '+',
-  ';',
-]);
-
-/**
- * Percent-encode a rendered OData literal for use inside a URL path segment.
- *
- * Delegates to `shared` so the mechanical part — non-ASCII, controls, lone
- * surrogates — has one implementation. Only the unsafe *set* is local, because
- * it differs per component: `/` and `?` are legal in a query and illegal here.
- */
-function encodeLiteralForUrl(literal: string): string {
-  return percentEncode(literal, PATH_UNSAFE);
-}
-
-/**
- * Characters that are structural in the positions an identifier occupies, on
- * top of the path-unsafe set.
- *
- * Metadata names are emitted where OData syntax also uses `(` and `)` (key
- * predicates and inline parameter lists), `,` and `=` (compound keys, parameter
- * lists) and `'` (string literals). A name containing one of those is invalid
- * CSDL, but the parser accepts it on purpose, and emitting it raw would
- * silently address a different resource. Encoding keeps the name inside one
- * segment and unambiguous; the server percent-decodes before matching, so a
- * lenient server spelling a set `Th#ings` still answers to `Th%23ings`.
- */
-const IDENTIFIER_UNSAFE = new Set([...PATH_UNSAFE, '(', ')', ',', '=', "'"]);
-
-/** Percent-encode a metadata-derived identifier for its position in a URL. */
-function encodeIdentifierForUrl(identifier: string): string {
-  return percentEncode(identifier, IDENTIFIER_UNSAFE);
 }
 
 function buildKeySegment(

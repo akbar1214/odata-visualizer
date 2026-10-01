@@ -149,7 +149,7 @@ describe('inherited binding types', () => {
     expect(load.isError).toBeUndefined();
 
     const result = await handleToolCall('get_relationships', { entityName: 'Derived' });
-    const text = result.content[0].text;
+    const text = textOf(result);
 
     expect(text).toContain('N.B()');
     expect(text).toContain('N.B(): N.Derived -> N.C');
