@@ -26,6 +26,7 @@ import {
   type FilterClause,
   type QueryOptions,
 } from '@odata-visualizer/shared';
+import { percentEncode } from '@odata-visualizer/shared';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { loadMetadataFromSource, type MetadataSource } from './metadata-loader.js';
 import { createMetadataStore, type MetadataAccessors } from './store.js';
@@ -412,26 +413,15 @@ const PATH_UNSAFE = new Set([
   '/',
 ]);
 
-/** Percent-encode a rendered OData literal for use inside a URL path segment. */
+/**
+ * Percent-encode a rendered OData literal for use inside a URL path segment.
+ *
+ * Delegates to `shared` so the mechanical part — non-ASCII, controls, lone
+ * surrogates — has one implementation. Only the unsafe *set* is local, because
+ * it differs per component: `/` and `?` are legal in a query and illegal here.
+ */
 function encodeLiteralForUrl(literal: string): string {
-  let encoded = '';
-  for (const char of literal) {
-    const code = char.codePointAt(0) ?? 0;
-    if (code > 0x7e) {
-      if (code >= 0xd800 && code <= 0xdfff) {
-        // `for...of` yields a lone surrogate as its own code point, and
-        // `encodeURIComponent` throws `URIError` on it. Say so plainly instead
-        // of surfacing "URI malformed".
-        throw new Error('Value contains an unpaired surrogate and cannot be encoded for a URL.');
-      }
-      encoded += encodeURIComponent(char);
-    } else if (code < 0x20 || code === 0x7f || PATH_UNSAFE.has(char)) {
-      encoded += `%${code.toString(16).toUpperCase().padStart(2, '0')}`;
-    } else {
-      encoded += char;
-    }
-  }
-  return encoded;
+  return percentEncode(literal, PATH_UNSAFE);
 }
 
 function buildKeySegment(

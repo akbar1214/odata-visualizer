@@ -191,7 +191,7 @@ describe('buildODataQuery reports why a filter row was left out', () => {
       onWarning,
     );
 
-    expect(url).toBe("/Items?$filter=Sku eq 'X1'&$top=5");
+    expect(url).toBe("/Items?$filter=Sku%20eq%20'X1'&$top=5");
     expect(warnings).toEqual([
       `Filter on "Id" (eq) was left out of the query: ${INT32_OVERFLOW}`,
       'Filter on "Qty" (eq) was left out of the query: Invalid Edm.Byte value: 999 (out of range 0..255)',
@@ -264,9 +264,9 @@ describe('buildODataQuery reports why a filter row was left out', () => {
       onWarning,
     );
 
-    // Captured before the fix; the warning channel must not alter output.
+    // Captured before the encoding change; the warning channel must not alter output.
     expect(url).toBe(
-      "/Items?$filter=contains(Sku,'A%26B') and Price gt 100 and Id eq 7&$select=Id,Sku&$orderby=Id desc&$top=10&$skip=5",
+      "/Items?$filter=contains(Sku,'A%26B')%20and%20Price%20gt%20100%20and%20Id%20eq%207&$select=Id,Sku&$orderby=Id%20desc&$top=10&$skip=5",
     );
     expect(warnings).toEqual([]);
   });
@@ -286,7 +286,7 @@ describe('buildODataQuery reports why a filter row was left out', () => {
       onWarning,
     );
 
-    expect(url).toBe("/Items?$filter=Nope eq 'x'&$top=5");
+    expect(url).toBe("/Items?$filter=Nope%20eq%20'x'&$top=5");
     expect(warnings).toEqual(['"Nope" is not a property of Inv.Item.']);
   });
 
@@ -312,7 +312,7 @@ describe('buildODataQuery reports why a filter row was left out', () => {
       onWarning,
     );
 
-    expect(url).toBe('/Items?$select=Sku&$expand=Lines($select=Sku)&$orderby=Id asc&$top=5');
+    expect(url).toBe('/Items?$select=Sku&$expand=Lines($select=Sku)&$orderby=Id%20asc&$top=5');
     expect(warnings).toEqual([
       `Filter on "Lines/Id" (eq) was left out of the query: ${INT32_OVERFLOW}`,
     ]);
@@ -561,7 +561,7 @@ describe('QueryBuilder explains a filter it had to leave out', () => {
     // Correcting the value must clear the warning, not leave it behind.
     fireEvent.change(value, { target: { value: '7' } });
     expect(within(warningList()).queryByText(/Filter on "Id"/)).toBeNull();
-    expect(preview().textContent).toBe('/Items?$filter=Id eq 7&$top=25');
+    expect(preview().textContent).toBe('/Items?$filter=Id%20eq%207&$top=25');
     expect(screen.queryByRole('button', { name: /filter omitted/i })).toBeNull();
   });
 

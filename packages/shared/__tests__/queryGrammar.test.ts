@@ -180,7 +180,7 @@ describe('key predicates keep metadata-based typing', () => {
 
     // The only difference must be the resource path.
     expect(plain).toBe(
-      "/Parts?$filter=Released gt 2024-01-02T00:00:00Z and State eq N.State'ACTIVE' and Size gt 10",
+      "/Parts?$filter=Released%20gt%202024-01-02T00:00:00Z%20and%20State%20eq%20N.State'ACTIVE'%20and%20Size%20gt%2010",
     );
     expect(keyed).toBe(plain.replace('/Parts?', "/Parts('P1')?"));
   });
