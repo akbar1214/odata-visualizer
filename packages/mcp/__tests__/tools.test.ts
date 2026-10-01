@@ -1351,3 +1351,45 @@ describe('build_action_invocation tool description', () => {
     }
   });
 });
+
+/**
+ * `resolveEntityArg` disambiguates for itself rather than going through
+ * `findEntityByName`, so it needed the same exact-case policy. Two schemas
+ * differing only in case made it answer a direct question with the other type's
+ * shape, and an agent then builds filters against the wrong properties.
+ */
+describe('entity lookup under a case-only collision', () => {
+  const caseCollision = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Shop" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Order">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="ShopOnly" Type="Edm.String" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="SHOP" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Order">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="ShopUpperOnly" Type="Edm.String" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('answers with the spelling that was asked for', async () => {
+    const { parseCSDL } = await import('@odata-visualizer/shared');
+    const store = createMetadataStore();
+    store.set(await parseCSDL(caseCollision), { sourceName: 'case.xml', sourceType: 'file' });
+    const handler = createToolHandler(store);
+
+    const result = await handler('get_entity_details', { entityName: 'SHOP.Order' });
+    const text = result.content[0].text;
+
+    expect(text).toContain('SHOP.Order');
+    expect(text).toContain('ShopUpperOnly');
+    expect(text).not.toContain('ShopOnly');
+  });
+});

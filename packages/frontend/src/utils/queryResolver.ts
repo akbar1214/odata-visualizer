@@ -257,6 +257,17 @@ function setForType(entity: ODataEntity, metadata: ODataMetadata): ODataEntitySe
   const sets = getAllEntitySets(metadata);
   const typeRef = (set: ODataEntitySet) => set.entityTypeQualified ?? set.entityType;
 
+  // An exact qualified reference is unambiguous even under a case collision:
+  // `Shop.Order` and `SHOP.Order` are different types, and a set naming one of
+  // them exactly binds to it. The conservative guard below rejects *both*, which
+  // left a case-colliding type with no resource path at all — so the selector
+  // emitted its qualified name and the builder answered "not exposed as an
+  // entity set" for a type that plainly is.
+  if (entity.qualifiedName) {
+    const exact = sets.find((set) => set.entityTypeQualified === entity.qualifiedName);
+    if (exact) return exact;
+  }
+
   // A set whose type reference names exactly one type — this very entity.
   // An ambiguous short reference matches nothing, because a wrong match would
   // silently bind the type to another namespace's set. The repo's Windchill

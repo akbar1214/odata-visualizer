@@ -554,3 +554,46 @@ describe('entity selection identity', () => {
     ).toBe('/Parts?$top=25');
   });
 });
+
+/**
+ * The selector emits a *qualified* name when two types share a short name, so
+ * the builder has to accept one. Under a case-only collision the conservative
+ * ambiguity guard rejected both spellings, leaving a type that plainly is
+ * exposed reporting "not exposed as an entity set".
+ */
+describe('a case-colliding type is addressable through its exact reference', () => {
+  const caseCollision = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Shop" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Order">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityContainer Name="C">
+        <EntitySet Name="Orders" EntityType="Shop.Order" />
+        <EntitySet Name="ORDERS" EntityType="SHOP.Order" />
+      </EntityContainer>
+    </Schema>
+    <Schema Namespace="SHOP" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Order">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('binds the set that names the type exactly', async () => {
+    const model = await parseCSDL(caseCollision);
+
+    expect(resolveResourcePath('SHOP.Order', model)).toBe('ORDERS');
+    expect(resolveResourcePath('Shop.Order', model)).toBe('Orders');
+  });
+
+  it('builds a query for it rather than calling it unexposed', async () => {
+    const model = await parseCSDL(caseCollision);
+
+    expect(buildODataQuery(getDefaultQuery('SHOP.Order'), model)).toContain('/ORDERS');
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseCSDL } from '../src/parser.js';
-import { findEntityByName, findEntitySet } from '../src/resolve.js';
+import { findEntityByName, findEntitySet, getEffectiveProperties } from '../src/resolve.js';
 
 /**
  * CSDL identifiers are case-sensitive, but this codebase matches them
@@ -74,5 +74,44 @@ describe('a case-only collision resolves to the spelling that was asked for', ()
 </edmx:Edmx>`);
 
     expect(findEntityByName(model.entities, 'widget')?.qualifiedName).toBe('Only.Widget');
+  });
+});
+
+/**
+ * The inheritance path is where the case policy matters most: a `BaseType`
+ * reference is structural, so no user spelling is involved and the wrong choice
+ * silently rewrites the type's properties for every consumer.
+ */
+describe('a base type reference resolves by exact case', () => {
+  const withBaseType = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Shop" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Order">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="ShopOnly" Type="Edm.String" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="SHOP" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Order">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="ShopUpperOnly" Type="Edm.String" />
+      </EntityType>
+      <EntityType Name="OrderLine" BaseType="SHOP.Order">
+        <Property Name="LineNo" Type="Edm.Int32" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('inherits from the namespace the BaseType names, not the first declared', async () => {
+    const model = await parseCSDL(withBaseType);
+    const orderLine = model.entities.find((e) => e.qualifiedName === 'SHOP.OrderLine')!;
+
+    const properties = getEffectiveProperties(orderLine, model.entities).map((p) => p.name);
+    expect(properties).toContain('ShopUpperOnly');
+    expect(properties).not.toContain('ShopOnly');
   });
 });

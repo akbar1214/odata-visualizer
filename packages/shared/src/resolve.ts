@@ -49,6 +49,19 @@ function findTypeInScope(
   name: string,
   preferredNamespace?: string,
 ): ODataEntity | undefined {
+  // Exact case first. CSDL identifiers are case-sensitive and a model may
+  // declare both `Shop.Order` and `SHOP.Order`; going straight to the lowercased
+  // comparison resolved `BaseType="SHOP.Order"` to whichever came first in the
+  // document, silently rewriting the inheritance chain — and with it the keys,
+  // properties and navigation properties every consumer sees.
+  const exactQualified = entities.find((e) => e.qualifiedName === name);
+  if (exactQualified) return exactQualified;
+
+  const exactSameNamespace = entities.find(
+    (e) => e.namespace === preferredNamespace && e.name === name,
+  );
+  if (exactSameNamespace) return exactSameNamespace;
+
   const needle = name.toLowerCase();
   const byQualified = entities.find((e) => (e.qualifiedName ?? '').toLowerCase() === needle);
   if (byQualified) return byQualified;
@@ -160,7 +173,6 @@ export function findEntitySet(metadata: ODataMetadata, name: string): ODataEntit
   return fallback;
 }
 
-/** All entity sets across containers. */
 /**
  * Every entity set, flattened in document order.
  *
