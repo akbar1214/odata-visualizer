@@ -1,6 +1,7 @@
 import type {
   ODataMetadata,
   ODataEntity,
+  ODataAssociationEnd,
   ODataEntitySet,
   ODataProperty,
   ODataNavigationProperty,
@@ -108,11 +109,18 @@ export function getResolvedEntity(
 /**
  * Resolve the entity type a navigation property points at.
  *
- * Returns the **short** name on purpose: the query graph identifies entities
- * by `entity.name` (node ids, selects, path steps), and the PathFinder
- * compares these values directly. Returning a namespace-qualified name here
- * silently breaks path finding, because a traversal step would no longer
- * equal the short name chosen in the UI.
+ * Returns the target's **graph identity**, not its short name: the short name
+ * while it is unique in the model, and `Namespace.Name` when two types share
+ * the short name (`getEntitySelectionValue`). The query graph stores these
+ * values in nodes and path steps and compares them directly. Returning an
+ * ambiguous short name made every consumer resolve it with first-match-wins,
+ * so expanding a navigation property silently landed on whichever same-named
+ * type was parsed first.
+ *
+ * The value is always resolvable through `findEntity`, which prefers an exact
+ * qualified match over a short one. Ambiguity is judged the same way that
+ * resolver matches — case-insensitively — so a case-only collision is qualified
+ * too rather than resolving to the first of the pair.
  */
 export function getTargetEntityName(
   navProperty: string,
@@ -124,14 +132,20 @@ export function getTargetEntityName(
   );
   if (!nav) return undefined;
 
-  // OData V4: the navigation property points straight at the target type.
-  if (nav.targetType) return nav.targetType;
+  // OData V4: the navigation property points straight at the target type. The
+  // qualified reference is preferred over the short one even when it cannot be
+  // resolved: it names a type from an unloaded reference, and the short name
+  // may silently name a different type in this model.
   if (nav.targetTypeQualified) {
     const target = findEntityByName(metadata.entities, nav.targetTypeQualified);
-    if (target) return target.name;
+    if (target) return getEntitySelectionValue(target, metadata.entities);
+    return nav.targetTypeQualified;
   }
+  if (nav.targetType) return nav.targetType;
 
-  // OData V3: resolve through the Association.
+  // OData V3: resolve through the Association. The endpoint identity is
+  // resolved before it is compared, so both the endpoint lookup and the source
+  // comparison work on identities rather than short names.
   if (!nav.relationship) return undefined;
   // The association is stored under its *simple* name (`parseAssociation` keeps
   // `@_Name` verbatim), but a namespaced generator writes `Self.R1` — or `N.R1`
@@ -173,11 +187,24 @@ export function getTargetEntityName(
       (sameName.find((r) => r.namespace === sourceEntity.namespace) ?? sameName[0]);
   if (!rel) return undefined;
 
+  const endIdentity = (end: ODataAssociationEnd): string => {
+    const target = findEntityByName(metadata.entities, end.entityQualified ?? end.entity);
+    return target
+      ? getEntitySelectionValue(target, metadata.entities)
+      : (end.entityQualified ?? end.entity);
+  };
+
   if (nav.toRole) {
-    if (rel.from.role === nav.toRole) return rel.from.entity;
-    if (rel.to.role === nav.toRole) return rel.to.entity;
+    // #35's both-ends check, wrapped so the result is an identity rather than
+    // a stored endpoint. Taking either side wholesale breaks the other's tests:
+    // #35's raw returns give qualified strings where callers expect identities,
+    // and #38's one-liner loses the neither-end fallthrough.
+    if (rel.from.role === nav.toRole) return endIdentity(rel.from);
+    if (rel.to.role === nav.toRole) return endIdentity(rel.to);
   }
-  return rel.from.entity === sourceEntity.name ? rel.to.entity : rel.from.entity;
+  return endIdentity(rel.from) === getEntitySelectionValue(sourceEntity, metadata.entities)
+    ? endIdentity(rel.to)
+    : endIdentity(rel.from);
 }
 
 const STRING_OPERATORS = ['eq', 'ne', 'contains', 'startswith', 'endswith'];
@@ -290,7 +317,7 @@ function setForType(entity: ODataEntity, metadata: ODataMetadata): ODataEntitySe
 }
 
 /**
- * The value the entity selector uses for a type.
+ * The identity the entity selector and the query graph use for a type.
  *
  * Short names are used while they are unique — that is what the graph and the
  * rest of the UI speak. When two types share a short name (the Windchill
@@ -298,9 +325,17 @@ function setForType(entity: ODataEntity, metadata: ODataMetadata): ODataEntitySe
  * otherwise both dropdown entries emit the same string and the selection
  * silently resolves to whichever one the parser saw first. That turned a loud
  * 404 into a query against the wrong collection.
+ *
+ * Always compute the ambiguity against the *whole* model. A filtered list can
+ * hide the colliding type, and the short value then resolves to it.
  */
 export function getEntitySelectionValue(entity: ODataEntity, entities: ODataEntity[]): string {
-  const ambiguous = entities.some((other) => other !== entity && other.name === entity.name);
+  // Case-insensitively, because `findEntity` matches that way: two types
+  // differing only by case would both emit the same short value, and every
+  // consumer would resolve it to whichever was parsed first.
+  const ambiguous = entities.some(
+    (other) => other !== entity && other.name.toLowerCase() === entity.name.toLowerCase(),
+  );
   return ambiguous ? (entity.qualifiedName ?? entity.name) : entity.name;
 }
 

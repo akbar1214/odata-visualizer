@@ -33,7 +33,7 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
 
   const [selectedEntity, setSelectedEntity] = useState<string>(() =>
     queryableEntities.length > 0
-      ? getEntitySelectionValue(queryableEntities[0], queryableEntities)
+      ? getEntitySelectionValue(queryableEntities[0], metadata.entities)
       : '',
   );
 
@@ -132,6 +132,7 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
         <div className="p-4 space-y-4 flex-1">
           <EntitySelector
             entities={queryableEntities}
+            identityEntities={metadata.entities}
             selected={selectedEntity}
             onSelect={handleEntitySelect}
           />

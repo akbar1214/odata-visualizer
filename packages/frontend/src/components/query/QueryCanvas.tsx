@@ -13,6 +13,7 @@ import '@xyflow/react/dist/style.css';
 import type { ODataMetadata } from '@odata-visualizer/shared';
 import type { GraphNodeState, GraphEdge } from '../../utils/graphState';
 import { addExpandedNode, removeExpandedNode, layoutGraph } from '../../utils/graphState';
+import { findEntity } from '../../utils/queryResolver';
 import { GraphNode, type GraphNodeData } from './GraphNode';
 
 interface QueryCanvasProps {
@@ -92,7 +93,10 @@ function QueryCanvasInner({ graphNodes, graphEdges, metadata, onGraphChange }: Q
     (nodeId: string) => {
       const node = graphNodes.find((n) => n.id === nodeId);
       if (!node) return;
-      const resolved = metadata.entities.find((e) => e.name === node.entityName);
+      // The node identifies its type by graph identity (qualified when the
+      // short name collides); a first-match on the short name picked the wrong
+      // namespace's type, and for a qualified value it matched nothing at all.
+      const resolved = findEntity(node.entityName, metadata.entities);
       if (!resolved || resolved.properties.length === 0) return;
       const prop = resolved.properties[0];
       onGraphChange(

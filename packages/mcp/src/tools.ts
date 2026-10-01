@@ -1,5 +1,6 @@
 import type {
   ODataAction,
+  ODataAssociationEnd,
   ODataEntity,
   ODataEntitySet,
   ODataFunction,
@@ -787,15 +788,27 @@ export function createToolHandler(
         let rels = metadata.relationships;
         if (entityName) {
           const needle = entityName.toLowerCase();
-          rels = rels.filter((r) => {
-            const from = metadata.entities.find((e) => e.name === r.from.entity);
-            const to = metadata.entities.find((e) => e.name === r.to.entity);
-            const fromNames = [r.from.entity, from?.qualifiedName ?? ''].map((n) =>
-              n.toLowerCase(),
-            );
-            const toNames = [r.to.entity, to?.qualifiedName ?? ''].map((n) => n.toLowerCase());
-            return fromNames.includes(needle) || toNames.includes(needle);
-          });
+          // Endpoints store the qualified identity. Match the argument against
+          // the identity, its short name, and the resolved entity's names, so a
+          // qualified argument reaches its own namespace rather than whichever
+          // same-named type the old `.find((e) => e.name === ...)` saw first.
+          const namesFor = (end: ODataAssociationEnd): string[] => {
+            const identity = end.entityQualified ?? end.entity;
+            const short = identity.includes('.')
+              ? identity.slice(identity.lastIndexOf('.') + 1)
+              : identity;
+            const entity = findEntityByName(metadata.entities, identity);
+            return [
+              identity,
+              short,
+              end.entity,
+              entity?.name ?? '',
+              entity?.qualifiedName ?? '',
+            ].map((name) => name.toLowerCase());
+          };
+          rels = rels.filter(
+            (r) => namesFor(r.from).includes(needle) || namesFor(r.to).includes(needle),
+          );
         }
 
         if (rels.length === 0) {
