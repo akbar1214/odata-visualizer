@@ -18,12 +18,24 @@ export function findEntitiesByName(entities: ODataEntity[], name: string): OData
   );
 }
 
-/** Find a single entity by qualified or short name (case-insensitive). */
+/**
+ * Find a single entity by qualified or short name.
+ *
+ * Matching is case-insensitive — services in the wild are sloppy about case, and
+ * a strict match would reject models that work against their own server — but an
+ * **exact-case match wins**. Without that, a model declaring both `Shop.Order`
+ * and `SHOP.Order` resolved to whichever came first in the document, so the
+ * caller's spelling was ignored. Case-insensitivity is the fallback, not the
+ * rule.
+ */
 export function findEntityByName(entities: ODataEntity[], name: string): ODataEntity | undefined {
   const matches = findEntitiesByName(entities, name);
   if (matches.length === 0) return undefined;
-  const exact = matches.find((e) => e.qualifiedName?.toLowerCase() === name.toLowerCase());
-  return exact ?? matches[0];
+  const exactCase =
+    matches.find((e) => e.qualifiedName === name) ?? matches.find((e) => e.name === name);
+  if (exactCase) return exactCase;
+  const qualified = matches.find((e) => e.qualifiedName?.toLowerCase() === name.toLowerCase());
+  return qualified ?? matches[0];
 }
 
 /**
@@ -129,17 +141,36 @@ export function getEffectiveNavigationProperties(
   return navs;
 }
 
-/** Find an entity set by name (case-insensitive). */
+/**
+ * Find an entity set by name.
+ *
+ * Case-insensitive, with the same rule as the type lookups: an exact-case match
+ * wins, so two sets differing only by case resolve to the spelling that was
+ * asked for rather than to document order.
+ */
 export function findEntitySet(metadata: ODataMetadata, name: string): ODataEntitySet | undefined {
   const needle = name.toLowerCase();
+  let fallback: ODataEntitySet | undefined;
   for (const container of metadata.entityContainers) {
-    const set = container.entitySets.find((s) => s.name.toLowerCase() === needle);
-    if (set) return set;
+    for (const set of container.entitySets) {
+      if (set.name === name) return set;
+      if (!fallback && set.name.toLowerCase() === needle) fallback = set;
+    }
   }
-  return undefined;
+  return fallback;
 }
 
 /** All entity sets across containers. */
+/**
+ * Every entity set, flattened in document order.
+ *
+ * Containers are concatenated, so a type exposed by sets in *two* containers
+ * always resolves to the first one: `setForType` takes the first match and no
+ * container-qualified path is emitted. That is a recorded limitation rather than
+ * an accident (#18 item 3) — a service normally exposes a single default
+ * container, and `assertResourceSegment` in `query.ts` already accepts a
+ * `Container/Set` segment if a real model ever needs one.
+ */
 export function getAllEntitySets(metadata: ODataMetadata): ODataEntitySet[] {
   return metadata.entityContainers.flatMap((c) => c.entitySets);
 }

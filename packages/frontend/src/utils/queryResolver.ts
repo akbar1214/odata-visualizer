@@ -9,7 +9,6 @@ import {
   buildQueryUrl,
   findEntitiesByName,
   findEntityByName,
-  findEntitySet,
   formatV4Literal,
   getEffectiveNavigationProperties,
   getEffectiveProperties,
@@ -316,10 +315,11 @@ export function resolveResourcePath(
 ): string | undefined {
   const entity = findEntityByName(metadata.entities, entityName);
 
-  if (!entity) {
-    // Not a type this model knows; accept an entity set named directly.
-    return findEntitySet(metadata, entityName)?.name;
-  }
+  // A name that is not a type is not addressable. `buildODataQuery` resolves the
+  // type first and returns before calling this, so a bare entity set name can
+  // never arrive; accepting one here implied a builder capability that does not
+  // exist (#18 item 4).
+  if (!entity) return undefined;
 
   const ownSet = setForType(entity, metadata);
   if (ownSet) return ownSet.name;

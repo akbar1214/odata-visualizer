@@ -209,7 +209,7 @@ describe('buildODataQuery resource path', () => {
  * Namespace collisions are the norm in real models — the repo's own Windchill
  * fixture has two `Part` types — so matching a set by its *short* type name is
  * not enough: a qualified selection must reach the set in its own namespace.
- */describe('buildODataQuery with colliding short names', () => {
+ */ describe('buildODataQuery with colliding short names', () => {
   const collisionCsdl = `<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
   <edmx:DataServices>
@@ -256,11 +256,13 @@ describe('buildODataQuery resource path', () => {
     expect(buildODataQuery(getDefaultQuery('Product'), model)).toBe('/AProducts?$top=25');
   });
 
-  it('accepts a real set name that is not also a type name', async () => {
+  it('does not accept a bare entity set name', async () => {
     const model = await parseCSDL(collisionCsdl);
-    // `BProducts` is a genuine set and no type is called that, so the set-name
-    // fallback applies rather than being shadowed by a type lookup.
-    expect(resolveResourcePath('BProducts', model)).toBe('BProducts');
+    // `BProducts` is a genuine set, but the builder resolves a *type* first and
+    // returns before this helper runs, so a set name cannot reach it. The old
+    // expectation here exercised the exported helper only and implied a builder
+    // capability that does not exist (#18 item 4).
+    expect(resolveResourcePath('BProducts', model)).toBeUndefined();
   });
 
   it('types filters against the selected namespace, not the first set', async () => {
@@ -444,7 +446,8 @@ describe('buildODataQuery for derived types', () => {
  * preview looked like a working query. Complex types cannot be set types at all,
  * and a type with no set anywhere in its inheritance chain has no resource path.
  */
-describe('buildODataQuery for unaddressable types', () => {  it('emits nothing for a complex type', async () => {
+describe('buildODataQuery for unaddressable types', () => {
+  it('emits nothing for a complex type', async () => {
     const model = await loadModel();
     expect(resolveResourcePath('Money', model)).toBeUndefined();
     expect(buildODataQuery(getDefaultQuery('Money'), model)).toBe('');
@@ -462,9 +465,13 @@ describe('buildODataQuery for unaddressable types', () => {  it('emits nothing f
     expect(buildODataQuery(getDefaultQuery('Order'), model)).toBe('');
   });
 
-  it('still builds a path when an entity set is named directly', async () => {
+  it('does not treat a bare entity set name as addressable', async () => {
     const model = await loadModel();
-    expect(resolveResourcePath('Orders', model)).toBe('Orders');
+    // This test was called "still builds a path when an entity set is named
+    // directly", but it only ever called this helper: `buildODataQuery` resolves
+    // the type first and returns before reaching it, so no builder path can pass
+    // a set name (#18 item 4).
+    expect(resolveResourcePath('Orders', model)).toBeUndefined();
   });
 
   it('uses the resolved set in the fallback path, not the type name', async () => {
@@ -542,8 +549,8 @@ describe('entity selection identity', () => {
     expect(buildODataQuery(getDefaultQuery(value), model)).toBe('/CommonParts?$top=25');
 
     const ptcPart = model.entities.find((e) => e.qualifiedName === 'PTC.Part')!;
-    expect(buildODataQuery(getDefaultQuery(getEntitySelectionValue(ptcPart, model.entities)), model)).toBe(
-      '/Parts?$top=25',
-    );
+    expect(
+      buildODataQuery(getDefaultQuery(getEntitySelectionValue(ptcPart, model.entities)), model),
+    ).toBe('/Parts?$top=25');
   });
 });
