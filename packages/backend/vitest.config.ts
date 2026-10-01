@@ -29,4 +29,9 @@ export default defineConfig({
       { find: '@odata-visualizer/mcp', replacement: src('../mcp/src/index.ts') },
     ],
   },
+  test: {
+    // Ephemeral test servers must bind 127.0.0.1, the address supertest dials;
+    // see the setup file for why the unspecified address is unsafe on macOS.
+    setupFiles: ['./__tests__/setup.ts'],
+  },
 });
