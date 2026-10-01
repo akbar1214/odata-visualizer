@@ -5,6 +5,7 @@ import {
   getEffectiveNavigationProperties,
   getEffectiveProperties,
 } from './resolve.js';
+import { percentEncode } from './encoding.js';
 
 /** A single comparison in a $filter expression. */
 export interface FilterClause {
@@ -335,24 +336,32 @@ export function formatV4Literal(value: string, edmType?: string): string {
 }
 
 /**
- * Percent-encode only the characters that would corrupt a query string:
- * `%` (existing escape), `&` (new parameter), `#` (fragment), and `+`
- * (decoded as a space by many servers). Spaces, quotes, and `=` are legal in
- * an OData system query option and are left readable.
+ * Characters that cannot appear raw in a query component.
+ *
+ * RFC 3986: `query = *( pchar / "/" / "?" )` and `pchar` excludes space, `[`,
+ * `]`, `{` and `}`. The brackets are also curl glob delimiters, so a URL
+ * containing one is rejected outright (exit 3) rather than merely ambiguous.
+ *
+ * `%` (existing escape), `&` (new parameter), `#` (fragment) and `+` (decoded as
+ * a space by many servers) are encoded for the reasons they always were.
+ *
+ * Quotes, `=`, commas, semicolons, parentheses, `$`, `:`, `/` and `?` are legal
+ * raw in a query and are deliberately left alone — encoding them would make the
+ * preview unreadable for no gain.
+ */
+const QUERY_UNSAFE = new Set(['%', '&', '#', '+', '[', ']', '{', '}', ' ']);
+
+/**
+ * Percent-encode a rendered system query option.
+ *
+ * The space is **structural**, not data: `$filter` joins clauses with ` and `
+ * and `$orderby` puts a space before the direction, so every filter and every
+ * directional sort produced a URL curl rejected regardless of the values. A
+ * server percent-decodes before parsing the option, so the encoded form is
+ * still valid OData.
  */
 function encodeQueryValue(value: string): string {
-  return value.replace(/[%&#+]/g, (char) => {
-    switch (char) {
-      case '%':
-        return '%25';
-      case '&':
-        return '%26';
-      case '#':
-        return '%23';
-      default:
-        return '%2B';
-    }
-  });
+  return percentEncode(value, QUERY_UNSAFE);
 }
 
 /** An OData simple identifier, e.g. `Name` or `_internal`. */
@@ -916,7 +925,7 @@ export function buildQueryUrl(options: QueryOptions): string {
       const field = clause.trim().split(/\s+/)[0];
       if (field) checkProperty(field);
     }
-    params.push(`$orderby=${orderBy}`);
+    params.push(`$orderby=${encodeQueryValue(orderBy)}`);
   }
 
   assertNonNegativeInteger(options.top, '$top');

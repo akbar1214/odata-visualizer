@@ -83,7 +83,7 @@ describe('buildODataQuery resilience while editing', () => {
       },
       metadata,
     );
-    expect(result).toContain('$filter=Total gt 10');
+    expect(result).toContain('$filter=Total%20gt%2010');
   });
 
   it('quotes numeric-looking values on string properties', async () => {
@@ -98,7 +98,7 @@ describe('buildODataQuery resilience while editing', () => {
       },
       metadata,
     );
-    expect(result).toContain("$filter=Number eq '100'");
+    expect(result).toContain("$filter=Number%20eq%20'100'");
   });
 
   it('emits bare dates for date properties', async () => {
@@ -111,7 +111,7 @@ describe('buildODataQuery resilience while editing', () => {
       },
       metadata,
     );
-    expect(dateTime).toContain('$filter=Created ge 2024-01-15T00:00:00Z');
+    expect(dateTime).toContain('$filter=Created%20ge%202024-01-15T00:00:00Z');
 
     const dateOnly = buildODataQuery(
       {
@@ -120,7 +120,7 @@ describe('buildODataQuery resilience while editing', () => {
       },
       metadata,
     );
-    expect(dateOnly).toContain('$filter=ShipDate eq 2024-01-15');
+    expect(dateOnly).toContain('$filter=ShipDate%20eq%202024-01-15');
     expect(dateOnly).not.toContain("datetime'");
   });
 
@@ -137,7 +137,7 @@ describe('buildODataQuery resilience while editing', () => {
       },
       metadata,
     );
-    expect(result).toContain("$filter=Number eq 'A-1'");
+    expect(result).toContain("$filter=Number%20eq%20'A-1'");
     expect(result).not.toContain('yesterday');
   });
 
@@ -153,8 +153,8 @@ describe('buildODataQuery resilience while editing', () => {
       },
       metadata,
     );
-    expect(result).toContain('Id eq 7');
-    expect(result).toContain('Total lt 99.5');
+    expect(result).toContain('Id%20eq%207');
+    expect(result).toContain('Total%20lt%2099.5');
   });
 });
 

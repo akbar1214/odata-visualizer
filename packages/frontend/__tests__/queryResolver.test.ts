@@ -123,10 +123,10 @@ describe('buildODataQuery', () => {
     };
 
     const url = buildODataQuery(query, model);
-    expect(url).toContain('$filter=Total gt 100');
+    expect(url).toContain('$filter=Total%20gt%20100');
     expect(url).toContain("contains(Number,'A%26B')");
     expect(url).toContain('$select=Id,Number');
-    expect(url).toContain('$orderby=Number desc');
+    expect(url).toContain('$orderby=Number%20desc');
     expect(url).toContain('$top=10');
   });
 
@@ -150,7 +150,7 @@ describe('buildODataQuery', () => {
     };
 
     expect(buildODataQuery(query, model)).toBe(
-      "/Orders?$expand=Lines($select=Sku;$filter=Sku eq 'X1')&$top=25",
+      "/Orders?$expand=Lines($select=Sku;$filter=Sku%20eq%20'X1')&$top=25",
     );
   });
 
@@ -184,7 +184,7 @@ describe('buildODataQuery resource path', () => {
       filters: [{ property: 'Number', operator: 'eq', value: '100' }],
     };
 
-    expect(buildODataQuery(query, model)).toBe("/Orders?$filter=Number eq '100'&$top=25");
+    expect(buildODataQuery(query, model)).toBe("/Orders?$filter=Number%20eq%20'100'&$top=25");
   });
 
   it('resolves the set through a qualified entity name', async () => {
@@ -276,7 +276,7 @@ describe('buildODataQuery resource path', () => {
         },
         model,
       ),
-    ).toBe("/BProducts?$filter=BName eq 'x'&$top=25");
+    ).toBe("/BProducts?$filter=BName%20eq%20'x'&$top=25");
   });
 });
 
@@ -437,7 +437,7 @@ describe('buildODataQuery for derived types', () => {
       model,
     );
 
-    expect(url).toBe("/Orders/Shop.BulkOrder?$filter=SerialKey eq '100'&$top=25");
+    expect(url).toBe("/Orders/Shop.BulkOrder?$filter=SerialKey%20eq%20'100'&$top=25");
   });
 });
 

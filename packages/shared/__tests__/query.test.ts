@@ -81,7 +81,7 @@ describe('buildQueryUrl', () => {
       filterLogic: 'and',
     });
     expect(url).toBe(
-      "/Parts?$filter=number eq 'W-123' and unitPrice gt 10.5 and hasCAD eq true and releaseDate ge 2024-01-01T00:00:00Z",
+      "/Parts?$filter=number%20eq%20'W-123'%20and%20unitPrice%20gt%2010.5%20and%20hasCAD%20eq%20true%20and%20releaseDate%20ge%202024-01-01T00:00:00Z",
     );
   });
 
@@ -92,9 +92,7 @@ describe('buildQueryUrl', () => {
       metadata,
       filters: [{ property: 'state', operator: 'eq', value: 'RELEASED' }],
     });
-    expect(url).toContain(
-      "state eq PTC.ProdMgmt.LifeCycleState'RELEASED'",
-    );
+    expect(url).toContain("state%20eq%20PTC.ProdMgmt.LifeCycleState'RELEASED'");
   });
 
   it('builds string functions', async () => {
@@ -106,7 +104,7 @@ describe('buildQueryUrl', () => {
       ],
       filterLogic: 'and',
     });
-    expect(url).toBe("/Parts?$filter=contains(number,'W-1') and startswith(name,'Pump')");
+    expect(url).toBe("/Parts?$filter=contains(number,'W-1')%20and%20startswith(name,'Pump')");
   });
 
   it('supports in expressions with raw lists', () => {
@@ -114,7 +112,7 @@ describe('buildQueryUrl', () => {
       entitySet: 'Parts',
       filters: [{ property: 'state', operator: 'in', value: "'INWORK','RELEASED'" }],
     });
-    expect(url).toBe("/Parts?$filter=state in ('INWORK','RELEASED')");
+    expect(url).toBe("/Parts?$filter=state%20in%20('INWORK','RELEASED')");
   });
 
   it('builds select, orderby, paging, and count', () => {
@@ -127,7 +125,7 @@ describe('buildQueryUrl', () => {
       count: true,
     });
     expect(url).toBe(
-      '/Parts?$select=ID,number,state&$orderby=number desc&$top=10&$skip=20&$count=true',
+      '/Parts?$select=ID,number,state&$orderby=number%20desc&$top=10&$skip=20&$count=true',
     );
   });
 
@@ -137,7 +135,10 @@ describe('buildQueryUrl', () => {
     );
     expect(() => buildQueryUrl({ entitySet: 'Parts', top: -1 })).toThrow('Invalid $top');
     expect(() =>
-      buildQueryUrl({ entitySet: 'Parts', filters: [{ property: 'x', operator: 'like', value: 'y' }] }),
+      buildQueryUrl({
+        entitySet: 'Parts',
+        filters: [{ property: 'x', operator: 'like', value: 'y' }],
+      }),
     ).toThrow('Unsupported filter operator');
   });
 
@@ -173,9 +174,7 @@ describe('buildQueryUrl', () => {
       baseUrl: 'https://windchill.example.com/Windchill/servlet/odata/ProdMgmt/',
       top: 5,
     });
-    expect(url).toBe(
-      'https://windchill.example.com/Windchill/servlet/odata/ProdMgmt/Parts?$top=5',
-    );
+    expect(url).toBe('https://windchill.example.com/Windchill/servlet/odata/ProdMgmt/Parts?$top=5');
   });
 
   it('validates expand nav properties resolve when metadata is present', async () => {
@@ -183,10 +182,12 @@ describe('buildQueryUrl', () => {
     const url = buildQueryUrl({
       entitySet: 'Parts',
       metadata,
-      expand: [{ navProperty: 'Documents', filters: [{ property: 'name', operator: 'eq', value: 'x' }] }],
+      expand: [
+        { navProperty: 'Documents', filters: [{ property: 'name', operator: 'eq', value: 'x' }] },
+      ],
     });
     // Documents targets CADDocument whose `name` is Edm.String → quoted
-    expect(url).toContain("$expand=Documents($filter=name eq 'x')");
+    expect(url).toContain("$expand=Documents($filter=name%20eq%20'x')");
   });
 
   it('percent-encodes characters that would break the query string', () => {
@@ -196,17 +197,17 @@ describe('buildQueryUrl', () => {
     });
     // Only the characters that would corrupt parsing are encoded; the
     // OData structure stays readable.
-    expect(url).toBe("/Parts?$filter=number eq 'A%26B%231%2BC'");
+    expect(url).toBe("/Parts?$filter=number%20eq%20'A%26B%231%2BC'");
   });
 
   it('encodes $search values', () => {
     const url = buildQueryUrl({ entitySet: 'Parts', search: 'red & blue' });
-    expect(url).toBe('/Parts?$search=red %26 blue');
+    expect(url).toBe('/Parts?$search=red%20%26%20blue');
   });
 
   it('encodes the sort field but keeps the direction readable', () => {
     const url = buildQueryUrl({ entitySet: 'Parts', orderBy: 'name asc' });
-    expect(url).toBe('/Parts?$orderby=name asc');
+    expect(url).toBe('/Parts?$orderby=name%20asc');
   });
 
   it('rejects $search combined with $filter, $top, or $skip', () => {
@@ -249,7 +250,7 @@ describe('$apply aggregation', () => {
       ],
     });
     expect(url).toBe(
-      '/Parts?$apply=groupby((state),aggregate($count as PartCount,sum(unitPrice) as TotalPrice))',
+      '/Parts?$apply=groupby((state),aggregate($count%20as%20PartCount,sum(unitPrice)%20as%20TotalPrice))',
     );
   });
 
@@ -260,7 +261,7 @@ describe('$apply aggregation', () => {
       metadata: m,
       aggregates: [{ method: 'count', alias: 'Total' }],
     });
-    expect(url).toBe('/Parts?$apply=aggregate($count as Total)');
+    expect(url).toBe('/Parts?$apply=aggregate($count%20as%20Total)');
   });
 
   it('defaults aggregate aliases when none are given', async () => {
@@ -271,7 +272,7 @@ describe('$apply aggregation', () => {
       groupBy: [{ property: 'state' }],
       aggregates: [{ method: 'count' }],
     });
-    expect(url).toContain('aggregate($count as count)');
+    expect(url).toContain('aggregate($count%20as%20count)');
   });
 
   it('puts $apply first, as OData requires', async () => {
@@ -284,7 +285,7 @@ describe('$apply aggregation', () => {
       count: true,
     });
     expect(url.startsWith('/Parts?$apply=')).toBe(true);
-    expect(url).toContain('&$filter=hasCAD eq true');
+    expect(url).toContain('&$filter=hasCAD%20eq%20true');
   });
 
   it('rejects sum/avg on non-numeric properties', async () => {
@@ -329,6 +330,6 @@ describe('$apply aggregation', () => {
       aggregates: [{ method: 'count', alias: 'A&B' }],
     });
     // A caller-supplied alias must not be able to inject another parameter.
-    expect(url).toBe('/Parts?$apply=aggregate($count as A%26B)');
+    expect(url).toBe('/Parts?$apply=aggregate($count%20as%20A%26B)');
   });
 });

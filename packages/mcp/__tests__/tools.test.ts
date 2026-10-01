@@ -236,7 +236,7 @@ describe('Windchill-like model tools', () => {
     });
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toContain(
-      "https://host/Windchill/servlet/odata/ProdMgmt/Parts?$filter=state eq PTC.ProdMgmt.LifeCycleState'RELEASED' and unitPrice gt 10&$expand=Documents($select=ID)&$orderby=number desc&$top=5",
+      "https://host/Windchill/servlet/odata/ProdMgmt/Parts?$filter=state%20eq%20PTC.ProdMgmt.LifeCycleState'RELEASED'%20and%20unitPrice%20gt%2010&$expand=Documents($select=ID)&$orderby=number%20desc&$top=5",
     );
   });
 
@@ -621,7 +621,7 @@ describe('build_query diagnostics', () => {
       ],
     });
     expect(result.content[0].text).toContain(
-      '$apply=groupby((state),aggregate($count as PartCount,avg(unitPrice) as AvgPrice))',
+      '$apply=groupby((state),aggregate($count%20as%20PartCount,avg(unitPrice)%20as%20AvgPrice))',
     );
   });
 

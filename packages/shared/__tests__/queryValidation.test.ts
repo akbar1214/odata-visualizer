@@ -44,8 +44,10 @@ describe('buildQueryUrl input validation', () => {
         'Parts\\Name',
         'Parts%20Name',
       ]) {
-        expect(() => buildQueryUrl({ entitySet: value }), `expected ${JSON.stringify(value)} to be rejected`)
-          .toThrow(/entitySet/);
+        expect(
+          () => buildQueryUrl({ entitySet: value }),
+          `expected ${JSON.stringify(value)} to be rejected`,
+        ).toThrow(/entitySet/);
       }
     });
 
@@ -79,12 +81,18 @@ describe('buildQueryUrl input validation', () => {
     });
 
     it('rejects $select entries that inject another parameter', () => {
-      expect(() => buildQueryUrl({ entitySet: 'Parts', select: ['ID&$top=1'] })).toThrow(/\$select/);
-      expect(() => buildQueryUrl({ entitySet: 'Parts', select: ['ID?$top=1'] })).toThrow(/\$select/);
+      expect(() => buildQueryUrl({ entitySet: 'Parts', select: ['ID&$top=1'] })).toThrow(
+        /\$select/,
+      );
+      expect(() => buildQueryUrl({ entitySet: 'Parts', select: ['ID?$top=1'] })).toThrow(
+        /\$select/,
+      );
     });
 
     it('rejects a sort field that injects filter logic', () => {
-      expect(() => buildQueryUrl({ entitySet: 'Parts', orderBy: 'name&$top=9' })).toThrow(/\$orderby/);
+      expect(() => buildQueryUrl({ entitySet: 'Parts', orderBy: 'name&$top=9' })).toThrow(
+        /\$orderby/,
+      );
       expect(() => buildQueryUrl({ entitySet: 'Parts', orderBy: 'name) or (1 eq 1' })).toThrow(
         /\$orderby/,
       );
@@ -100,9 +108,12 @@ describe('buildQueryUrl input validation', () => {
       expect(buildQueryUrl({ entitySet: 'Parts', select: ['ID', 'number'] })).toBe(
         '/Parts?$select=ID,number',
       );
-      expect(buildQueryUrl({ entitySet: 'Parts', filters: [{ property: 'a/b', operator: 'eq', value: '1' }] })).toBe(
-        "/Parts?$filter=a/b eq 1",
-      );
+      expect(
+        buildQueryUrl({
+          entitySet: 'Parts',
+          filters: [{ property: 'a/b', operator: 'eq', value: '1' }],
+        }),
+      ).toBe('/Parts?$filter=a/b%20eq%201');
     });
 
     it('still warns (rather than throws) for valid-but-unknown properties', () => {
@@ -121,7 +132,10 @@ describe('buildQueryUrl input validation', () => {
   describe('in operator', () => {
     it('rejects an empty list instead of emitting invalid `in ()`', () => {
       expect(() =>
-        buildQueryUrl({ entitySet: 'Parts', filters: [{ property: 'state', operator: 'in', value: '' }] }),
+        buildQueryUrl({
+          entitySet: 'Parts',
+          filters: [{ property: 'state', operator: 'in', value: '' }],
+        }),
       ).toThrow(/non-empty/);
       expect(() =>
         buildQueryUrl({
@@ -176,7 +190,7 @@ describe('buildQueryUrl input validation', () => {
         metadata,
         filters: [{ property: 'unitPrice', operator: 'in', value: '1, 2.5,3' }],
       });
-      expect(url).toBe('/Parts?$filter=unitPrice in (1,2.5,3)');
+      expect(url).toBe('/Parts?$filter=unitPrice%20in%20(1,2.5,3)');
     });
 
     it('round-trips quoted values without double-escaping', () => {
@@ -184,7 +198,7 @@ describe('buildQueryUrl input validation', () => {
         entitySet: 'Parts',
         filters: [{ property: 'name', operator: 'in', value: "'O''Brien','Smith'" }],
       });
-      expect(url).toBe("/Parts?$filter=name in ('O''Brien','Smith')");
+      expect(url).toBe("/Parts?$filter=name%20in%20('O''Brien','Smith')");
     });
 
     it('keeps accepting the previously supported list shapes', () => {
@@ -193,14 +207,14 @@ describe('buildQueryUrl input validation', () => {
           entitySet: 'Parts',
           filters: [{ property: 'state', operator: 'in', value: "'INWORK','RELEASED'" }],
         }),
-      ).toBe("/Parts?$filter=state in ('INWORK','RELEASED')");
+      ).toBe("/Parts?$filter=state%20in%20('INWORK','RELEASED')");
 
       expect(
         buildQueryUrl({
           entitySet: 'Parts',
           filters: [{ property: 'state', operator: 'in', value: "('A','B')" }],
         }),
-      ).toBe("/Parts?$filter=state in ('A','B')");
+      ).toBe("/Parts?$filter=state%20in%20('A','B')");
 
       expect(
         buildQueryUrl({
@@ -208,7 +222,7 @@ describe('buildQueryUrl input validation', () => {
           metadata,
           filters: [{ property: 'state', operator: 'in', value: "'RELEASED'" }],
         }),
-      ).toContain("state in (PTC.ProdMgmt.LifeCycleState'RELEASED')");
+      ).toContain("state%20in%20(PTC.ProdMgmt.LifeCycleState'RELEASED')");
     });
   });
 
@@ -225,7 +239,7 @@ describe('buildQueryUrl input validation', () => {
 
     it('supports comma-separated multi-field sorting', () => {
       const url = buildQueryUrl({ entitySet: 'Parts', orderBy: 'name desc, number asc' });
-      expect(url).toBe('/Parts?$orderby=name desc,number asc');
+      expect(url).toBe('/Parts?$orderby=name%20desc,number%20asc');
     });
 
     it('validates every field of a multi-field sort', () => {
@@ -272,9 +286,7 @@ describe('buildQueryUrl input validation', () => {
         buildQueryUrl({
           entitySet: 'Parts',
           metadata,
-          expand: [
-            { navProperty: 'Documents', expand: [{ navProperty: 'Describes', top: -3 }] },
-          ],
+          expand: [{ navProperty: 'Documents', expand: [{ navProperty: 'Describes', top: -3 }] }],
         }),
       ).toThrow('Invalid $top');
     });
@@ -285,7 +297,7 @@ describe('buildQueryUrl input validation', () => {
         metadata,
         expand: [{ navProperty: 'Documents', orderBy: 'name desc', top: 5, skip: 0 }],
       });
-      expect(url).toBe('/Parts?$expand=Documents($orderby=name desc;$top=5;$skip=0)');
+      expect(url).toBe('/Parts?$expand=Documents($orderby=name%20desc;$top=5;$skip=0)');
     });
   });
 });
