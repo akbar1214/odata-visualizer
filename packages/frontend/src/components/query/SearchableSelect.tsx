@@ -4,6 +4,14 @@ import type { ODataEntity } from '@odata-visualizer/shared';
 
 interface SearchableSelectProps {
   entities: ODataEntity[];
+  /**
+   * The model the selection identity is computed against. Defaults to
+   * `entities`, which is only correct when `entities` is the whole model.
+   * Callers that render a filtered list must pass the full list: a short name
+   * that collides with a filtered-out type (abstract or complex) would
+   * otherwise be emitted as if it were unique and resolve to that other type.
+   */
+  identityEntities?: ODataEntity[];
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
@@ -12,6 +20,7 @@ interface SearchableSelectProps {
 
 export function SearchableSelect({
   entities,
+  identityEntities,
   value,
   onChange,
   placeholder = 'Search entities...',
@@ -24,8 +33,8 @@ export function SearchableSelect({
 
   // Selection identity, not display name: two types may share a short name.
   const optionValue = useCallback(
-    (entity: ODataEntity) => getEntitySelectionValue(entity, entities),
-    [entities],
+    (entity: ODataEntity) => getEntitySelectionValue(entity, identityEntities ?? entities),
+    [entities, identityEntities],
   );
   const selectedEntity = entities.find((e) => optionValue(e) === value);
 
