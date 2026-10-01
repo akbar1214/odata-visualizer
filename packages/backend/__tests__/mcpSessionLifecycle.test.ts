@@ -107,8 +107,11 @@ describe('MCP session lifecycle', () => {
 
   it('reclaims a slot from a client that simply disappeared', async () => {
     // `client.close()` does not send a DELETE, so in practice the reaper is the
-    // only thing that returns a slot to the pool.
-    const app = createApp({ maxSessions: 1, sessionIdleMs: 60 });
+    // only thing that returns a slot to the pool. The TTL and the poll interval
+    // are deliberately far above scheduler jitter: a parallel workspace run can
+    // delay a worker for tens of milliseconds, and a 60 ms TTL then reaps the
+    // session before the test's own probe reaches it.
+    const app = createApp({ maxSessions: 1, sessionIdleMs: 500 });
     const started = app.listen(0);
     await once(started, 'listening');
     const url = `http://127.0.0.1:${(started.address() as AddressInfo).port}`;
@@ -117,8 +120,8 @@ describe('MCP session lifecycle', () => {
     await client.close();
 
     let revived: { client: Client; transport: StreamableHTTPClientTransport } | undefined;
-    for (let attempt = 0; attempt < 20 && !revived; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    for (let attempt = 0; attempt < 30 && !revived; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
       try {
         revived = await connect(url, 'revived');
       } catch {
@@ -133,7 +136,7 @@ describe('MCP session lifecycle', () => {
   });
 
   it('reaps a session that has been idle past the TTL', async () => {
-    const app = createApp({ sessionIdleMs: 60 });
+    const app = createApp({ sessionIdleMs: 500 });
     const started = app.listen(0);
     await once(started, 'listening');
     const url = `http://127.0.0.1:${(started.address() as AddressInfo).port}`;
@@ -143,7 +146,7 @@ describe('MCP session lifecycle', () => {
 
     expect(await probeSession(url, sessionId)).not.toBe(404);
 
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
 
     // Must have been reaped rather than pinned for the life of the process.
     expect(await probeSession(url, sessionId)).toBe(404);
@@ -154,7 +157,7 @@ describe('MCP session lifecycle', () => {
   });
 
   it('does not reap a session that is still in use', async () => {
-    const app = createApp({ sessionIdleMs: 120 });
+    const app = createApp({ sessionIdleMs: 500 });
     const started = app.listen(0);
     await once(started, 'listening');
     const url = `http://127.0.0.1:${(started.address() as AddressInfo).port}`;
@@ -162,9 +165,9 @@ describe('MCP session lifecycle', () => {
     const { client, transport } = await connect(url, 'busy');
     const sessionId = transport.sessionId!;
 
-    // Keep the session warm for longer than the TTL.
-    for (let i = 0; i < 5; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 60));
+    // Keep the session warm for longer than the TTL, probing well inside it.
+    for (let i = 0; i < 12; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
       expect(await probeSession(url, sessionId)).not.toBe(404);
     }
 
@@ -174,7 +177,7 @@ describe('MCP session lifecycle', () => {
   });
 
   it('reaps the session id out of the pool once it goes idle', async () => {
-    const app = createApp({ maxSessions: 1, sessionIdleMs: 60 });
+    const app = createApp({ maxSessions: 1, sessionIdleMs: 500 });
     const started = app.listen(0);
     await once(started, 'listening');
     const url = `http://127.0.0.1:${(started.address() as AddressInfo).port}`;
@@ -187,7 +190,7 @@ describe('MCP session lifecycle', () => {
     const { transport: leaky } = await connect(url, 'leaky');
     expect(await probeSession(url, leaky.sessionId!)).not.toBe(404);
 
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
 
     expect(await probeSession(url, leaky.sessionId!)).toBe(404);
     expect(sessionId).toBeTruthy();
