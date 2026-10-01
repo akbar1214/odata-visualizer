@@ -224,12 +224,13 @@ describe('association resolution does not guess', () => {
     expect(getTargetEntityName('Kids', widget, metadata)).toBe('Gadget');
   });
 
-  it('leaves a qualified reference to an unloaded namespace unresolved', async () => {
-    // #39. `Ext` is an `Include` alias for `doc2.xml`, which never loads, so the
-    // parser expands `Ext.R1` to `N2.R1` while N2's elements never arrive. N1's
-    // own `R1` merely shares the simple name and its roles (Widget/Gadget) match
-    // neither of the navigation property's (Alpha/Beta).
-    const metadata = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+  /**
+   * N1 with an `Include` for a document that never loads, and N1's own `R1`.
+   * `Ext` is an alias for the include's namespace, which never arrives, so the
+   * association the navigation property means is not in the model.
+   */
+  const parseWithUnloadedQualifier = (relationship: string, roles: string) =>
+    parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
   <edmx:DataServices>
     <Schema Namespace="N1" xmlns="http://docs.oasis-open.org/odata/ns/edm">
@@ -239,7 +240,7 @@ describe('association resolution does not guess', () => {
       <EntityType Name="Widget">
         <Key><PropertyRef Name="Id" /></Key>
         <Property Name="Id" Type="Edm.String" Nullable="false" />
-        <NavigationProperty Name="Kids" Relationship="Ext.R1" FromRole="Alpha" ToRole="Beta" />
+        <NavigationProperty Name="Kids" Relationship="${relationship}"${roles} />
       </EntityType>
       <EntityType Name="Gadget">
         <Key><PropertyRef Name="Id" /></Key>
@@ -252,10 +253,246 @@ describe('association resolution does not guess', () => {
     </Schema>
   </edmx:DataServices>
 </edmx:Edmx>`);
+
+  it('leaves a qualified reference to an unloaded namespace unresolved', async () => {
+    // #39. `Ext` is an `Include` alias for `doc2.xml`, which never loads, so the
+    // parser expands `Ext.R1` to `N2.R1` while N2's elements never arrive. N1's
+    // own `R1` merely shares the simple name and its roles (Widget/Gadget) match
+    // neither of the navigation property's (Alpha/Beta).
+    const metadata = await parseWithUnloadedQualifier('Ext.R1', ' FromRole="Alpha" ToRole="Beta"');
     const widget = findEntity('Widget', metadata.entities)!;
 
     expect(metadata.unresolvedReferences).toContain('https://example.org/doc2.xml');
     expect(getTargetEntityName('Kids', widget, metadata)).toBeUndefined();
+  });
+
+  it('does not follow an unloaded-qualifier namesake that shares only the FromRole', async () => {
+    // #73. N1's `R1` shares only `FromRole="Widget"` with the navigation
+    // property, which the one-role corroboration accepted — the confident wrong
+    // answer survived. The unloaded namespace may simply not have arrived, so
+    // no namesake is followed at all.
+    const metadata = await parseWithUnloadedQualifier(
+      'Ext.R1',
+      ' FromRole="Widget" ToRole="Customer"',
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBeUndefined();
+  });
+
+  it('does not follow an unloaded-qualifier namesake that shares only the ToRole', async () => {
+    // The mirror of the FromRole-only case: the namesake's *to* end carries
+    // the navigation property's `ToRole`, which the pre-#73 rule accepted and
+    // resolved to `Gadget`.
+    const metadata = await parseWithUnloadedQualifier(
+      'Ext.R1',
+      ' FromRole="Customer" ToRole="Gadget"',
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBeUndefined();
+  });
+
+  it('leaves a role-less navigation property on an unloaded qualifier unresolved', async () => {
+    // #73.2. `!nav.toRole` skipped corroboration entirely, so the unloaded
+    // qualifier still followed N1's namesake; the short-circuit covers it.
+    const metadata = await parseWithUnloadedQualifier('Ext.R1', '');
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBeUndefined();
+  });
+
+  it('leaves a FromRole-only navigation property on an unloaded qualifier unresolved', async () => {
+    // The same half-declared shape, whose only declared role matches the
+    // namesake's `FromRole`.
+    const metadata = await parseWithUnloadedQualifier('Ext.R1', ' FromRole="Widget"');
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBeUndefined();
+  });
+
+  it('keeps a reference to a model namespace resolving beside an unresolved one', async () => {
+    // An unresolved reference does not poison a qualifier that *is* a model
+    // namespace: `N1.R1` is authoritative and resolves as before.
+    const metadata = await parseWithUnloadedQualifier(
+      'N1.R1',
+      ' FromRole="Widget" ToRole="Gadget"',
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(metadata.unresolvedReferences).toContain('https://example.org/doc2.xml');
+    expect(getTargetEntityName('Kids', widget, metadata)).toBe('Gadget');
+  });
+
+  it('still guesses for an unqualified reference while a document is unresolved', async () => {
+    // Only an *unresolved qualifier* short-circuits. An unqualified reference
+    // has no namespace to be missing, and the source namespace still answers.
+    const metadata = await parseWithUnloadedQualifier('R1', '');
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBe('Gadget');
+  });
+
+  /**
+   * The `parseWithUnloadedQualifier` fixture with the reference supplied by the
+   * caller: a stray `Ghost.R1` whose namesake in the source namespace carries
+   * both roles. Whether the fallback may follow that namesake depends only on
+   * what the failed reference could have supplied.
+   */
+  const parseStrayQualifierWith = (reference: string) =>
+    parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N1" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      ${reference}
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Kids" Relationship="Ghost.R1" FromRole="Widget" ToRole="Gadget" />
+      </EntityType>
+      <EntityType Name="Gadget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Association Name="R1">
+        <End Type="N1.Widget" Role="Widget" Multiplicity="1" />
+        <End Type="N1.Gadget" Role="Gadget" Multiplicity="*" />
+      </Association>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+  it('resolves a stray qualifier when only an IncludeAnnotations reference is unresolved', async () => {
+    // A1. `IncludeAnnotations` carries a term namespace, never the association
+    // namespace a navigation property could name, so the reference cannot
+    // explain `Ghost.R1` — the corroborating namesake must still resolve.
+    const metadata = await parseStrayQualifierWith(
+      `<edmx:Reference Uri="https://example.org/annotations.xml">
+        <edmx:IncludeAnnotations TermNamespace="Other.Terms" />
+      </edmx:Reference>`,
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(metadata.unresolvedReferences).toContain('https://example.org/annotations.xml');
+    expect(getTargetEntityName('Kids', widget, metadata)).toBe('Gadget');
+  });
+
+  it('resolves a stray qualifier when a reference fails but included another namespace', async () => {
+    // A4. The upload path parses without a loader, so a loadable reference is
+    // recorded unresolved all the same. Its `Include` claims `Other`, not
+    // `Ghost`, so it cannot be where this qualifier came from.
+    const metadata = await parseStrayQualifierWith(
+      '<edmx:Reference Uri="shared.xml"><edmx:Include Namespace="Other" /></edmx:Reference>',
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(metadata.unresolvedReferences).toContain('shared.xml');
+    expect(getTargetEntityName('Kids', widget, metadata)).toBe('Gadget');
+  });
+
+  it('does not follow a case-mismatched qualifier whose namespace is pending', async () => {
+    // The unloaded `Include` declares `N2`; under the case-insensitive policy
+    // `n2.R1` may name it, so the missing document could still have supplied
+    // this association and the namesake is not followed.
+    const metadata = await parseWithUnloadedQualifier(
+      'n2.R1',
+      ' FromRole="Widget" ToRole="Customer"',
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBeUndefined();
+  });
+
+  it('resolves a case-mismatched qualifier beside an unresolved reference', async () => {
+    // The reviewer's case: `n2` names the model's `N2` under the case policy,
+    // so the unrelated failed reference must not short-circuit it.
+    const metadata = await parse(
+      schema(
+        'N2',
+        '<edmx:Reference Uri="other.xml"><edmx:Include Namespace="Other" /></edmx:Reference>' +
+          entity(
+            'Widget',
+            '\n        <NavigationProperty Name="Kids" Relationship="n2.R1" FromRole="Widget" ToRole="Gadget" />',
+          ) +
+          entity('Gadget') +
+          association('N2', 'Widget', 'Widget', 'Gadget', 'Gadget'),
+      ),
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(metadata.unresolvedReferences).toContain('other.xml');
+    expect(getTargetEntityName('Kids', widget, metadata)).toBe('Gadget');
+  });
+
+  it('prefers the case-insensitively named namespace over the source namespace’s', async () => {
+    // `n2` names N2 under the case-insensitive fallback, so the qualifier is
+    // authoritative exactly as `N2` would be. N1 — the source namespace — also
+    // declares an `R1` whose roles corroborate, and the guess used to follow it
+    // to `Wrong`.
+    const metadata = await parse(
+      schema(
+        'N1',
+        entity(
+          'Widget',
+          '\n        <NavigationProperty Name="Kids" Relationship="n2.R1" FromRole="Alpha" ToRole="Beta" />',
+        ) +
+          entity('Wrong') +
+          association('N1', 'Widget', 'Alpha', 'Wrong', 'Beta'),
+      ) +
+        schema(
+          'N2',
+          entity('Alpha') + entity('Beta') + association('N2', 'Alpha', 'Alpha', 'Beta', 'Beta'),
+        ),
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBe('Beta');
+  });
+
+  it('compares association roles case-sensitively', async () => {
+    // #73.3. Roles are case-sensitive CSDL identifiers, so a navigation
+    // property whose roles differ from the association's only by case does not
+    // corroborate it and resolves to nothing. This is the one lookup that stays
+    // case-sensitive under #40's case-insensitive policy for names.
+    const metadata = await parse(
+      schema(
+        'N',
+        entity(
+          'Widget',
+          '\n        <NavigationProperty Name="Kids" Relationship="R1" FromRole="alpha" ToRole="beta" />',
+        ) +
+          entity('Gadget') +
+          association('N', 'Widget', 'Alpha', 'Gadget', 'Beta'),
+      ),
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBeUndefined();
+  });
+
+  it('prefers the namesake whose roles corroborate over the source namespace’s', async () => {
+    // `Ghost` is unknown and every reference loaded, so the qualifier carries no
+    // information and the roles are the only corroboration. N1's `R1` — the
+    // source namespace's, which the fallback used to prefer — carries roles
+    // that match nothing.
+    const metadata = await parse(
+      schema(
+        'N1',
+        entity(
+          'Widget',
+          '\n        <NavigationProperty Name="Kids" Relationship="Ghost.R1" FromRole="Alpha" ToRole="Beta" />',
+        ) +
+          entity('Wrong') +
+          association('N1', 'Widget', 'Other', 'Wrong', 'Else'),
+      ) +
+        schema(
+          'N2',
+          entity('Alpha') + entity('Beta') + association('N2', 'Alpha', 'Alpha', 'Beta', 'Beta'),
+        ),
+    );
+    const widget = findEntity('Widget', metadata.entities)!;
+
+    expect(getTargetEntityName('Kids', widget, metadata)).toBe('Beta');
   });
 
   it('resolves through a same-named association whose roles agree', async () => {

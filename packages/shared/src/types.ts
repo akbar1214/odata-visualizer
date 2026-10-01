@@ -228,6 +228,13 @@ export interface ODataMetadata {
   typeDefinitions: ODataTypeDefinition[];
   /** edmx:Reference targets that could not be loaded (no loader or fetch failed). */
   unresolvedReferences?: string[];
+  /**
+   * Namespace and alias names declared by `edmx:Include` elements on the
+   * references in `unresolvedReferences`. A qualifier matching one of these may
+   * have come from a document that never loaded; one matching none cannot, so
+   * an unrelated failure does not poison the lookup (#73).
+   */
+  unresolvedReferenceIncludes?: string[];
   annotations?: Record<string, unknown>;
 }
 

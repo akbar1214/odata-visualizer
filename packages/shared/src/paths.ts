@@ -293,6 +293,13 @@ export function findPaths(
  * The visited set is keyed by edge, not by node, so a node reachable through
  * two different edges is reported through both — matching the previous
  * frontend walk.
+ *
+ * That edge key is also why a node with several inbound edges is enqueued once
+ * per edge and every visit re-lists its outgoing steps. Fan-in is the general
+ * shape — with `Root->P0->Hub`, `Root->P1->Hub`, `Hub->Sink`, `Hub` is visited
+ * twice and `Hub->Sink` is listed twice — and a self-loop is the degenerate
+ * case where the inbound and outbound edge are the same one (#70). Consumers
+ * that need distinct steps deduplicate (PathFinder does, through a `Set`).
  */
 export function getReachableEntities(
   entityName: string,

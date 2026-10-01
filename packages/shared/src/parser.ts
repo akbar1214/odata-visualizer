@@ -338,6 +338,12 @@ export async function parseCSDL(
   const typeDefinitions: ODataTypeDefinition[] = [];
   const unresolvedReferences: string[] = [];
   /**
+   * Namespace and alias names claimed by `edmx:Include` elements on references
+   * that failed to load. The resolve guard tests a stray qualifier against
+   * these, so an unrelated failure cannot disable the fallback (#73).
+   */
+  const unresolvedReferenceIncludes: string[] = [];
+  /**
    * `<Annotations Target="...">` blocks, collected per schema and applied once
    * the whole model is parsed. CSDL places most annotations here rather than
    * inline, and `parseAnnotations` reads only direct `<Annotation>` children,
@@ -388,6 +394,24 @@ export async function parseCSDL(
     ...ensureArray(owner['edmx:Include']),
     ...ensureArray(owner['edm:Include']),
   ];
+
+  /**
+   * Record a reference that could not be loaded, together with the namespace
+   * and alias names its `edmx:Include` elements claimed. The resolve guard
+   * needs the names, not just the failure: a qualifier can only have come from
+   * a document that actually included it (#73).
+   */
+  const recordUnresolvedReference = (uri: string, reference: XmlElement): void => {
+    if (!unresolvedReferences.includes(uri)) unresolvedReferences.push(uri);
+    for (const include of includesOf(reference)) {
+      for (const attribute of ['@_Namespace', '@_Alias']) {
+        const name = str(include[attribute]);
+        if (name && !unresolvedReferenceIncludes.includes(name)) {
+          unresolvedReferenceIncludes.push(name);
+        }
+      }
+    }
+  };
 
   const registerSchema = (schema: XmlElement, document: number): void => {
     const namespace = str(schema['@_Namespace']);
@@ -441,7 +465,7 @@ export async function parseCSDL(
       if (!uri) continue;
 
       if (!options.loadExternal) {
-        if (!unresolvedReferences.includes(uri)) unresolvedReferences.push(uri);
+        recordUnresolvedReference(uri, reference);
         continue;
       }
 
@@ -449,7 +473,7 @@ export async function parseCSDL(
       if (visitedUris.has(absoluteUri)) continue;
 
       if (externalDocumentsLoaded >= maxExternalDocuments) {
-        if (!unresolvedReferences.includes(uri)) unresolvedReferences.push(uri);
+        recordUnresolvedReference(uri, reference);
         continue;
       }
 
@@ -467,7 +491,7 @@ export async function parseCSDL(
         }
         await loadReferences(externalDocument.references, externalDocumentId);
       } catch {
-        if (!unresolvedReferences.includes(uri)) unresolvedReferences.push(uri);
+        recordUnresolvedReference(uri, reference);
       }
     }
   };
@@ -685,6 +709,9 @@ export async function parseCSDL(
 
   if (unresolvedReferences.length > 0) {
     metadata.unresolvedReferences = unresolvedReferences;
+  }
+  if (unresolvedReferenceIncludes.length > 0) {
+    metadata.unresolvedReferenceIncludes = unresolvedReferenceIncludes;
   }
 
   return metadata;

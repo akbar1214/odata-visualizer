@@ -337,7 +337,9 @@ export function getTargetEntityName(
   // reference is explicitly qualified, so an association outside that namespace
   // is a dangling reference and stays unresolved. Guessing from the source
   // entity's namespace instead silently followed an unrelated association that
-  // merely shared the simple name.
+  // merely shared the simple name. Membership follows the project-wide case
+  // policy, so `n2.R1` names a schema declared `N2` rather than counting as an
+  // unrecognised qualifier.
   const modelNamespaces = new Set<string>();
   for (const entity of metadata.entities) {
     if (entity.namespace) modelNamespaces.add(entity.namespace);
@@ -345,17 +347,41 @@ export function getTargetEntityName(
   for (const relationship of metadata.relationships) {
     if (relationship.namespace) modelNamespaces.add(relationship.namespace);
   }
-  const qualified = qualifier !== undefined && modelNamespaces.has(qualifier);
+  const qualifierLower = qualifier?.toLowerCase();
+  const qualified =
+    qualifierLower !== undefined &&
+    [...modelNamespaces].some((namespace) => namespace.toLowerCase() === qualifierLower);
 
   // An unrecognised qualifier is almost always a namespace this model does not
   // contain: since #34 the parser expands `Schema/@Alias` and `Include` aliases
-  // inline, so an alias would have been rewritten before it arrived here. The
-  // named namespace's elements never loaded, so `sameName` can only offer
-  // associations that happen to share the simple name. The source namespace
-  // narrows that guess, but the navigation property's roles are what corroborate
-  // it; a namesake whose ends carry neither role is not the association that was
-  // meant (#39), and following it turned the pre-#35 `undefined` into a
-  // confident wrong answer.
+  // inline, so an alias would have been rewritten before it arrived here.
+  //
+  // When a reference that named this qualifier never loaded, that qualifier may
+  // simply be the namespace that did not arrive — and no same-named association
+  // here can corroborate itself against the missing one. The one-role rule below
+  // accepts a namesake sharing a single role name (the pre-existing #35 test
+  // requires that), which turned this case into the confident wrong answer #39
+  // was about, so a reference to a *pending* `Include` name stays unresolved
+  // (#73). Pending is per include, not per model: a failure for an unrelated
+  // namespace — or an `<edmx:IncludeAnnotations>` reference, which can never
+  // supply an association — does not explain this qualifier. Unqualified
+  // references are exempt: there is no namespace to be missing, and the source
+  // namespace's fallback is still the best available answer.
+  const pendingIncludes = metadata.unresolvedReferenceIncludes;
+  if (
+    qualifierLower !== undefined &&
+    !qualified &&
+    pendingIncludes?.some((name) => name.toLowerCase() === qualifierLower)
+  ) {
+    return undefined;
+  }
+
+  // With every reference loaded the qualifier is a stray name (`Ghost` in the
+  // tests) rather than a missing document, and the navigation property's roles
+  // are what corroborate a namesake: one whose ends carry neither role is not
+  // the association that was meant (#39), and following it turned the pre-#35
+  // `undefined` into a confident wrong answer. The source namespace then
+  // narrows the guess.
   const guessed = sameName.filter(
     (r) =>
       !nav.toRole ||
@@ -365,7 +391,8 @@ export function getTargetEntityName(
       r.to.role === nav.fromRole,
   );
   const rel = qualified
-    ? sameName.find((r) => r.namespace === qualifier)
+    ? (sameName.find((r) => r.namespace === qualifier) ??
+      sameName.find((r) => r.namespace?.toLowerCase() === qualifierLower))
     : (guessed.find((r) => r.namespace === sourceEntity.namespace) ?? guessed[0]);
   if (!rel) return undefined;
 
