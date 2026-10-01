@@ -883,8 +883,14 @@ function applyTargetedAnnotations(
     // actual schema is a namespace, not an alias, so an annotation target
     // cannot be rewritten into another document's namespace.
     const aliases = aliasesForNamespace(undefined, undefined, block.document);
+    // Every qualified name in a target path is in scope, so every segment is
+    // expanded. Expanding the whole string only reaches the first segment,
+    // which silently dropped a cast written with an alias:
+    // `N.Derived/Self.Base/BaseProp` resolved to nothing.
     const expanded = expandAlias(block.target, aliases, namespaces);
-    const segments = expanded.split('/');
+    const segments = expanded
+      .split('/')
+      .map((segment) => expandAlias(segment, aliases, namespaces));
     const scope = block.namespace;
 
     const selector = splitOverloadSelector(segments[0]);
@@ -1232,7 +1238,7 @@ function walkPropertyPath(
       continue;
     }
     if (!current) return undefined;
-    const property = findPropertyOrNavigation(current, segment);
+    const property = findPropertyOrNavigation(current, segment, metadata.entities);
     if (!property) return undefined;
     if (index === segments.length - 1) return property;
 
@@ -1275,17 +1281,33 @@ function isNavigationProperty(
 function findPropertyOrNavigation(
   owner: ODataEntity,
   name: string,
+  entities: ODataEntity[],
 ): ODataProperty | ODataNavigationProperty | undefined {
-  const exact =
-    owner.properties.find((property) => property.name === name) ??
-    owner.navigationProperties.find((navigation) => navigation.name === name);
-  if (exact) return exact;
+  const on = (type: ODataEntity): ODataProperty | ODataNavigationProperty | undefined => {
+    const exact =
+      type.properties.find((property) => property.name === name) ??
+      type.navigationProperties.find((navigation) => navigation.name === name);
+    if (exact) return exact;
 
-  const needle = name.toLowerCase();
-  return (
-    owner.properties.find((property) => property.name.toLowerCase() === needle) ??
-    owner.navigationProperties.find((navigation) => navigation.name.toLowerCase() === needle)
-  );
+    const needle = name.toLowerCase();
+    return (
+      type.properties.find((property) => property.name.toLowerCase() === needle) ??
+      type.navigationProperties.find((navigation) => navigation.name.toLowerCase() === needle)
+    );
+  };
+
+  const direct = on(owner);
+  if (direct) return direct;
+
+  // An inherited property is part of the derived type everywhere else in this
+  // parser — `getEffectiveProperties` walks the chain — so a target path naming
+  // one resolves here too, instead of silently requiring an explicit cast.
+  for (const base of resolveInheritanceChain(owner, entities)) {
+    if (base === owner) continue;
+    const inherited = on(base);
+    if (inherited) return inherited;
+  }
+  return undefined;
 }
 
 /** An entity set within one container. Exact case first, then case-insensitive. */

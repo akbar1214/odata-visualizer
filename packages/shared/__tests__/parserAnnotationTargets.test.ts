@@ -525,3 +525,53 @@ describe('targets that stay unsupported', () => {
     expect(model.entityContainers[0].annotations).toBeUndefined();
   });
 });
+
+/**
+ * Every qualified name in a target path is in scope, so an alias can appear in
+ * a *cast* segment, not just the first one. Expanding the whole string reached
+ * only the leading segment, so `N.Derived/Self.Base/BaseProp` resolved to
+ * nothing while `N.Derived/N.Base/BaseProp` worked — a silent drop in the one
+ * form this file is about.
+ *
+ * The second case is the same shape: an inherited property is part of the
+ * derived type everywhere else in this parser, so a target path naming one
+ * resolves rather than requiring an explicit cast.
+ */
+describe('cast segments written with an alias, and inherited properties', () => {
+  const csdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" Alias="Self" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="BaseProp" Type="Edm.String" />
+      </EntityType>
+      <EntityType Name="Derived" BaseType="N.Base" />
+      <Annotations Target="N.Derived/Self.Base/BaseProp">
+        <Annotation Term="Core.Description" String="aliased cast" />
+      </Annotations>
+      <Annotations Target="N.Derived/BaseProp">
+        <Annotation Term="T.Inherited" String="inherited" />
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  const baseProp = (model: Awaited<ReturnType<typeof parseCSDL>>) =>
+    model.entities
+      .find((e) => e.qualifiedName === 'N.Base')!
+      .properties.find((p) => p.name === 'BaseProp')!;
+
+  it('expands an alias in a type-cast segment', async () => {
+    const model = await parseCSDL(csdl);
+
+    expect(baseProp(model).annotations?.['Core.Description']).toBe('aliased cast');
+  });
+
+  it('resolves a property inherited from a base type', async () => {
+    const model = await parseCSDL(csdl);
+
+    expect(baseProp(model).annotations?.['T.Inherited']).toBe('inherited');
+  });
+});
