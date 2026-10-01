@@ -95,6 +95,25 @@ describe('createMcpServer', () => {
     expect(tools.map((t) => t.name)).toContain('load_metadata');
   });
 
+  it('advertises the key-predicate entitySet form and the literal contract', async () => {
+    const client = await connect(createMetadataStore());
+    const { tools } = await client.listTools();
+    const buildQuery = tools.find((t) => t.name === 'build_query');
+    expect(buildQuery).toBeDefined();
+
+    const properties = (
+      buildQuery!.inputSchema as { properties?: Record<string, { description?: string }> }
+    ).properties;
+    // #23 made `Parts('P1')` valid; the schema must not still describe only a
+    // bare set name, or a caller will never use the keyed form.
+    expect(properties?.['entitySet']?.description).toContain("Parts('P1')");
+    // `build_query` types literals from the model for known properties,
+    // validates them, and warns (inferring the type) for a property the model
+    // does not define; the description must say all three.
+    expect(buildQuery!.description).toContain('validated');
+    expect(buildQuery!.description).toContain('does not define');
+  });
+
   it('still exposes read-only tools when load_metadata is disabled', async () => {
     const store = createMetadataStore();
     store.set(await parseCSDL(windchillXml), { sourceName: 'windchill.xml' });

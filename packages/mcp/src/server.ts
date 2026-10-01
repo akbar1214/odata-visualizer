@@ -235,9 +235,13 @@ export function createMcpServer(
     'build_query',
     {
       description:
-        'Build an OData V4 GET query URL from filters, $select, $expand, $apply (groupby/aggregate), $orderby, paging, $count, and $search. Literals are typed from the loaded model. Returns the URL only — it does not execute the request.',
+        'Build an OData V4 GET query URL from filters, $select, $expand, $apply (groupby/aggregate), $orderby, paging, $count, and $search. Literals are typed and validated from the loaded model; a property the model does not define is inferred and reported as a warning. Returns the URL only — it does not execute the request.',
       inputSchema: {
-        entitySet: z.string().describe('Entity set name, e.g. "Parts"'),
+        entitySet: z
+          .string()
+          .describe(
+            'Entity set name, optionally with a key predicate, e.g. "Parts" or "Parts(\'P1\')"',
+          ),
         baseUrl: z
           .string()
           .optional()
