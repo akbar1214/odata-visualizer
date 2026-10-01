@@ -7,5 +7,6 @@
 export * from './types.js';
 export * from './parser.js';
 export * from './resolve.js';
+export * from './paths.js';
 export * from './query.js';
 export * from './encoding.js';
