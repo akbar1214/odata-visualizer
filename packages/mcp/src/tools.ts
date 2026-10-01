@@ -9,23 +9,29 @@ import type {
   ODataRelationship,
 } from '@odata-visualizer/shared';
 import {
+  buildQueryOptions,
   buildQueryUrl,
   findEntitiesByName,
   findEntityByName,
   findEntitySet,
+  findTypeInScope,
   formatV4Literal,
   getAllEntitySets,
   getEffectiveKeys,
   getEffectiveNavigationProperties,
   getEffectiveProperties,
+  getTraversalEdges,
   INTEGER_TYPES,
+  isFunctionEdge,
   normalizeBaseUrl,
   resolveInheritanceChain,
   resourcePathOf,
   suggestNames,
+  unwrapCollection,
   type ExpandNode,
   type FilterClause,
   type QueryOptions,
+  type TraversalFunctionEdge,
 } from '@odata-visualizer/shared';
 import { percentEncode } from '@odata-visualizer/shared';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -105,6 +111,28 @@ function formatEntitySummary(entity: ODataEntity, metadata: ODataMetadata): stri
 
 function formatRelationship(rel: ODataRelationship): string {
   return `${rel.name}: ${rel.from.entity} (${rel.from.multiplicity}) <-> ${rel.to.entity} (${rel.to.multiplicity})`;
+}
+
+/**
+ * Render one bound-function edge for `get_relationships`.
+ *
+ * The binding cardinality and the non-binding parameters are both part of the
+ * discovery answer: the first decides whether the composed path needs a key,
+ * the second decides whether the caller must supply values before the edge can
+ * be used at all.
+ */
+function formatOperationEdge(edge: TraversalFunctionEdge, metadata: ODataMetadata): string {
+  const qualified = (identity: string): string => {
+    const entity = findEntityByName(metadata.entities, identity);
+    return entity?.qualifiedName ?? entity?.name ?? identity;
+  };
+  const target = edge.returnsCollection ? `Collection(${qualified(edge.to)})` : qualified(edge.to);
+  const binding = edge.bindingIsCollection ? 'bound to the collection' : 'bound to one entity';
+  const requirements =
+    edge.parameters.length > 0
+      ? `requires: ${edge.parameters.map((p) => `${p.name}: ${p.type}`).join(', ')}`
+      : 'composable without parameters';
+  return `${edge.qualifiedName}(): ${qualified(edge.from)} -> ${target} [${requirements}; ${binding}]`;
 }
 
 /**
@@ -286,8 +314,12 @@ function formatParameter(
 
 function describeCallable(item: ODataAction | ODataFunction): string {
   const bound = item.isBound ? ' [bound]' : '';
+  // The binding type is what makes a bound function discoverable as an edge:
+  // `N.B [bound] -> N.C` alone never says the function is reachable from `A`.
+  const binding = item.isBound ? (item.parameters ?? []).find((p) => p.isBinding) : undefined;
+  const on = binding ? ` on ${binding.type}` : '';
   const ret = item.returnType ? ` -> ${item.returnType}` : '';
-  return `${item.qualifiedName ?? item.name}${bound}${ret}${item.label ? ` - ${item.label}` : ''}`;
+  return `${item.qualifiedName ?? item.name}${bound}${on}${ret}${item.label ? ` - ${item.label}` : ''}`;
 }
 
 function formatCallableDetails(
@@ -315,12 +347,13 @@ function formatCallableDetails(
 
   lines.push('\nInvocation:');
   if (item.isBound) {
-    const bindingType = item.parameters[0]?.type ?? 'Entity';
+    const bindingType = unwrapCollection(item.parameters[0]?.type);
+    const elementType = bindingType?.type ?? 'Entity';
     const set = getAllEntitySets(metadata).find(
       (s) =>
-        s.entityType === shortName(bindingType) ||
-        s.entityTypeQualified === shortName(bindingType) ||
-        s.entityType === bindingType,
+        s.entityType === shortName(elementType) ||
+        s.entityTypeQualified === shortName(elementType) ||
+        s.entityType === elementType,
     );
     const setPath = set ? encodeIdentifierForUrl(set.name) : '<EntitySet>';
     const setEntity = set
@@ -336,9 +369,10 @@ function formatCallableDetails(
               .join(',')
         : '<key>';
     const root = baseUrl ? normalizeBaseUrl(baseUrl) : '<serviceRoot>';
-    lines.push(
-      `  ${root}/${setPath}(${keyLiteral})/${encodeIdentifierForUrl(item.qualifiedName ?? item.name)}`,
-    );
+    // A collection binding addresses the whole set; a key predicate would
+    // compose on one entity instead of the collection the function binds to.
+    const target = bindingType?.isCollection ? setPath : `${setPath}(${keyLiteral})`;
+    lines.push(`  ${root}/${target}/${encodeIdentifierForUrl(item.qualifiedName ?? item.name)}`);
     if (set && !setEntity) {
       lines.push(
         `  Note: entity set "${set.name}" references type "${set.entityTypeQualified ?? set.entityType}", which is not defined in the loaded metadata.`,
@@ -837,7 +871,25 @@ export function createToolHandler(
           );
         }
 
-        if (rels.length === 0) {
+        // Bound functions are not stored in `metadata.relationships`, so the
+        // one tool an agent would call to ask "what connects A to C" never
+        // mentioned them. They are edges in the traversal graph, and this is
+        // where that graph becomes visible.
+        const operationEdges = getTraversalEdges(metadata)
+          .filter(isFunctionEdge)
+          .filter((edge) => {
+            if (!entityName) return true;
+            const needle = entityName.toLowerCase();
+            const namesFor = (identity: string): string[] => {
+              const entity = findEntityByName(metadata.entities, identity);
+              return [identity, entity?.name ?? '', entity?.qualifiedName ?? ''].map((name) =>
+                name.toLowerCase(),
+              );
+            };
+            return namesFor(edge.from).includes(needle) || namesFor(edge.to).includes(needle);
+          });
+
+        if (rels.length === 0 && operationEdges.length === 0) {
           return textResult(
             entityName
               ? `No relationships found for "${entityName}".`
@@ -845,8 +897,18 @@ export function createToolHandler(
           );
         }
 
-        const { slice, note } = paginate(rels, args);
-        return textResult(`Relationships:\n\n${slice.map(formatRelationship).join('\n')}${note}`);
+        const sections: string[] = [];
+        if (rels.length > 0) {
+          const { slice, note } = paginate(rels, args);
+          sections.push(`Relationships:\n\n${slice.map(formatRelationship).join('\n')}${note}`);
+        }
+        if (operationEdges.length > 0) {
+          const { slice, note } = paginate(operationEdges, args);
+          sections.push(
+            `Operation edges:\n\n${slice.map((edge) => formatOperationEdge(edge, metadata)).join('\n')}${note}`,
+          );
+        }
+        return textResult(sections.join('\n\n'));
       }
 
       case 'list_actions': {
@@ -1015,14 +1077,22 @@ export function createToolHandler(
         const actionName = asString(args['actionName']);
         if (!actionName) return errorResult('Error: actionName is required');
 
-        const action = findCallable(metadata.actions, actionName);
-        if (!action) {
+        const candidates = findCallableCandidates(metadata.actions, actionName);
+        if (candidates.length === 0) {
           const suggestions = suggestNames(
             actionName,
             metadata.actions.map((a) => a.name),
           );
           return errorResult(
             `Action "${actionName}" not found.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
+          );
+        }
+
+        const rawParameters = (args['parameters'] as Record<string, unknown> | undefined) ?? {};
+        const action = selectCallableOverload(candidates, rawParameters);
+        if (!action) {
+          return errorResult(
+            `No overload of "${actionName}" accepts the supplied parameters. Overloads: ${formatOverloadSignatures(candidates)}.`,
           );
         }
 
@@ -1035,14 +1105,22 @@ export function createToolHandler(
         const functionName = asString(args['functionName']);
         if (!functionName) return errorResult('Error: functionName is required');
 
-        const func = findCallable(metadata.functions, functionName);
-        if (!func) {
+        const candidates = findCallableCandidates(metadata.functions, functionName);
+        if (candidates.length === 0) {
           const suggestions = suggestNames(
             functionName,
             metadata.functions.map((f) => f.name),
           );
           return errorResult(
             `Function "${functionName}" not found.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
+          );
+        }
+
+        const rawParameters = (args['parameters'] as Record<string, unknown> | undefined) ?? {};
+        const func = selectCallableOverload(candidates, rawParameters);
+        if (!func) {
+          return errorResult(
+            `No overload of "${functionName}" accepts the supplied parameters. Overloads: ${formatOverloadSignatures(candidates)}.`,
           );
         }
 
@@ -1059,15 +1137,56 @@ const defaultHandler = createToolHandler(defaultStore);
 
 export const handleToolCall: ToolHandler = (name, args) => defaultHandler(name, args);
 
+/** Every overload the name resolves to, in declaration order. */
+function findCallableCandidates<T extends ODataAction | ODataFunction>(
+  items: T[],
+  name: string,
+): T[] {
+  const needle = name.toLowerCase();
+  const exact = items.filter(
+    (i) => (i.qualifiedName ?? '').toLowerCase() === needle || i.name.toLowerCase() === needle,
+  );
+  if (exact.length > 0) return exact;
+  return items.filter((i) => i.name.toLowerCase() === shortName(name).toLowerCase());
+}
+
 function findCallable<T extends ODataAction | ODataFunction>(
   items: T[],
   name: string,
 ): T | undefined {
-  const needle = name.toLowerCase();
-  const exact = items.find(
-    (i) => (i.qualifiedName ?? '').toLowerCase() === needle || i.name.toLowerCase() === needle,
+  return findCallableCandidates(items, name)[0];
+}
+
+/**
+ * Pick the overload whose declared parameters cover every supplied name.
+ *
+ * A name with one candidate is returned as-is, so the existing
+ * unknown-parameter error keeps naming the operation's own parameters. With
+ * several candidates, an unmatched set returns `undefined` and the caller
+ * reports the overloads instead of pretending the first one was meant.
+ */
+function selectCallableOverload<T extends ODataAction | ODataFunction>(
+  candidates: T[],
+  parameters: Record<string, unknown>,
+): T | undefined {
+  if (candidates.length <= 1) return candidates[0];
+  const supplied = Object.keys(parameters).map((name) => name.toLowerCase());
+  if (supplied.length === 0) return candidates[0];
+  return candidates.find((candidate) =>
+    supplied.every((name) =>
+      (candidate.parameters ?? []).some((p) => p.name.toLowerCase() === name),
+    ),
   );
-  return exact ?? items.find((i) => i.name.toLowerCase() === shortName(name).toLowerCase());
+}
+
+/** `N.B(it); N.B(it, factor)` — every overload with its declared parameters. */
+function formatOverloadSignatures(items: Array<ODataAction | ODataFunction>): string {
+  return items
+    .map(
+      (item) =>
+        `${item.qualifiedName ?? item.name}(${(item.parameters ?? []).map((p) => p.name).join(', ')})`,
+    )
+    .join('; ');
 }
 
 function buildInvocation(
@@ -1143,11 +1262,16 @@ function buildInvocationUnsafe(
     }
   }
 
+  const binding = (item.parameters ?? []).find((p) => p.isBinding);
+  const bindingIsCollection = unwrapCollection(binding?.type)?.isCollection ?? false;
+
   let path: string;
   if (item.isBound) {
     if (!entitySetName) {
       return errorResult(
-        `Error: "${item.name}" is bound; entitySet and keys are required to form the resource path.`,
+        bindingIsCollection
+          ? `Error: "${item.name}" is bound to a collection; entitySet is required to form the resource path.`
+          : `Error: "${item.name}" is bound; entitySet and keys are required to form the resource path.`,
       );
     }
     const set = findEntitySet(metadata, entitySetName);
@@ -1160,17 +1284,24 @@ function buildInvocationUnsafe(
         `Entity set "${entitySetName}" not found.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
       );
     }
-    const entity = findEntityByName(metadata.entities, set.entityTypeQualified ?? set.entityType);
-    if (!entity) {
-      return errorResult(`Could not resolve entity type for entity set "${entitySetName}".`);
+    if (bindingIsCollection) {
+      // The binding parameter addresses the whole collection, so no key
+      // predicate may be spliced in; supplied keys are ignored rather than
+      // silently composing on one entity of the collection.
+      path = `${encodeIdentifierForUrl(set.name)}/${encodeIdentifierForUrl(item.qualifiedName ?? item.name)}`;
+    } else {
+      const entity = findEntityByName(metadata.entities, set.entityTypeQualified ?? set.entityType);
+      if (!entity) {
+        return errorResult(`Could not resolve entity type for entity set "${entitySetName}".`);
+      }
+      let keySegment: string;
+      try {
+        keySegment = buildKeySegment(entity, metadata, keys);
+      } catch (error) {
+        return errorResult(`Error: ${error instanceof Error ? error.message : 'Invalid keys'}`);
+      }
+      path = `${encodeIdentifierForUrl(set.name)}${keySegment}/${encodeIdentifierForUrl(item.qualifiedName ?? item.name)}`;
     }
-    let keySegment: string;
-    try {
-      keySegment = buildKeySegment(entity, metadata, keys);
-    } catch (error) {
-      return errorResult(`Error: ${error instanceof Error ? error.message : 'Invalid keys'}`);
-    }
-    path = `${encodeIdentifierForUrl(set.name)}${keySegment}/${encodeIdentifierForUrl(item.qualifiedName ?? item.name)}`;
   } else {
     const importName = isFunction
       ? metadata.functionImports.find(
@@ -1185,7 +1316,23 @@ function buildInvocationUnsafe(
   }
 
   const inline = isFunction ? formatInlineParams(item, parameters) : '';
-  const fullPath = `${path}${inline}`;
+  const queryWarnings: string[] = [];
+  const queryOptions = isFunction
+    ? buildFunctionQueryOptions(item, metadata, args, queryWarnings)
+    : '';
+  // A function with no parameters is emitted without parentheses today
+  // (`As('1')/N.B`). Once query options follow, the parentheses are added so
+  // the result is the unambiguous `As('1')/N.B()?$select=...` of the OData V4
+  // URL conventions — and so the terminal form stays byte-for-byte unchanged.
+  const segment = `${path}${inline}${queryOptions && !inline ? '()' : ''}`;
+  const fullPath = `${segment}${queryOptions}`;
+
+  const missingWarnings = missingParameterWarnings(
+    item,
+    invokableParameters(item)
+      .filter((p) => !providedByLowerName.has(p.name.toLowerCase()))
+      .map((p) => p.name),
+  );
 
   const lines: string[] = [];
   lines.push(`${method} ${root}/${fullPath}`);
@@ -1197,6 +1344,9 @@ function buildInvocationUnsafe(
     lines.push('');
     lines.push('Example:');
     lines.push(`curl '${shellEscape(`${root}/${fullPath}`)}'`);
+    if (queryWarnings.length > 0 || missingWarnings.length > 0) {
+      lines.push('', ...queryWarnings, ...missingWarnings);
+    }
     return textResult(lines.join('\n'));
   }
 
@@ -1216,8 +1366,27 @@ function buildInvocationUnsafe(
       `  -d '${shellEscape(JSON.stringify(body))}'`,
     ].join(' \\\n'),
   );
+  if (missingWarnings.length > 0) {
+    lines.push('', ...missingWarnings);
+  }
 
   return textResult(lines.join('\n'));
+}
+
+/**
+ * A declared non-binding parameter the caller left out. The parser does not
+ * record `DefaultValue`, so every one of them is treated as required; the
+ * invocation is still emitted, with a note, because the URL remains useful
+ * even when a parameter value has to be filled in later.
+ */
+function missingParameterWarnings(item: ODataAction | ODataFunction, missing: string[]): string[] {
+  if (missing.length === 0) return [];
+  const names = missing.map((name) => `"${name}"`).join(', ');
+  return [
+    `Note: ${missing.length === 1 ? 'parameter' : 'parameters'} ${names} ${
+      missing.length === 1 ? 'was' : 'were'
+    } not supplied for ${item.qualifiedName ?? item.name}; the request may be rejected.`,
+  ];
 }
 
 function formatInlineParams(
@@ -1235,6 +1404,123 @@ function formatInlineParams(
     return `${encodeIdentifierForUrl(name)}=${encodeLiteralForUrl(literal)}`;
   });
   return `(${rendered.join(',')})`;
+}
+
+/**
+ * The entity type a function returns, when it returns one; `undefined` for
+ * primitive, collection-of-primitive or unresolved returns, which cannot carry
+ * `$select`/`$expand` and may not carry paging at all.
+ */
+function functionReturnEntityName(
+  item: ODataAction | ODataFunction,
+  metadata: ODataMetadata,
+): string | undefined {
+  const returnType = unwrapCollection(item.returnType);
+  if (!returnType || !returnType.type || returnType.type.startsWith('Edm.')) return undefined;
+  const entity = findTypeInScope(metadata.entities, returnType.type, item.namespace);
+  return entity ? (entity.qualifiedName ?? entity.name) : undefined;
+}
+
+/**
+ * Render the system query options a caller attached to a function invocation,
+ * or `''` when none were requested — so the terminal form is unchanged.
+ *
+ * A function segment is a resource path, and OData V4 allows
+ * `As('1')/N.B()?$select=...&$expand=...`; the options are typed against the
+ * function's return type through the same `buildQueryOptions` the query
+ * builder uses.
+ *
+ * When the function does not return an entity, `$select`/`$expand` cannot
+ * apply at all, and a scalar result has no collection to filter, sort or page:
+ * those options are dropped with a warning rather than rendered into a URL the
+ * service would reject.
+ */
+function buildFunctionQueryOptions(
+  item: ODataAction | ODataFunction,
+  metadata: ODataMetadata,
+  args: Record<string, unknown>,
+  warnings: string[],
+): string {
+  let select = args['select'] as string[] | undefined;
+  let expand = args['expand'] as ExpandNode[] | undefined;
+  let filters = args['filters'] as FilterClause[] | undefined;
+  const filterLogic = args['filterLogic'] as 'and' | 'or' | undefined;
+  let orderBy = asString(args['orderBy']);
+  let top = asNumber(args['top']);
+  let skip = asNumber(args['skip']);
+  let count = typeof args['count'] === 'boolean' ? args['count'] : undefined;
+
+  const returnEntityName = functionReturnEntityName(item, metadata);
+  if (!returnEntityName) {
+    const returnsCollection = unwrapCollection(item.returnType)?.isCollection ?? false;
+    const omitted: string[] = [];
+    const drop = (name: string): void => {
+      omitted.push(name);
+    };
+    if ((select?.length ?? 0) > 0) {
+      drop('$select');
+      select = undefined;
+    }
+    if ((expand?.length ?? 0) > 0) {
+      drop('$expand');
+      expand = undefined;
+    }
+    // A collection of primitives is still a collection, so filtering, sorting
+    // and paging it remain legal; a scalar result has nothing to page.
+    if (!returnsCollection) {
+      if ((filters?.length ?? 0) > 0) {
+        drop('$filter');
+        filters = undefined;
+      }
+      if (orderBy !== undefined) {
+        drop('$orderby');
+        orderBy = undefined;
+      }
+      if (top !== undefined) {
+        drop('$top');
+        top = undefined;
+      }
+      if (skip !== undefined) {
+        drop('$skip');
+        skip = undefined;
+      }
+      if (count === true) {
+        drop('$count');
+        count = undefined;
+      }
+    }
+    if (omitted.length > 0) {
+      warnings.push(
+        `Note: ${item.qualifiedName ?? item.name} returns ${item.returnType ?? 'an unknown type'}, which is not an entity type; ${omitted.join(', ')} ${
+          omitted.length === 1 ? 'is' : 'are'
+        } not applicable and ${omitted.length === 1 ? 'was' : 'were'} omitted.`,
+      );
+    }
+  }
+
+  const hasOptions =
+    (select?.length ?? 0) > 0 ||
+    (expand?.length ?? 0) > 0 ||
+    (filters?.length ?? 0) > 0 ||
+    orderBy !== undefined ||
+    top !== undefined ||
+    skip !== undefined ||
+    count === true;
+  if (!hasOptions) return '';
+
+  return buildQueryOptions({
+    rootEntityName: returnEntityName,
+    metadata,
+    select,
+    expand,
+    filters,
+    filterLogic,
+    orderBy,
+    top,
+    skip,
+    count,
+    onWarning: (message) => warnings.push(message),
+  });
 }
 
 function buildBody(

@@ -89,13 +89,13 @@ export interface TraversalStep {
 
 export type TraversalPath = TraversalStep[];
 
-interface UnwrappedType {
+export interface UnwrappedType {
   type: string;
   isCollection: boolean;
 }
 
 /** Split `Collection(X)` into its element type and a flag; leave other types alone. */
-function unwrapCollection(type: string | undefined): UnwrappedType | undefined {
+export function unwrapCollection(type: string | undefined): UnwrappedType | undefined {
   if (!type) return undefined;
   const match = /^Collection\((.*)\)$/.exec(type);
   return match ? { type: match[1], isCollection: true } : { type, isCollection: false };
