@@ -119,7 +119,9 @@ export function getResolvedEntity(
  * type was parsed first.
  *
  * The value is always resolvable through `findEntity`, which prefers an exact
- * qualified match over a short one.
+ * qualified match over a short one. Ambiguity is judged the same way that
+ * resolver matches — case-insensitively — so a case-only collision is qualified
+ * too rather than resolving to the first of the pair.
  */
 export function getTargetEntityName(
   navProperty: string,
@@ -275,7 +277,12 @@ function setForType(entity: ODataEntity, metadata: ODataMetadata): ODataEntitySe
  * hide the colliding type, and the short value then resolves to it.
  */
 export function getEntitySelectionValue(entity: ODataEntity, entities: ODataEntity[]): string {
-  const ambiguous = entities.some((other) => other !== entity && other.name === entity.name);
+  // Case-insensitively, because `findEntity` matches that way: two types
+  // differing only by case would both emit the same short value, and every
+  // consumer would resolve it to whichever was parsed first.
+  const ambiguous = entities.some(
+    (other) => other !== entity && other.name.toLowerCase() === entity.name.toLowerCase(),
+  );
   return ambiguous ? (entity.qualifiedName ?? entity.name) : entity.name;
 }
 

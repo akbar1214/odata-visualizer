@@ -162,9 +162,7 @@ describe('query graph identity', () => {
 
     const paths = findPaths('A.Widget', 'B.Part', model);
 
-    expect(paths).toEqual([
-      [{ fromEntity: 'A.Widget', navProperty: 'Docs', toEntity: 'B.Part' }],
-    ]);
+    expect(paths).toEqual([[{ fromEntity: 'A.Widget', navProperty: 'Docs', toEntity: 'B.Part' }]]);
   });
 
   it('reports reachable targets by the identity the dropdown offers', async () => {
@@ -178,5 +176,46 @@ describe('query graph identity', () => {
     expect(values).toContain('B.Part');
     // The bare short name is not offered: it cannot say which `Part`.
     expect(values).not.toContain('Part');
+  });
+});
+
+/**
+ * `findEntity` matches case-insensitively and takes the first match, so a
+ * short identity is not unique when two types differ only by case. The
+ * ambiguity check compared names case-sensitively, so `part` was treated as
+ * unique and the canvas resolved it to whichever `Part`/`part` was parsed
+ * first — the same silent wrong-type class this PR exists to close.
+ */
+describe('a case-only collision is still an ambiguity', () => {
+  const csdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="A" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Docs" Type="Collection(B.part)" />
+      </EntityType>
+      <EntityType Name="Part">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="B" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="part">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('qualifies the identity rather than returning a short name that resolves elsewhere', async () => {
+    const metadata = await parseCSDL(csdl);
+    const widget = findEntity('A.Widget', metadata.entities)!;
+
+    // `part` alone resolves to A.Part, which is a different type.
+    expect(findEntity('part', metadata.entities)!.qualifiedName).toBe('A.Part');
+    expect(getTargetEntityName('Docs', widget, metadata)).toBe('B.part');
   });
 });
