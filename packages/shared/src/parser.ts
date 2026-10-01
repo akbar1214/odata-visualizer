@@ -105,6 +105,18 @@ interface EdmxDocument {
   dataServicesVersion?: string;
 }
 
+/**
+ * References declared directly on an element, under both valid spellings.
+ *
+ * The previous `owner['Reference'] || owner['edmx:Reference']` returned only the
+ * first, so an element carrying both lost a group. XML allows both in one
+ * parent, and `isArray` does not list `Reference`, so single values arrive as
+ * objects and repeats as arrays — `ensureArray` normalises both.
+ */
+function referenceElements(owner: XmlElement): XmlElement[] {
+  return [...ensureArray(owner['Reference']), ...ensureArray(owner['edmx:Reference'])];
+}
+
 function parseEdmxDocument(xmlContent: string): EdmxDocument {
   let parsed: XmlElement;
   try {
@@ -135,9 +147,9 @@ function parseEdmxDocument(xmlContent: string): EdmxDocument {
   // inside `DataServices` (and on a `Schema`), which is where this used to look
   // only — so a reference in its standard position was ignored entirely.
   const references = [
-    ...ensureArray(edmx['Reference'] || edmx['edmx:Reference'] || []),
-    ...ensureArray(dataServices['Reference'] || dataServices['edmx:Reference'] || []),
-    ...schemas.flatMap((s) => ensureArray(s['Reference'] || s['edmx:Reference'] || [])),
+    ...referenceElements(edmx),
+    ...referenceElements(dataServices),
+    ...schemas.flatMap((s) => referenceElements(s)),
   ];
 
   return {
@@ -205,6 +217,12 @@ function expandAliasesInMetadata(
       nav.targetType = nav.targetTypeQualified
         ? shortName(nav.targetTypeQualified)
         : expand(nav.targetType);
+      // V2 stores the association name here, and a namespaced generator writes
+      // `Self.R1`. Leaving it alias-qualified made the navigation property
+      // disagree with every other type reference in the same document.
+      // A V4 value is `'Collection'` or `''`, neither of which has a dot, so
+      // expansion is a no-op for them.
+      if (nav.relationship) nav.relationship = expand(nav.relationship) ?? nav.relationship;
     }
   }
 
