@@ -130,3 +130,64 @@ describe('alias expansion covers the endpoint identity', () => {
     expect(rel.to.entityQualified).toBe('N.Widget');
   });
 });
+
+/**
+ * Deduplication compares stored endpoint identities and runs *during* parsing,
+ * before the alias-expansion pass. Endpoints that differed only in spelling
+ * therefore looked like different relationships.
+ */
+describe('dedup compares expanded endpoints', () => {
+  it('keeps one relationship when the spellings differ only by alias', async () => {
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" Alias="self" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Docs" Type="Collection(self.Gadget)" />
+      </EntityType>
+      <EntityType Name="Gadget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Parent" Type="N.Widget" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+    // `self.Gadget` is `N.Gadget`, so this is the mirror of `Docs` and the two
+    // are one relationship.
+    expect(model.relationships).toHaveLength(1);
+  });
+
+  it('keeps two relationships that only looked like reverses under short names', async () => {
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="A" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Docs" Type="Collection(B.Part)" />
+      </EntityType>
+      <EntityType Name="Part">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Parent" Type="A.Widget" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="B" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Part">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+    // `Widget -> Part` and `Part -> Widget` are reverses only if both `Part`s
+    // are the same type. They are not: one is `A.Part`, the other `B.Part`.
+    expect(model.relationships).toHaveLength(2);
+  });
+});

@@ -712,10 +712,14 @@ function relationshipFromNavigationProperty(
       multiplicity: isCollection ? '*' : '1',
     },
     to: {
-      entity: nav.targetTypeQualified ?? nav.targetType,
+      // Expanded *before* deduplication, which runs during parsing and compares
+      // stored identities. Leaving the alias unexpanded made two mirrored
+      // relationships over the same pair of types look distinct, because one
+      // said `self.Gadget` and the other `N.Gadget`.
+      entity: expand(nav.targetTypeQualified ?? nav.targetType) ?? nav.targetType,
       // Kept for consumers written against the old shape; the parser no longer
       // discards the qualified target.
-      entityQualified: nav.targetTypeQualified,
+      entityQualified: nav.targetTypeQualified ? expand(nav.targetTypeQualified) : undefined,
       role: nav.toRole || nav.targetType,
       multiplicity: isCollection ? '1' : '*',
     },
