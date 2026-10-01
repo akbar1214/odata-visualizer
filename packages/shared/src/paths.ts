@@ -117,7 +117,20 @@ function resolveEntityType(
 ): ODataEntity | undefined {
   if (type.startsWith('Edm.')) return undefined;
   const entity = findTypeInScope(entities, type, namespace);
-  return entity && entity.kind !== 'complex' ? entity : undefined;
+  if (!entity || entity.kind === 'complex') return undefined;
+  // An unqualified reference means the enclosing namespace. `findTypeInScope`'s
+  // last tier ignores the scope hint, so without this check a reference that
+  // cannot resolve in its own namespace binds to a *stranger's* type of the same
+  // name — the "unresolved types never create edges" case, producing an edge
+  // between two types the function never mentioned.
+  if (
+    !type.includes('.') &&
+    namespace !== undefined &&
+    entity.namespace?.toLowerCase() !== namespace.toLowerCase()
+  ) {
+    return undefined;
+  }
+  return entity;
 }
 
 /**

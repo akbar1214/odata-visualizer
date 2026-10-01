@@ -535,3 +535,76 @@ describe('alias-qualified function types', () => {
     expect(getTraversalEdges(metadata).filter(isFunctionEdge)).toHaveLength(0);
   });
 });
+
+/**
+ * An unqualified type reference means the enclosing namespace. `findTypeInScope`
+ * falls back to any short-name match when the scope hint finds nothing, so a
+ * reference that cannot resolve in its own namespace used to bind to a
+ * *stranger's* type of the same name — producing an edge between two types the
+ * function never mentioned, and breaking the "unresolved types never create
+ * edges" criterion.
+ */
+describe('an unqualified reference stays in its own namespace', () => {
+  it('does not bind to another namespace type of the same name', async () => {
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Other" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="A">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityType Name="C">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <Function Name="B" IsBound="true">
+        <Parameter Name="it" Type="A" />
+        <ReturnType Type="C" />
+      </Function>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+    // `A` and `C` are unqualified and `N` declares neither, so this function
+    // names nothing resolvable and must yield no edge at all.
+    expect(getTraversalEdges(model).filter(isFunctionEdge)).toHaveLength(0);
+  });
+});
+
+/**
+ * A cycle *away from the source*. The DFS seeds `visited` with the source, so an
+ * `A → A` self-loop is cut by that seed alone — which is why the mutation table's
+ * "remove the cycle guard" row did not reproduce. This fixture puts the loop on
+ * an intermediate node, where the guard is the only thing that stops it.
+ */
+describe('a cycle at a non-source node', () => {
+  it('yields exactly one path', async () => {
+    const model = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="A">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="ToB" Type="N.B" />
+      </EntityType>
+      <EntityType Name="B">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="LoopB" Type="N.B" />
+        <NavigationProperty Name="ToC" Type="N.C" />
+      </EntityType>
+      <EntityType Name="C">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+
+    expect(findPaths('A', 'C', model)).toHaveLength(1);
+  });
+});
