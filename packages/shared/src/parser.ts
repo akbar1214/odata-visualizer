@@ -233,14 +233,16 @@ function expandAliasesInMetadata(
     }
   }
 
-  // Relationship endpoints carry their own copy of the type reference. Leaving
-  // them unexpanded made a relationship disagree with the navigation property
-  // it was derived from, and `layout.ts` prefers `entityQualified`, so the
-  // diagram could not match the edge to a node.
+  // Relationship endpoints carry their own copy of the type reference. Both
+  // the identity (`entity`, now qualified when the document provides one) and
+  // the compatibility field are expanded: leaving the identity aliased made a
+  // relationship disagree with the navigation property it came from.
   for (const relationship of metadata.relationships) {
     expand = expanderFor(relationship.namespace);
     relationship.from.entityQualified = expand(relationship.from.entityQualified);
     relationship.to.entityQualified = expand(relationship.to.entityQualified);
+    relationship.from.entity = expand(relationship.from.entity) ?? relationship.from.entity;
+    relationship.to.entity = expand(relationship.to.entity) ?? relationship.to.entity;
   }
 
   for (const container of metadata.entityContainers) {
@@ -663,6 +665,10 @@ export async function parseCSDL(
  * duplicate, or the two halves of one bidirectional navigation property
  * (`Order.Customer` and `Customer.Orders`). Distinct same-direction
  * navigation properties between the same pair of types stay separate.
+ *
+ * Endpoints are compared by their stored identity, which is the qualified
+ * type. The short name made two same-named types in different namespaces look
+ * like the same relationship, so the second one was dropped.
  */
 function isSameDerivedRelationship(a: ODataRelationship, b: ODataRelationship): boolean {
   const sameDirection =
@@ -692,21 +698,35 @@ function relationshipFromNavigationProperty(
     nav.relationship && nav.relationship !== 'Collection'
       ? expand(nav.relationship)
       : `${entity.name}_${nav.name}`;
+  const targetReference = expand(nav.targetTypeQualified ?? nav.targetType) ?? nav.targetType;
+  const targetIdentity =
+    targetReference.includes('.') || targetReference.startsWith('Edm.')
+      ? targetReference
+      : `${namespace}.${targetReference}`;
   return {
     name: associationName,
     namespace,
     from: {
-      entity: entity.name,
+      // The endpoint identity is the qualified name, not its short form: two
+      // namespaces can declare the same type name, and a short endpoint made
+      // the two relationships indistinguishable (deduplication merged them and
+      // consumers resolved them to whichever type came first).
+      entity: entity.qualifiedName ?? entity.name,
       entityQualified: entity.qualifiedName,
       role: nav.fromRole || entity.name,
       multiplicity: isCollection ? '*' : '1',
     },
     to: {
-      entity: nav.targetType,
-      // The parser keeps the qualified target (`nav.targetTypeQualified`) but
-      // this used to drop it, so consumers could only guess between types that
-      // share a short name across namespaces.
-      entityQualified: nav.targetTypeQualified,
+      // Expanded *and* qualified before deduplication, which runs during parsing
+      // and compares stored identities. An alias left unexpanded (`self.Gadget`)
+      // or an unqualified reference left short (`Gadget`) did not match the same
+      // type written `N.Gadget`, so the two mirrored halves of one association
+      // both survived. An unqualified reference means the enclosing namespace,
+      // so the parser can qualify it too.
+      entity: targetIdentity,
+      // Kept for consumers written against the old shape; the parser no longer
+      // discards the qualified target.
+      entityQualified: nav.targetTypeQualified ? expand(nav.targetTypeQualified) : targetIdentity,
       role: nav.toRole || nav.targetType,
       multiplicity: isCollection ? '1' : '*',
     },
@@ -1169,12 +1189,12 @@ function parseAssociationEnd(end: XmlElement): ODataAssociationEnd | null {
   const type = str(end['@_Type']) || '';
   const role = str(end['@_Role']) || '';
   const multiplicity = String(end['@_Multiplicity'] || '1');
-  const entity = shortName(type);
 
   return {
-    entity,
-    // `shortName` throws the namespace away; keep it so the diagram can tell
-    // two same-named types apart.
+    // The reference as written: qualified when the document qualifies it
+    // (`A.Part`), the short name otherwise. `shortName` used to throw the
+    // namespace away here, leaving consumers to guess between same-named types.
+    entity: type,
     entityQualified: type && type.includes('.') ? type : undefined,
     role,
     multiplicity,

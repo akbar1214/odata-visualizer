@@ -50,8 +50,19 @@ export interface ODataEntity {
 
 /** Association end */
 export interface ODataAssociationEnd {
+  /**
+   * Endpoint type reference, namespace-qualified whenever the document
+   * provides one. A relationship between `A.Part` and `B.Doc` stores exactly
+   * those strings; only a document that writes an unqualified reference
+   * leaves the short name here.
+   */
   entity: string;
-  /** Fully qualified endpoint type when the document provides one. */
+  /**
+   * The qualified reference, when the document provided one. Now equal to
+   * `entity` for every reference the parser could qualify; kept for consumers
+   * written against the old shape and for hand-built metadata that still
+   * stores a short `entity` alongside it.
+   */
   entityQualified?: string;
   role: string;
   multiplicity: string;
