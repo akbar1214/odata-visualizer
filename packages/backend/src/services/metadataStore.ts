@@ -30,6 +30,17 @@ export interface ModelStore {
   list(): ModelSummary[];
   /** Summaries for one session only; without an id, the default bucket. */
   listFor(id?: string): ModelSummary[];
+  /**
+   * Pin the store to a single model: every lookup returns it and mutations are
+   * refused. A second call replaces the pinned model.
+   */
+  lockTo(metadata: ODataMetadata, info?: Partial<ModelInfo>): StoredModel;
+  /**
+   * Remove the pin, discarding the pinned model. The seam tests and embeddings
+   * need to return to normal session behavior afterwards.
+   */
+  unlock(): void;
+  isLocked(): boolean;
   /** MCP accessors backed by the current model. */
   accessors: MetadataAccessors;
 }
@@ -67,9 +78,25 @@ export function createModelStore(options: ModelStoreOptions = {}): ModelStore {
   const maxModels = options.maxModels ?? 20;
   const models = new Map<string, StoredModel>();
   let currentId: string | null = null;
+  // Kept out of `models` so it is never evicted by maxModels.
+  let locked: StoredModel | null = null;
 
   const store: ModelStore = {
+    lockTo(metadata, info) {
+      locked = {
+        metadata,
+        info: { ...info, loadedAt: info?.loadedAt ?? new Date().toISOString() },
+      };
+      return locked;
+    },
+    unlock() {
+      locked = null;
+    },
+    isLocked() {
+      return locked !== null;
+    },
     save(id, metadata, info) {
+      if (locked) throw new Error('Metadata is pinned and cannot be replaced');
       const key = sanitizeModelId(id);
       if (!models.has(key) && models.size >= maxModels) {
         // Evict the least recently saved entry to stay bounded.
@@ -89,6 +116,7 @@ export function createModelStore(options: ModelStoreOptions = {}): ModelStore {
       return model;
     },
     get(id) {
+      if (locked) return locked;
       if (id) {
         // An explicit session id never falls back to another session's model.
         // Note this is a convenience boundary, not an authorization control:
@@ -100,9 +128,11 @@ export function createModelStore(options: ModelStoreOptions = {}): ModelStore {
       return currentId ? (models.get(currentId) ?? null) : null;
     },
     current() {
+      if (locked) return locked;
       return currentId ? (models.get(currentId) ?? null) : null;
     },
     clear(id) {
+      if (locked) throw new Error('Metadata is pinned and cannot be cleared');
       if (id) {
         const key = sanitizeModelId(id);
         models.delete(key);
@@ -120,13 +150,17 @@ export function createModelStore(options: ModelStoreOptions = {}): ModelStore {
       }
     },
     clearAll() {
+      if (locked) throw new Error('Metadata is pinned and cannot be cleared');
       models.clear();
       currentId = null;
     },
     list() {
+      if (locked) return [{ id: DEFAULT_MODEL_ID, ...locked.info }];
       return [...models.entries()].map(([id, model]) => ({ id, ...model.info }));
     },
     listFor(id) {
+      // While locked there is no real session, so every id maps to the pin.
+      if (locked) return [{ id: DEFAULT_MODEL_ID, ...locked.info }];
       const key = sanitizeModelId(id ?? DEFAULT_MODEL_ID);
       const model = models.get(key);
       return model ? [{ id: key, ...model.info }] : [];
