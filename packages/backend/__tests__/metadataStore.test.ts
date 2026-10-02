@@ -150,9 +150,9 @@ describe('createModelStore', () => {
   });
 
   it('refuses to replace or clear the pinned model', async () => {
-    store.save('default', await metadata(), { sourceName: 'default.xml' });
-    store.save('a', await metadata(), { sourceName: 'a.xml' });
-    store.save('b', await metadata(), { sourceName: 'b.xml' });
+    const defaultModel = store.save('default', await metadata(), { sourceName: 'default.xml' });
+    const aModel = store.save('a', await metadata(), { sourceName: 'a.xml' });
+    const bModel = store.save('b', await metadata(), { sourceName: 'b.xml' });
     const before = store.current();
     const pinned = store.lockTo(await metadata(), { sourceName: 'pinned.xml' });
 
@@ -177,6 +177,12 @@ describe('createModelStore', () => {
     store.unlock();
     expect(store.isLocked()).toBe(false);
     expect(store.current()).toBe(before);
+    // Model identity, not just id/sourceName: a mutation that swapped a
+    // session's metadata while keeping its sourceName would pass the list
+    // check below but fail here.
+    expect(store.get('default')).toBe(defaultModel);
+    expect(store.get('a')).toBe(aModel);
+    expect(store.get('b')).toBe(bModel);
     expect(store.list().map((entry) => [entry.id, entry.sourceName])).toEqual([
       ['default', 'default.xml'],
       ['a', 'a.xml'],
