@@ -227,7 +227,7 @@ While pinned:
 
 - every session and every MCP client sees the same model; `GET /api/metadata/current` reports `"pinned": true`
 - `POST /api/parse/file`, `/api/parse/url`, `/api/parse/content` and `DELETE /api/metadata/current` return **403**. The guard runs before the route handlers, so a multipart upload is refused before multer buffers it; a JSON body is parsed by `express.json` first, so one above its 10 MB limit gets a 413 before the pinned check.
-- `/mcp` does not offer `load_metadata`, even when `MCP_ALLOW_LOAD=1`
+- `/mcp` does not offer `load_metadata` to sessions started while pinned — the shipped startup pins before mounting, so every session — even when `MCP_ALLOW_LOAD=1`
 - `METADATA_URL_ALLOWLIST` / `METADATA_URL_BLOCK_PRIVATE` no longer matter: the `/api/parse/url` SSRF surface is gone, which makes pinned mode the safer way to expose the server beyond localhost. Still set `API_TOKEN` (and `MCP_TOKEN` / `MCP_ALLOWED_HOSTS`) for anything that is not loopback.
 
 ## MCP Server
