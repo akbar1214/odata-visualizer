@@ -590,9 +590,6 @@ const KEY_QUOTED_INNER = /^(?:[^'%/\\?#\s\p{Cc}\[\]{}]|%(?:[01345689A-Fa-f][0-9A
 
 const KEY_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
-/** `[ SIGN ] 1*DIGIT`: a bare integer token, i.e. int64Literal in a URL. */
-const KEY_BARE_INTEGER = /^[+-]?\d+$/;
-
 /**
  * decimalLiteral = [ SIGN ] 1*DIGIT [ "." 1*DIGIT ] [ "e" [ SIGN ] 1*DIGIT ],
  * shared with doubleLiteral/singleLiteral. `E` is accepted next to the ABNF's
@@ -655,19 +652,13 @@ function isValidKeyUnquotedValue(value: string): boolean {
   if (value === 'NaN' || value === 'INF' || value === '-INF') return true;
   if (KEY_GUID.test(value)) return true;
 
-  if (KEY_BARE_INTEGER.test(value) && value.replace(/^[+-]/, '').length <= 19) {
-    // A token of at most 19 digits has the int64Literal shape, so it is held
-    // to the ABNF rule's semantic restriction, the int64 range. A longer
-    // token is not an int64Literal at all and falls through instead.
-    const range = INTEGER_RANGES['Edm.Int64'];
-    const parsed = BigInt(value);
-    if (parsed < range.min || parsed > range.max) return false;
-  }
-
-  // decimalLiteral = [ SIGN ] 1*DIGIT has no digit cap and no range, so every
-  // bare integer that is not rejected as an out-of-range int64Literal — and
-  // that includes 27-digit spellings of small values like
-  // `000000000000000000000000001` — is accepted here.
+  // decimalLiteral = [ SIGN ] 1*DIGIT [ "." 1*DIGIT ] [ "e" ... ] has no digit
+  // cap and no range, so every bare integer is accepted here: a token of at
+  // most 19 digits has the int64Literal shape, but when its value is outside
+  // the int64 range it is still a legal decimalLiteral — the digit cap does not
+  // create a rejection the grammar does not. That covers 19-digit values past
+  // the maximum and 27-digit spellings of small values such as
+  // `000000000000000000000000001` alike.
   if (KEY_DECIMAL.test(value)) return true;
 
   return isValidKeyTemporal(value);

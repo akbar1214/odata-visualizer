@@ -51,11 +51,13 @@ describe('key predicates: null is not a keyPropertyValue', () => {
 /**
  * A bare integer token is either int64Literal = [ SIGN ] 1*19DIGIT, with the
  * int64 range as a semantic restriction, or decimalLiteral = [ SIGN ] 1*DIGIT,
- * which has no digit cap and no range. A token of at most 19 digits is treated
- * as an int64Literal and must be in range; a longer token is not an
- * int64Literal at all, so it falls through to the decimalLiteral alternative,
- * which accepts it. The old check applied the 19-digit cap *before* the
- * decimal test and so rejected ABNF-valid spellings such as
+ * which has no digit cap and no range. Every bare integer matches both shapes
+ * at 19 digits or fewer, so the int64 range never decides a rejection: a token
+ * that does not fit int64Literal — whether because it has 20 digits or because
+ * it is a 19-digit value past the int64 maximum — falls through to the
+ * decimalLiteral alternative, which accepts it. The old check applied the
+ * int64 range before the decimal test and so rejected ABNF-valid spellings
+ * such as `Parts(9223372036854775808)` and
  * `Parts(000000000000000000000000001)`.
  */
 describe('key predicates: bare integers are int64Literal or decimalLiteral', () => {
@@ -76,9 +78,15 @@ describe('key predicates: bare integers are int64Literal or decimalLiteral', () 
     );
   });
 
-  it('rejects a 19-digit token outside the int64 range', () => {
-    expect(() => buildQueryUrl({ entitySet: 'Parts(9223372036854775808)' })).toThrow(/entitySet/);
-    expect(() => buildQueryUrl({ entitySet: 'Parts(-9223372036854775809)' })).toThrow(/entitySet/);
+  it('accepts a 19-digit token outside the int64 range as a decimalLiteral', () => {
+    // Past the int64 maximum but still a legal, uncapped decimalLiteral; a
+    // 20-digit token in the same range was already accepted.
+    expect(buildQueryUrl({ entitySet: 'Parts(9223372036854775808)' })).toBe(
+      '/Parts(9223372036854775808)',
+    );
+    expect(buildQueryUrl({ entitySet: 'Parts(-9223372036854775809)' })).toBe(
+      '/Parts(-9223372036854775809)',
+    );
   });
 
   it('accepts both ends of the int64 range', () => {
