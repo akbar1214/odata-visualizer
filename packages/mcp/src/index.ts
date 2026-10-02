@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { createMcpServer } from './server.js';
+import { createMcpServer, ieee754CompatibleFromEnv } from './server.js';
 import { createMetadataStore } from './store.js';
 import { loadMetadataFromSource } from './metadata-loader.js';
 
@@ -26,9 +26,9 @@ async function main() {
 
   const server = createMcpServer(store, {
     allowLoadMetadata: true,
-    // The stdio surface has no CLI flags; like the HTTP surface, the escape
-    // hatch from IEEE754 string encoding is MCP_IEEE754_COMPATIBLE=0.
-    ieee754Compatible: process.env['MCP_IEEE754_COMPATIBLE'] !== '0',
+    // The stdio surface has no CLI flags; the shared env convention is the
+    // escape hatch from IEEE754 string encoding.
+    ieee754Compatible: ieee754CompatibleFromEnv(),
   });
   const transport = new StdioServerTransport();
   await server.connect(transport);

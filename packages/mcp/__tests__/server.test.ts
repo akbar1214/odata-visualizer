@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { parseCSDL } from '@odata-visualizer/shared';
-import { createMcpServer, type McpServerOptions } from '../src/server.js';
+import { createMcpServer, ieee754CompatibleFromEnv, type McpServerOptions } from '../src/server.js';
 import { createMetadataStore, type MetadataAccessors } from '../src/store.js';
 
 const windchillXml = readFileSync(
@@ -150,5 +150,33 @@ describe('createMcpServer', () => {
     expect(result.isError).toBe(true);
     expect(resultText(result)).toContain('Invalid Edm.Int64');
     await client.close();
+  });
+});
+
+/**
+ * The HTTP and stdio surfaces share this one read so `MCP_IEEE754_COMPATIBLE`
+ * cannot be interpreted two ways. `MCP_ALLOW_LOAD=1` is an explicit opt-in;
+ * here the encoding is on by default and the listed false-y spellings turn it
+ * off, case-insensitively.
+ */
+describe('ieee754CompatibleFromEnv', () => {
+  it('treats the false-y spellings as disabled, case-insensitively', () => {
+    for (const value of ['0', 'false', 'FALSE', 'False', 'no', 'No', 'off', 'OFF']) {
+      expect(
+        ieee754CompatibleFromEnv({ MCP_IEEE754_COMPATIBLE: value }),
+        `MCP_IEEE754_COMPATIBLE=${value} must disable the encoding`,
+      ).toBe(false);
+    }
+  });
+
+  it('enables the encoding for an unset or any other value', () => {
+    // Anything else — including an empty string, `1`/`true`/`yes`/`on`, and
+    // near-miss spellings like `00` or ` 0 ` — leaves the default on.
+    for (const value of [undefined, '', '1', 'true', 'TRUE', 'yes', 'on', '00', ' 0 ']) {
+      expect(
+        ieee754CompatibleFromEnv(value === undefined ? {} : { MCP_IEEE754_COMPATIBLE: value }),
+        `MCP_IEEE754_COMPATIBLE=${JSON.stringify(value)} must enable the encoding`,
+      ).toBe(true);
+    }
   });
 });

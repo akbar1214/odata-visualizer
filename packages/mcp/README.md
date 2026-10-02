@@ -111,6 +111,7 @@ Configuration:
 | `PORT` | `3001` | Backend/MCP port |
 | `MCP_TOKEN` | unset | When set, `/mcp` requires `Authorization: Bearer <token>` |
 | `MCP_ALLOW_LOAD` | unset | Set to `1` to enable `load_metadata` over HTTP (arbitrary file reads / SSRF) |
+| `MCP_IEEE754_COMPATIBLE` | `1` | `0`, `false`, `no`, or `off` (case-insensitive) keeps the plain `application/json` content type and refuses Int64/Decimal body values a JSON number cannot carry exactly |
 | `MCP_ALLOWED_HOSTS` | localhost only | Comma-separated Host header values accepted by `/mcp` (DNS-rebinding protection) |
 | `API_TOKEN` | unset | When set, the REST API (`/api/*`) requires `Authorization: Bearer <token>`; `/api/health` stays open |
 | `METADATA_URL_ALLOWLIST` | unset | Comma-separated hostnames `/api/parse/url` may fetch (`*.example.com` wildcards allowed) |
@@ -120,7 +121,7 @@ For safety, `load_metadata` is **not registered at all** on the HTTP endpoint: m
 
 ## stdio transport (standalone)
 
-You can still run the server over stdio, launched by your MCP client. To use the file uploaded in the UI, either call `load_metadata` with `type: "server"`, or set `ODATA_BACKEND_URL` to preload it at startup.
+You can still run the server over stdio, launched by your MCP client. To use the file uploaded in the UI, either call `load_metadata` with `type: "server"`, or set `ODATA_BACKEND_URL` to preload it at startup. `MCP_IEEE754_COMPATIBLE` set to `0`, `false`, `no`, or `off` (case-insensitive) turns off IEEE754 string encoding here as well.
 
 ```bash
 pnpm mcp:build
