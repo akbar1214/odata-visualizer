@@ -96,6 +96,24 @@ describe('QueryBuilder entity selector wiring', () => {
     expect(preview().textContent).not.toContain('Select an entity');
   });
 
+  it('keeps the encoding warning instead of blaming an entity set that is exposed', async () => {
+    // `parseCSDL` preserves a lone surrogate, so a crafted upload reaches the
+    // preview: `Orders` exists but no URL can carry its name. The empty state
+    // must not contradict the warning that already says why there is no query.
+    const metadata = await parseCSDL(csdl);
+    const orders = metadata.entityContainers[0].entitySets.find((set) => set.name === 'Orders')!;
+    orders.name = 'Or\uD800ders';
+
+    render(
+      <ReactFlowProvider>
+        <QueryBuilder metadata={metadata} />
+      </ReactFlowProvider>,
+    );
+
+    expect(preview().textContent).not.toContain('not exposed as an entity set');
+    expect(within(screen.getByRole('list')).getByText(/could not be encoded/)).toBeDefined();
+  });
+
   it('shows the built path again once an addressable entity is chosen', async () => {
     await renderBuilder();
 
