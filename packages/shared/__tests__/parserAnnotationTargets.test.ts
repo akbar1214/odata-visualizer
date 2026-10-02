@@ -228,11 +228,32 @@ describe('type casts through a type with an unresolved base', () => {
       <EntityType Name="OnlineOrder" BaseType="Ext.SalesOrder">
         <Property Name="WebChannel" Type="Edm.String" />
       </EntityType>
+      <EntityType Name="Bridge" BaseType="Ext.Bridge">
+        <Property Name="BridgeProp" Type="Edm.String" />
+      </EntityType>
+      <EntityType Name="Left" BaseType="Contoso.Bridge">
+        <Property Name="LeftProp" Type="Edm.String" />
+      </EntityType>
+      <EntityType Name="Right" BaseType="Contoso.Bridge">
+        <Property Name="RightProp" Type="Edm.String" />
+      </EntityType>
+      <EntityType Name="LooseLeft" BaseType="Ext.LooseLeft">
+        <Property Name="LooseLeftProp" Type="Edm.String" />
+      </EntityType>
+      <EntityType Name="LooseRight" BaseType="Ext.LooseRight">
+        <Property Name="LooseRightProp" Type="Edm.String" />
+      </EntityType>
       <Annotations Target="Contoso.SalesOrder/Contoso.OnlineOrder/WebChannel">
         <Annotation Term="Core.Description" String="downcast label" />
       </Annotations>
       <Annotations Target="Contoso.OnlineOrder/Contoso.SalesOrder/OrderNumber">
         <Annotation Term="T.Upcast" String="upcast label" />
+      </Annotations>
+      <Annotations Target="Contoso.Left/Contoso.Bridge/Contoso.Right/RightProp">
+        <Annotation Term="Core.Description" String="sibling through the bridge" />
+      </Annotations>
+      <Annotations Target="Contoso.LooseLeft/Contoso.LooseRight/LooseRightProp">
+        <Annotation Term="Core.Description" String="disjoint partial" />
       </Annotations>
       <edmx:Reference Uri="https://contoso.com/odata/$metadata">
         <edmx:Include Namespace="Ext" />
@@ -263,6 +284,31 @@ describe('type casts through a type with an unresolved base', () => {
     // `Contoso.OnlineOrder` declares the unresolved base and is the *current*
     // type of the path, so the tolerance has to apply to either side.
     expect(sales.annotations?.['T.Upcast']).toBe('upcast label');
+  });
+
+  it('rejects a sibling hop when both branches stop at the same unresolved base', async () => {
+    const model = await parseCSDL(csdl);
+    const right = model.entities
+      .find((e) => e.qualifiedName === 'Contoso.Right')!
+      .properties.find((p) => p.name === 'RightProp')!;
+
+    // `Contoso.Left` and `Contoso.Right` both pass through `Contoso.Bridge`,
+    // whose base `Ext.Bridge` never loaded. The truncation sits above the
+    // shared ancestor, so no acyclic base chain can make one of them reach the
+    // other; an unresolved BaseType must not admit the sibling dive.
+    expect(right.annotations).toBeUndefined();
+  });
+
+  it('keeps the tolerance when the two truncated chains are disjoint', async () => {
+    const model = await parseCSDL(csdl);
+    const right = model.entities
+      .find((e) => e.qualifiedName === 'Contoso.LooseRight')!
+      .properties.find((p) => p.name === 'LooseRightProp')!;
+
+    // Neither chain resolves past its own missing base, but they share no
+    // ancestor: the absent documents may still link them, so the cast stays
+    // resolvable.
+    expect(right.annotations?.['Core.Description']).toBe('disjoint partial');
   });
 });
 
@@ -338,6 +384,76 @@ describe('paths through a navigation property', () => {
       zWidget.properties.find((p) => p.name === 'ZProp')!.annotations?.['Core.Description'],
     ).toBe('from Z');
     expect(nWidget.properties.find((p) => p.name === 'ZProp')).toBeUndefined();
+  });
+});
+
+/**
+ * A property or navigation segment moves the path to a new type, and casts
+ * below that segment must be judged against the type it moved to. If the start
+ * type stays the reference point instead, a dive into a sibling of the hop
+ * target parses — the sibling still derives from the start type — while a
+ * legitimate narrowing below a hop is dropped because it does not relate to
+ * the start type at all.
+ */
+describe('casts below a property hop', () => {
+  const csdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Specials" Type="Collection(N.Special)" />
+      </EntityType>
+      <EntityType Name="Special" BaseType="N.Base">
+        <Property Name="SpecialProp" Type="Edm.String" />
+      </EntityType>
+      <EntityType Name="OtherSpecial" BaseType="N.Base">
+        <Property Name="OtherProp" Type="Edm.String" />
+      </EntityType>
+      <ComplexType Name="DetailBase">
+        <Property Name="Note" Type="Edm.String" />
+      </ComplexType>
+      <ComplexType Name="DetailDerived" BaseType="N.DetailBase">
+        <Property Name="Extra" Type="Edm.String" />
+      </ComplexType>
+      <EntityType Name="Holder">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Detail" Type="N.DetailBase" />
+      </EntityType>
+      <Annotations Target="N.Base/Specials/N.OtherSpecial/OtherProp">
+        <Annotation Term="Core.Description" String="sibling dive" />
+      </Annotations>
+      <Annotations Target="N.Holder/Detail/N.DetailDerived/Extra">
+        <Annotation Term="Core.Description" String="narrow after hop" />
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('rejects a cast into a sibling of the navigation target', async () => {
+    const model = await parseCSDL(csdl);
+    const other = model.entities
+      .find((e) => e.qualifiedName === 'N.OtherSpecial')!
+      .properties.find((p) => p.name === 'OtherProp')!;
+
+    // The hop to `N.Special` re-anchors the path, and `N.OtherSpecial` is its
+    // sibling rather than a type the path can still describe. Judged against
+    // the start type `N.Base` it would parse, since both derive from it.
+    expect(other.annotations).toBeUndefined();
+  });
+
+  it('resolves a narrowing cast below a complex-property hop', async () => {
+    const model = await parseCSDL(csdl);
+    const extra = model.entities
+      .find((e) => e.qualifiedName === 'N.DetailDerived')!
+      .properties.find((p) => p.name === 'Extra')!;
+
+    // `N.DetailDerived` derives from the complex type the `Detail` segment
+    // named, but not from the start type `N.Holder`; only the re-anchor lets
+    // the narrowing resolve.
+    expect(extra.annotations?.['Core.Description']).toBe('narrow after hop');
   });
 });
 

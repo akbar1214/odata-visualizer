@@ -1327,26 +1327,23 @@ function walkPropertyPath(
 }
 
 /**
- * Does the inheritance chain still end at a base type the model could not
- * resolve? A chain that stops there cannot rule a cast out — the missing
- * document may itself be the link that relates the two types — so a partial
- * model keeps resolving it.
+ * Is one type the same as, a base of, or a derived type of the other?
+ *
+ * A chain that runs out at a reference the model never loaded cannot prove two
+ * types unrelated (#73's partial models) — but only while the two resolved
+ * chains are disjoint. When they already share an ancestor, the truncation is
+ * above that ancestor, and no acyclic base chain can connect the branches
+ * through it (#53.2's sibling hop through a bridge).
  */
-function hasUnresolvedBaseType(entity: ODataEntity, entities: ODataEntity[]): boolean {
-  const chain = resolveInheritanceChain(entity, entities);
-  return chain[chain.length - 1].baseType !== undefined;
-}
-
-/** Is one type the same as, a base of, or a derived type of the other? */
 function isRelatedByInheritance(a: ODataEntity, b: ODataEntity, entities: ODataEntity[]): boolean {
-  // Only a completely resolved chain can prove two types unrelated; a chain
-  // that runs out at a reference the model never loaded cannot (#73's partial
-  // models).
-  if (hasUnresolvedBaseType(a, entities) || hasUnresolvedBaseType(b, entities)) return true;
-  return (
-    resolveInheritanceChain(a, entities).includes(b) ||
-    resolveInheritanceChain(b, entities).includes(a)
-  );
+  const chainA = resolveInheritanceChain(a, entities);
+  const chainB = resolveInheritanceChain(b, entities);
+  if (chainA.includes(b) || chainB.includes(a)) return true;
+
+  const truncatedA = chainA[chainA.length - 1].baseType !== undefined;
+  const truncatedB = chainB[chainB.length - 1].baseType !== undefined;
+  if (!truncatedA && !truncatedB) return false;
+  return !chainA.some((entity) => chainB.includes(entity));
 }
 
 /** Resolve a set's or singleton's declared type, then walk the path. */
