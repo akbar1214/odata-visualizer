@@ -117,7 +117,7 @@ pnpm container:run
 
 The application will be available at http://localhost:3001
 
-The image binds `HOST=0.0.0.0` so a published port reaches it — outside a container the server binds `127.0.0.1` by default. If you expose it beyond localhost, set `API_TOKEN`; see [Pinned metadata](#pinned-metadata-metadata_file) for a read-only deployment.
+The image binds `HOST=0.0.0.0` so a published port reaches it — outside a container the server binds `127.0.0.1` by default. If you expose it beyond localhost, set `API_TOKEN` and add the hostname to `MCP_ALLOWED_HOSTS` for `/mcp`; see [Pinned metadata](#pinned-metadata-metadata_file) for a read-only deployment.
 
 ## Project Structure
 

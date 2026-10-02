@@ -62,7 +62,7 @@ COPY --from=builder /app/packages/frontend/dist ./packages/frontend/dist
 ENV NODE_ENV=production
 ENV PORT=3001
 # Bind all interfaces: the loopback default is unreachable through a published
-# port, and the in-namespace healthcheck would hide that.
+# port, and an in-namespace healthcheck cannot tell the difference.
 ENV HOST=0.0.0.0
 
 # Expose port
