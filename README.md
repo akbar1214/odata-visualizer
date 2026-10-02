@@ -31,7 +31,7 @@ An interactive web application for visualizing OData metadata as entity-relation
 
 ### Prerequisites
 
-- Node.js 20+
+- Node.js 20+ (Node 24.14.0–24.18.x have a loader abort under test load — see [Testing](#testing))
 - pnpm
 
 ### Installation
@@ -72,6 +72,25 @@ pnpm test:watch
 # Run type checking
 pnpm typecheck
 ```
+
+> **Known Node.js abort under load.** On Node 24.14.0–24.18.x, heavy parallel
+> test runs can kill a test process with:
+>
+> ```
+> FATAL ERROR: v8::ToLocalChecked Empty MaybeLocal
+>   node::cjs_lexer::Parse
+> signal SIGABRT (exit code 134)
+> ```
+>
+> This is [nodejs/node#63323](https://github.com/nodejs/node/issues/63323) — a
+> regression in the native CommonJS lexer introduced in Node 24.14.0 and fixed
+> in Node 24.19.0
+> ([nodejs/node#63885](https://github.com/nodejs/node/pull/63885)) — and not a
+> test failure. `packages/shared` runs first under `pnpm -r test`, so the abort
+> usually surfaces there; because the process dies, pnpm stops and every
+> package after it silently never runs. If you see this signature, switch to a
+> fixed runtime (`.nvmrc` pins Node 24.21.0 — `nvm use`) and re-run the
+> pipeline; do not debug the package printed after `shared`.
 
 ### Building for Production
 
