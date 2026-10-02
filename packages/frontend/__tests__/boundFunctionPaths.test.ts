@@ -295,6 +295,33 @@ describe('the query builder emits the function segment', () => {
     expect(url).toBe("/Ms(Num=1,Code='1')/N.FromM()");
   });
 
+  it('encodes a hostile composite key name instead of letting it reshape the predicate', async () => {
+    const metadata = await model();
+    const m = metadata.entities.find((e) => e.name === 'M')!;
+    // A metadata key name is data, not syntax: raw, `)` closes the predicate
+    // and `=1 or (1` turns the placeholder tail into a second expression the
+    // server reads as structure. `encodeIdentifierForUrl` is the shared policy
+    // for names in path positions — the same one MCP uses for key names — and
+    // unlike `assertResourceSegment` it also refuses a `/` inside the name
+    // rather than accepting it as a path separator.
+    m.keys[1] = 'Evil)=1 or (1';
+    const url = buildODataQuery(
+      segmentQuery({
+        sourceEntity: 'M',
+        segment: {
+          name: 'FromM',
+          qualifiedName: 'N.FromM',
+          parameters: [],
+          bindingIsCollection: false,
+          returnsCollection: false,
+        },
+      }),
+      metadata,
+    );
+
+    expect(url).toBe("/Ms(Num=1,Evil%29%3D1%20or%20%281='1')/N.FromM()");
+  });
+
   it('says a keyless type cannot be addressed rather than asking for a key', async () => {
     const keyless = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
@@ -332,7 +359,7 @@ describe('the query builder emits the function segment', () => {
     ]);
   });
 
-  it('refuses an invalid qualified function name with a warning', async () => {
+  it('refuses an invalid qualified function name with one warning naming the failure', async () => {
     const metadata = await model();
     const warnings: string[] = [];
     const url = buildODataQuery(
@@ -349,8 +376,14 @@ describe('the query builder emits the function segment', () => {
       (message) => warnings.push(message),
     );
 
+    // The placeholder note used to be emitted before the assertion refused the
+    // name, so one problem produced two warnings — the first describing a
+    // preview that was never built. The refusal is the only thing to say, and
+    // since no path survives, it must not claim the preview shows one.
     expect(url).toBe('');
-    expect(warnings.at(-1)).toContain('Invalid entitySet');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('Invalid entitySet');
+    expect(warnings[0]).toContain('so the preview shows no query');
   });
 
   it('refuses a segment whose function needs parameter values', async () => {

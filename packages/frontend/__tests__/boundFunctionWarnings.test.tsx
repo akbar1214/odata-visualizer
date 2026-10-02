@@ -64,10 +64,57 @@ describe('PathFinder target list', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Find Paths' }));
 
-    expect(screen.getByText('1 path(s) found')).toBeDefined();
+    // Every found path is hidden, so calling the count "found" above the
+    // hidden note read as a contradiction; the note below is the only summary
+    // that matches the (absent) buttons.
+    expect(screen.getByText('No composable paths found')).toBeDefined();
     expect(screen.getByText(/1 path\(s\) hidden/)).toBeDefined();
     // Nothing on this path is composable, so no path button is offered.
     expect(screen.queryByText(/^Path 1/)).toBeNull();
+  });
+});
+
+describe('QueryBuilder empty state', () => {
+  afterEach(() => cleanup());
+
+  it('blames the refused function segment, not the exposed source set', async () => {
+    const metadata = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="A"><Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" /></EntityType>
+      <EntityType Name="C"><Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" /></EntityType>
+      <Function Name="B?evil=1" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <EntityContainer Name="C1">
+        <EntitySet Name="As" EntityType="N.A" />
+        <EntitySet Name="Cs" EntityType="N.C" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    render(
+      <ReactFlowProvider>
+        <QueryBuilder metadata={metadata} />
+      </ReactFlowProvider>,
+    );
+
+    // Entity selector, source and target: the target is the third combobox.
+    const targetInput = screen.getAllByRole('combobox')[2];
+    fireEvent.focus(targetInput);
+    fireEvent.mouseDown(within(screen.getByRole('listbox')).getByText('C'));
+    fireEvent.click(screen.getByRole('button', { name: 'Find Paths' }));
+    fireEvent.click(screen.getByText(/^Path 1/));
+
+    // `A` is exposed as `As`; the empty preview comes from the refused
+    // function segment, so the empty state must not call the source set
+    // unexposed — the warning list already names the real reason.
+    await waitFor(() => expect(within(warningList()).getByText(/Invalid entitySet/)).toBeDefined());
+    expect(preview().textContent).not.toContain('not exposed as an entity set');
   });
 });
 

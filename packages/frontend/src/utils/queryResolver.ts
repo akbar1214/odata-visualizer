@@ -410,8 +410,9 @@ function filterExpandItems(
  * today; it is wired for programmatic callers of this function.
  *
  * If the shared builder still throws (a state the pre-checks could not fix),
- * the catch reports why the preview fell back to the bare resource path rather
- * than dropping every option silently.
+ * the catch reports why the preview fell back to the bare resource path — or to
+ * no query at all when the resource path itself was refused — rather than
+ * dropping every option silently.
  */
 export function buildODataQuery(
   query: QueryState,
@@ -488,10 +489,14 @@ export function buildODataQuery(
   } catch (error) {
     // Invalid state while the user is editing: show the bare resource path
     // rather than an error state in the preview, but say so — silently losing
-    // every other option is worse than the note.
+    // every other option is worse than the note. When the resource path itself
+    // was refused (an invalid function segment), `path` is empty and "shows
+    // only the resource path" would claim a preview that is not there.
     const reason = error instanceof Error ? error.message : String(error);
     onWarning?.(
-      `The full query could not be built, so the preview shows only the resource path: ${reason}`,
+      path
+        ? `The full query could not be built, so the preview shows only the resource path: ${reason}`
+        : `The full query could not be built, so the preview shows no query: ${reason}`,
     );
     return path;
   }
@@ -543,7 +548,13 @@ function placeholderKeySegment(
     `The preview uses key placeholder ${PLACEHOLDER_KEY} on ${entityName}; replace it with a real key.`,
   );
   if (keys.length === 1) return `(${literalFor(keys[0])})`;
-  return `(${keys.map((key) => `${key}=${literalFor(key)}`).join(',')})`;
+  // A key name is a metadata-derived identifier in a path position, so it is
+  // encoded through the shared policy the way MCP emits key names. Raw, a name
+  // containing `)` or `=` would close the predicate and reshape it into
+  // structure; `assertResourceSegment` is the wrong guard here because it
+  // *accepts* a `/` as a path separator, which inside a key predicate addresses
+  // a different resource.
+  return `(${keys.map((key) => `${encodeIdentifierForUrl(key)}=${literalFor(key)}`).join(',')})`;
 }
 
 /**
@@ -572,8 +583,15 @@ function functionSegmentPath(
   const sourcePath = source ? resolveResourcePath(source, metadata) : undefined;
   if (!sourcePath) return '';
 
+  // Assert the path's structure before the placeholder note is emitted. The
+  // assertion used to run after it, so a refused function name produced two
+  // warnings: the placeholder note for a preview that was never built, then
+  // the refusal. The note must only describe a path that survives.
+  const assertedSourcePath = assertResourceSegment(sourcePath);
+  const assertedFunctionName = assertResourceSegment(segment.qualifiedName);
+
   const key = segment.bindingIsCollection ? '' : placeholderKeySegment(source, metadata, onWarning);
-  return `/${assertResourceSegment(sourcePath)}${key}/${assertResourceSegment(segment.qualifiedName)}()`;
+  return `/${assertedSourcePath}${key}/${assertedFunctionName}()`;
 }
 
 export function getDefaultQuery(entityName: string): QueryState {
