@@ -118,10 +118,10 @@ describe('get_relationships reports operation edges', () => {
 });
 
 /**
- * A function bound to a base type is invocable on derived instances (OData V4
- * §11.2.2), so `get_relationships` must surface the edge when asked about the
- * derived type. MCP reads the shared traversal graph, so this verifies the
- * fix is inherited rather than re-derived here.
+ * A function bound to a base type is invocable on derived instances (OData
+ * V4.01 Part 1 §11.5.1), so `get_relationships` must surface the edge when
+ * asked about the derived type. MCP reads the shared traversal graph, so this
+ * verifies the fix is inherited rather than re-derived here.
  */
 describe('inherited binding types', () => {
   it('reports a base-bound function when asked about the derived type', async () => {
