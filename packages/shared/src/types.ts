@@ -244,6 +244,8 @@ export interface ParseRequest {
   content?: string;
   url?: string;
   fileName?: string;
+  /** Optional request headers for the metadata server (same-origin references only). */
+  headers?: Record<string, string>;
 }
 
 /** Parse response to frontend */

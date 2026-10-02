@@ -175,13 +175,15 @@ odata-visualizer/
 ## API Endpoints
 
 ### POST /api/parse/file
-Upload an OData metadata XML file for parsing.
+Upload an OData metadata XML file for parsing. Also accepts an optional `headers` object (JSON-encoded in the multipart body) alongside `baseUrl` to authenticate same-origin `edmx:Reference` fetches; `headers` without `baseUrl` is a 400.
 
 ### POST /api/parse/url
-Fetch and parse OData metadata from a URL.
+Fetch and parse OData metadata from a URL. Also accepts an optional `headers` object: it is sent with the metadata request and to same-origin `edmx:Reference` fetches, and dropped on cross-origin redirects.
 
 ### POST /api/parse/content
-Parse raw XML content directly.
+Parse raw XML content directly. Also accepts an optional `headers` object alongside `baseUrl` to authenticate same-origin `edmx:Reference` fetches; `headers` without `baseUrl` is a 400.
+
+Header values are never written to error responses or logs.
 
 ### GET /api/health
 Health check endpoint (never requires a token).

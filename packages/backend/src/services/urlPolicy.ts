@@ -21,6 +21,13 @@ export interface UrlPolicyOptions {
 
 /** Thrown when a URL is refused by policy (caller error, reported as 400). */
 export class UrlPolicyError extends Error {
+  /**
+   * Lets the generic route error path report this as a caller error. Without
+   * it, a bad `baseUrl` on /api/parse/file and /api/parse/content surfaced as
+   * a 500 while /api/parse/url handled the same error explicitly.
+   */
+  readonly status = 400;
+
   constructor(message: string) {
     super(message);
     this.name = 'UrlPolicyError';
