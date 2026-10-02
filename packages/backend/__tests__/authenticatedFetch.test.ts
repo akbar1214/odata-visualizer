@@ -295,4 +295,82 @@ describe('parse routes forward caller headers', () => {
     ]);
     expect(headersOf(calls[0].init).get('authorization')).toBe('Bearer t');
   });
+
+  it('POST /url rejects a control character in a header value with 400', async () => {
+    const fetchMock = vi.fn(async () => new Response(minimalCSDL, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await request(createApp())
+      .post('/api/parse/url')
+      .send({
+        url: 'https://windchill.example.com/odata/$metadata',
+        headers: { 'x-api-key': 'a\u000bb' },
+      });
+
+    // Undici refuses the value; it must be a caller error before any request,
+    // not a 500 from deep inside the fetch.
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toMatch(/x-api-key/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('baseUrl policy errors are caller errors', () => {
+  it('POST /file returns 400 for an invalid baseUrl', async () => {
+    const res = await request(createApp())
+      .post('/api/parse/file')
+      .field('baseUrl', 'not-a-url')
+      .attach('metadata', Buffer.from(referencingDocument), {
+        filename: 'main.xml',
+        contentType: 'application/xml',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid URL format/);
+  });
+
+  it('POST /file returns 400 for a blocked baseUrl', async () => {
+    const res = await request(createApp())
+      .post('/api/parse/file')
+      .field('baseUrl', 'http://169.254.169.254/odata/main.xml')
+      .attach('metadata', Buffer.from(referencingDocument), {
+        filename: 'main.xml',
+        contentType: 'application/xml',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/private or loopback/i);
+  });
+
+  it('POST /content returns 400 for an invalid baseUrl', async () => {
+    const res = await request(createApp())
+      .post('/api/parse/content')
+      .send({ content: referencingDocument, baseUrl: 'not-a-url' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid URL format/);
+  });
+
+  it('POST /content returns 400 for a blocked baseUrl', async () => {
+    const res = await request(createApp())
+      .post('/api/parse/content')
+      .send({ content: referencingDocument, baseUrl: 'http://169.254.169.254/odata/main.xml' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/private or loopback/i);
+  });
+
+  it('POST /url still reports a blocked URL as 400', async () => {
+    const fetchMock = vi.fn(async () => new Response(minimalCSDL, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await request(createApp())
+      .post('/api/parse/url')
+      .send({ url: 'http://169.254.169.254/odata/$metadata' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/private or loopback/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

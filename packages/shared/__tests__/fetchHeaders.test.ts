@@ -52,6 +52,24 @@ function stubFetch(documents: Record<string, string>): FetchCall[] {
   return calls;
 }
 
+/** Record every request and answer each with `handler`. */
+function stubFetchWith(handler: (url: string) => Response): FetchCall[] {
+  const calls: FetchCall[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, headers: new Headers(init?.headers) });
+      return handler(url);
+    }),
+  );
+  return calls;
+}
+
+function redirectTo(location: string): Response {
+  return new Response(null, { status: 302, headers: { location } });
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -73,6 +91,24 @@ describe('validateFetchHeaders', () => {
         /invalid character in its value/,
       );
     }
+  });
+
+  it('rejects C0 controls other than HTAB, and DEL', () => {
+    for (const value of [
+      'Bearer\0X',
+      'Bearer\u0001X',
+      'Bearer\u000bX',
+      'Bearer\u001fX',
+      'Bearer\u007fX',
+    ]) {
+      expect(() => validateFetchHeaders({ authorization: value })).toThrow(
+        /invalid character in its value/,
+      );
+    }
+  });
+
+  it('accepts a horizontal tab in a header value', () => {
+    expect(validateFetchHeaders({ 'x-note': 'a\tb' })).toEqual({ 'x-note': 'a\tb' });
   });
 
   it('rejects framing and hop-by-hop headers', () => {
@@ -195,5 +231,75 @@ describe('parseCSDLUrl header forwarding', () => {
       parseCSDLUrl('https://api.example.com/odata/$metadata', { headers: { host: 'evil' } }),
     ).rejects.toThrow(/not allowed/);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('parseCSDLUrl manual redirects', () => {
+  const rootUrl = 'https://api.example.com/odata/$metadata';
+
+  it('drops caller headers when the root fetch redirects cross-origin', async () => {
+    const calls = stubFetchWith((url) => {
+      if (url === rootUrl) return redirectTo('https://cdn.example.com/odata/$metadata');
+      if (url === 'https://cdn.example.com/odata/$metadata') {
+        return new Response(plainDocument, { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const metadata = await parseCSDLUrl(rootUrl, { headers: { 'x-api-key': 'secret' } });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      rootUrl,
+      'https://cdn.example.com/odata/$metadata',
+    ]);
+    expect(calls[0].headers.get('x-api-key')).toBe('secret');
+    expect(calls[1].headers.get('x-api-key')).toBeNull();
+    expect(metadata.entities.map((entity) => entity.qualifiedName)).toContain('Root.Thing');
+  });
+
+  it('keeps caller headers when the root fetch redirects same-origin', async () => {
+    const calls = stubFetchWith((url) => {
+      if (url === rootUrl) return redirectTo('/odata/v4/$metadata');
+      return new Response(plainDocument, { status: 200 });
+    });
+
+    await parseCSDLUrl(rootUrl, { headers: { 'x-api-key': 'secret' } });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      rootUrl,
+      'https://api.example.com/odata/v4/$metadata',
+    ]);
+    expect(calls[1].headers.get('x-api-key')).toBe('secret');
+  });
+
+  it('drops caller headers when a same-origin reference redirects cross-origin', async () => {
+    const referenceUrl = 'https://api.example.com/odata/shared.xml';
+    const calls = stubFetchWith((url) => {
+      if (url === rootUrl) return new Response(rootDocument, { status: 200 });
+      if (url === referenceUrl) return redirectTo('https://cdn.example.com/shared.xml');
+      if (url === 'https://cdn.example.com/shared.xml') {
+        return new Response(sharedDocument, { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    await parseCSDLUrl(rootUrl, { headers: { 'x-api-key': 'secret' } });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      rootUrl,
+      referenceUrl,
+      'https://cdn.example.com/shared.xml',
+    ]);
+    expect(calls[1].headers.get('x-api-key')).toBe('secret');
+    expect(calls[2].headers.get('x-api-key')).toBeNull();
+  });
+
+  it('gives up after too many redirects', async () => {
+    const calls = stubFetchWith((url) => redirectTo(`${url}?hop`));
+
+    await expect(parseCSDLUrl(rootUrl, { headers: { 'x-api-key': 'secret' } })).rejects.toThrow(
+      /too many redirects/i,
+    );
+    expect(calls).toHaveLength(6);
   });
 });

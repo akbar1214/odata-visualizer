@@ -6,6 +6,9 @@ import type { ODataMetadata } from './types.js';
 
 const DEFAULT_TIMEOUT_MS = 30000;
 
+/** Mirrors the backend's fetch policy: a longer redirect chain is refused. */
+const MAX_REDIRECTS = 5;
+
 /**
  * Resolve an `edmx:Reference/@Uri` to a path and refuse anything that escapes
  * the document's directory. A metadata file must not be able to read
@@ -116,12 +119,26 @@ const DENIED_FETCH_HEADERS = new Set([
 ]);
 
 /**
+ * True when a value carries a control character undici refuses: every C0
+ * control except HTAB, plus DEL. Without this the fetch throws and the route
+ * reports what is really a caller error as a 500.
+ */
+function hasInvalidHeaderValueCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code !== 0x09 && (code <= 0x1f || code === 0x7f)) return true;
+  }
+  return false;
+}
+
+/**
  * Validate caller-supplied request headers and return a normalized copy
  * (names lower-cased; the caller's object is left untouched).
  *
  * Header values are credentials, so they must never reach an error message or
  * a log; a rejected value is reported by its header's name instead. Rejecting
- * CR, LF and NUL keeps a value from splitting one request into two.
+ * CR, LF and the other controls keeps a value from splitting one request into
+ * two, and refuses what fetch itself would reject.
  */
 export function validateFetchHeaders(headers: Record<string, string>): Record<string, string> {
   const candidate: unknown = headers;
@@ -157,7 +174,7 @@ export function validateFetchHeaders(headers: Record<string, string>): Record<st
         `Header ${JSON.stringify(name)} has a value longer than ${MAX_HEADER_VALUE_LENGTH} characters`,
       );
     }
-    if (value.includes('\r') || value.includes('\n') || value.includes('\0')) {
+    if (hasInvalidHeaderValueCharacter(value)) {
       throw new Error(`Header ${JSON.stringify(name)} has an invalid character in its value`);
     }
 
@@ -189,13 +206,56 @@ function httpHeaders(accept: string | undefined, extra?: Record<string, string>)
 }
 
 /**
+ * Fetch a document, following redirects manually so credentials are sent only
+ * to a hop on the root document's origin.
+ *
+ * Letting fetch follow redirects is not enough: it strips `Authorization` and
+ * `Cookie`, but a custom credential such as `X-Api-Key` would be delivered to
+ * whatever origin the redirect names.
+ */
+async function fetchFollowingRedirects(
+  url: string,
+  accept: string | undefined,
+  credentials: Record<string, string> | undefined,
+  rootOrigin: string | undefined,
+  timeoutMs: number,
+): Promise<Response> {
+  // One deadline for the whole chain, mirroring the backend's fetch policy.
+  const signal = AbortSignal.timeout(timeoutMs);
+  let current = new URL(url);
+
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    const response = await fetch(current.toString(), {
+      headers: httpHeaders(
+        accept,
+        credentials && current.origin === rootOrigin ? credentials : undefined,
+      ),
+      redirect: 'manual',
+      signal,
+    });
+
+    const location = response.headers.get('location');
+    const isRedirect = response.status >= 300 && response.status < 400 && location;
+    if (!isRedirect) return response;
+
+    // Release the hop's socket before opening the next one; an undrained body
+    // keeps the connection out of the reuse pool.
+    await response.body?.cancel().catch(() => undefined);
+    current = new URL(location, current);
+  }
+
+  throw new Error(`Too many redirects (more than ${MAX_REDIRECTS})`);
+}
+
+/**
  * Parse a CSDL document from a URL. Relative `edmx:Reference/@Uri` values
  * resolve against the document URL.
  *
  * `headers` are credentials for the metadata server: they are validated up
  * front, sent on the root fetch, and — for the default `loadExternal` — sent to
- * a reference only when it is same-origin with the root document. A reference
- * on another origin must not receive the root's credentials.
+ * a reference only when it is same-origin with the root document. Redirects are
+ * followed manually, so a hop (of the root fetch or of a reference) on another
+ * origin never receives them either.
  *
  * Callers that run behind an SSRF policy (the backend) can pass
  * `loadExternal` to validate every reference request themselves; those callers
@@ -211,30 +271,36 @@ export async function parseCSDLUrl(
   } = {},
 ): Promise<ODataMetadata> {
   const headers = options.headers ? validateFetchHeaders(options.headers) : undefined;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  // The root document's origin anchors which hops and references may carry the
+  // credentials, even after the root fetch itself has been redirected.
+  const rootOrigin = new URL(url).origin;
 
-  const response = await fetch(url, {
-    headers: httpHeaders(options.accept, headers),
-    signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
-  });
+  const response = await fetchFollowingRedirects(
+    url,
+    options.accept,
+    headers,
+    rootOrigin,
+    timeoutMs,
+  );
 
   if (!response.ok) {
     throw new Error(`Failed to fetch metadata: HTTP ${response.status} ${response.statusText}`);
   }
 
   const xmlContent = await response.text();
-  // Resolved only now, so an invalid `url` fails at `fetch` exactly as before.
-  const rootOrigin = headers ? new URL(url).origin : undefined;
   return parseCSDL(xmlContent, {
     baseUri: url,
     loadExternal:
       options.loadExternal ??
       (async (uri) => {
-        const referenceHeaders =
-          rootOrigin && new URL(uri).origin === rootOrigin ? headers : undefined;
-        const external = await fetch(uri, {
-          headers: httpHeaders(options.accept, referenceHeaders),
-          signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
-        });
+        const external = await fetchFollowingRedirects(
+          uri,
+          options.accept,
+          headers,
+          rootOrigin,
+          timeoutMs,
+        );
         if (!external.ok) {
           throw new Error(`HTTP ${external.status} ${external.statusText}`);
         }
