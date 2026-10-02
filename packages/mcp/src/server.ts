@@ -103,6 +103,12 @@ export function createMcpServer(
             .describe(
               '"file" (local path), "url" (remote $metadata), or "server" (metadata uploaded in the UI)',
             ),
+          headers: z
+            .record(z.string())
+            .optional()
+            .describe(
+              'Request headers for the metadata URL (e.g. { "Authorization": "Bearer <token>" }); validated by the shared rules; sent only to the metadata URL and same-origin edmx:Reference fetches; never logged; only valid with type "url"',
+            ),
         },
       },
       async (args) => handleToolCall('load_metadata', args),
