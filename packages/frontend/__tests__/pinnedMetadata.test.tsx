@@ -223,4 +223,32 @@ describe('hydration timeout', () => {
     expect(screen.getByText('1 entities')).toBeDefined();
     expect(screen.queryByText('Loading metadata...')).toBeNull();
   });
+
+  it('falls back to the upload screen when a response body stalls past the timeout', async () => {
+    fetchMock.mockImplementationOnce((_input: unknown, init?: RequestInit) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          new Promise<unknown>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('The operation was aborted.', 'AbortError'));
+            });
+          }),
+      } as unknown as Response),
+    );
+
+    render(<App />);
+
+    // Headers arrive before the timeout, but the body never settles.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText('Loading metadata...')).toBeDefined();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(screen.getByText('Visualize OData Metadata')).toBeDefined();
+    expect(screen.queryByText('Error')).toBeNull();
+  });
 });

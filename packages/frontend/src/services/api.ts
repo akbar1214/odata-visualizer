@@ -161,7 +161,9 @@ export async function fetchCurrentMetadata(): Promise<CurrentMetadataResponse> {
       throw new Error(error.error || `HTTP ${response.status}`);
     }
 
-    return response.json();
+    // `await` keeps the timeout armed until the body settles; the abort signal
+    // also cancels body consumption.
+    return await response.json();
   } finally {
     clearTimeout(timer);
   }
