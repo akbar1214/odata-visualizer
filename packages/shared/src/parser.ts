@@ -1283,16 +1283,27 @@ function walkPropertyPath(
   segments: string[],
 ): ODataProperty | ODataNavigationProperty | undefined {
   let current: ODataEntity | undefined = startType;
+  // The most derived type the path can still describe. A cast may widen it to
+  // an ancestor or narrow it within this branch; a cast into a sibling branch
+  // is not a type the path started at can reach (#53.2).
+  let branch: ODataEntity = startType;
   for (let index = 0; index < segments.length; index += 1) {
     const segment = segments[index];
     if (segment.includes('.')) {
       // A qualified segment is a type cast, not a property name. It only names
-      // a type the path can reach when that type and the current one share an
+      // a type the path can reach when that type and the branch share an
       // inheritance chain; an unrelated type used to attach the annotation to
-      // a property the target never mentions.
+      // a property the target never mentions. Checking the *current* type
+      // alone accepted an up-cast followed by a down-cast into a sibling:
+      // `Derived/Base/OtherDerived` validated each step while the path as a
+      // whole can never reach `OtherDerived`.
       if (!current) return undefined;
       const cast = findTypeInScope(metadata.entities, segment, current.namespace);
-      if (!cast || !isRelatedByInheritance(cast, current, metadata.entities)) return undefined;
+      if (!cast || !isRelatedByInheritance(cast, branch, metadata.entities)) return undefined;
+      if (resolveInheritanceChain(cast, metadata.entities).includes(branch)) {
+        // Narrowing inside the branch moves it down with the cast.
+        branch = cast;
+      }
       current = cast;
       continue;
     }
@@ -1308,12 +1319,30 @@ function walkPropertyPath(
       ? findTypeInScope(metadata.entities, reference, current.namespace)
       : undefined;
     if (!current) return undefined;
+    // A property segment moves to a new type, so the branch re-anchors: casts
+    // below this type are judged against it, not the type the path began at.
+    branch = current;
   }
   return undefined;
 }
 
+/**
+ * Does the inheritance chain still end at a base type the model could not
+ * resolve? A chain that stops there cannot rule a cast out — the missing
+ * document may itself be the link that relates the two types — so a partial
+ * model keeps resolving it.
+ */
+function hasUnresolvedBaseType(entity: ODataEntity, entities: ODataEntity[]): boolean {
+  const chain = resolveInheritanceChain(entity, entities);
+  return chain[chain.length - 1].baseType !== undefined;
+}
+
 /** Is one type the same as, a base of, or a derived type of the other? */
 function isRelatedByInheritance(a: ODataEntity, b: ODataEntity, entities: ODataEntity[]): boolean {
+  // Only a completely resolved chain can prove two types unrelated; a chain
+  // that runs out at a reference the model never loaded cannot (#73's partial
+  // models).
+  if (hasUnresolvedBaseType(a, entities) || hasUnresolvedBaseType(b, entities)) return true;
   return (
     resolveInheritanceChain(a, entities).includes(b) ||
     resolveInheritanceChain(b, entities).includes(a)

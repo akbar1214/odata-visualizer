@@ -199,6 +199,115 @@ describe('the namespace guard is scoped to its own document', () => {
     // suppress the loaded document's alias.
     expect(model.entities.find((e) => e.qualifiedName === 'T.Thing')!.baseType).toBe('T.Base');
   });
+
+  it('still guards a namespace whose schema another document already registered', async () => {
+    // The root registers `Dup` first, so the external document's own `Dup`
+    // schema is deduplicated away. The guard set is still built from the
+    // schemas that document *declares* — adding the namespace only after the
+    // dedupe left `Dup` unguarded, and the document's own `Dup -> Zed` alias
+    // then rewrote `Dup.DupThing` into `Zed.DupThing`.
+    const external = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:Reference Uri="https://example.org/zed.xml">
+    <edmx:Include Namespace="Zed" Alias="Dup" />
+  </edmx:Reference>
+  <edmx:DataServices>
+    <Schema Namespace="Dup" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Shadowed">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="Ext" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing" BaseType="Dup.DupThing" />
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const model = await parseCSDL(
+      `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Dup" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="DupThing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="Root" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Anchor">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <edmx:Reference Uri="https://example.org/ext.xml">
+        <edmx:Include Namespace="Ext" />
+      </edmx:Reference>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`,
+      { loadExternal: async () => external },
+    );
+
+    // `Dup` is the external document's own namespace, so its reference is not
+    // an alias for `Zed`.
+    expect(model.entities.find((e) => e.qualifiedName === 'Ext.Thing')!.baseType).toBe(
+      'Dup.DupThing',
+    );
+  });
+
+  it('expands a targeted annotation in the document that declared the block', async () => {
+    // The block sits inside the external document, whose own schema aliases
+    // `Shadow` to itself. The root owns the namespace `Shadow`, and a lookup
+    // that falls back to the root document sees exactly that namespace guard —
+    // so the target stays `Shadow.Widget` and lands on the root's type.
+    const external = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Ext" Alias="Shadow" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Annotations Target="Shadow.Widget">
+        <Annotation Term="Core.Description" String="from ext" />
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const model = await parseCSDL(
+      `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Shadow" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="A" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Anchor">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <edmx:Reference Uri="https://example.org/ext.xml">
+        <edmx:Include Namespace="Ext" />
+      </edmx:Reference>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`,
+      { loadExternal: async () => external },
+    );
+
+    expect(
+      model.entities.find((e) => e.qualifiedName === 'Ext.Widget')!.annotations?.[
+        'Core.Description'
+      ],
+    ).toBe('from ext');
+    expect(
+      model.entities.find((e) => e.qualifiedName === 'Shadow.Widget')!.annotations,
+    ).toBeUndefined();
+  });
 });
 
 /**

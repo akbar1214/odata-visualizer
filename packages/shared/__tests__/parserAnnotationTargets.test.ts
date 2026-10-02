@@ -36,11 +36,20 @@ const types = `
       <EntityType Name="Derived" BaseType="N.Base">
         <Property Name="DerivedProp" Type="Edm.String" />
       </EntityType>
+      <EntityType Name="DeepDerived" BaseType="N.Derived">
+        <Property Name="DeepProp" Type="Edm.String" />
+      </EntityType>
+      <EntityType Name="OtherDerived" BaseType="N.Base">
+        <Property Name="OtherProp" Type="Edm.String" />
+      </EntityType>
       <EntityType Name="Other">
         <Key><PropertyRef Name="Id" /></Key>
         <Property Name="Id" Type="Edm.String" Nullable="false" />
         <Property Name="OtherProp" Type="Edm.String" />
       </EntityType>
+      <ComplexType Name="Cplx">
+        <Property Name="CProp" Type="Edm.String" />
+      </ComplexType>
       <EntityType Name="Widget">
         <Key><PropertyRef Name="Id" /></Key>
         <Property Name="Id" Type="Edm.String" Nullable="false" />
@@ -159,6 +168,102 @@ describe('type-cast segments', () => {
     // property.
     expect(derived.annotations?.['Core.Description']).toBe('downcast');
   });
+
+  it('resolves a multi-step narrowing cast chain', async () => {
+    const model = await parseCSDL(csdl(block('N.Base/N.Derived/N.DeepDerived/DeepProp', 'deep')));
+    const deep = model.entities
+      .find((e) => e.qualifiedName === 'N.DeepDerived')!
+      .properties.find((p) => p.name === 'DeepProp')!;
+
+    // Each step narrows: `DeepDerived` derives from `Derived`, which derives
+    // from `Base`. Rejecting a cast the path as a whole cannot reach must not
+    // forbid a legitimate chain of them.
+    expect(deep.annotations?.['Core.Description']).toBe('deep');
+  });
+
+  it('rejects a cast into a sibling after an up-cast', async () => {
+    const model = await parseCSDL(
+      csdl(block('N.Derived/N.Base/N.OtherDerived/OtherProp', 'sibling hop')),
+    );
+    const other = model.entities
+      .find((e) => e.qualifiedName === 'N.OtherDerived')!
+      .properties.find((p) => p.name === 'OtherProp')!;
+
+    // `N.Derived` and `N.OtherDerived` are siblings under `N.Base`. The
+    // per-step check accepts each cast against the *current* type, so the
+    // up-cast to `N.Base` let the following down-cast land in the other
+    // branch — a property `N.Derived` can never reach (#53.2).
+    expect(other.annotations).toBeUndefined();
+  });
+
+  it('rejects a cast to an unrelated complex type', async () => {
+    const model = await parseCSDL(csdl(block('N.Widget/N.Cplx/CProp', 'unrelated complex')));
+    const cplx = model.entities
+      .find((e) => e.qualifiedName === 'N.Cplx')!
+      .properties.find((p) => p.name === 'CProp')!;
+
+    // The entity case above is pinned; a complex type must be held to the same
+    // rule rather than attached to because it is not an `EntityType`.
+    expect(cplx.annotations).toBeUndefined();
+  });
+});
+
+/**
+ * #53.2's cast check must not make a partial model strict. The parser is
+ * deliberately tolerant of references that never loaded (`unresolvedReferences`
+ * is a first-class output), and a `BaseType` naming a missing type cannot rule
+ * a cast out: the absent document may well be the link that connects the two
+ * types. Only a chain that resolves completely can prove a cast unrelated.
+ */
+describe('type casts through a type with an unresolved base', () => {
+  const csdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Contoso" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="SalesOrder">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="OrderNumber" Type="Edm.String" />
+      </EntityType>
+      <EntityType Name="OnlineOrder" BaseType="Ext.SalesOrder">
+        <Property Name="WebChannel" Type="Edm.String" />
+      </EntityType>
+      <Annotations Target="Contoso.SalesOrder/Contoso.OnlineOrder/WebChannel">
+        <Annotation Term="Core.Description" String="downcast label" />
+      </Annotations>
+      <Annotations Target="Contoso.OnlineOrder/Contoso.SalesOrder/OrderNumber">
+        <Annotation Term="T.Upcast" String="upcast label" />
+      </Annotations>
+      <edmx:Reference Uri="https://contoso.com/odata/$metadata">
+        <edmx:Include Namespace="Ext" />
+      </edmx:Reference>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('attaches a cast to a type whose base never loaded', async () => {
+    const model = await parseCSDL(csdl);
+    const online = model.entities
+      .find((e) => e.qualifiedName === 'Contoso.OnlineOrder')!
+      .properties.find((p) => p.name === 'WebChannel')!;
+
+    // In the full model `Ext.SalesOrder` may itself derive from
+    // `Contoso.SalesOrder`, which is exactly what makes the cast legal. The
+    // chain stops at the reference that was not loaded, so it cannot prove the
+    // cast unrelated.
+    expect(online.annotations?.['Core.Description']).toBe('downcast label');
+  });
+
+  it('attaches the mirror direction to an unresolved type', async () => {
+    const model = await parseCSDL(csdl);
+    const sales = model.entities
+      .find((e) => e.qualifiedName === 'Contoso.SalesOrder')!
+      .properties.find((p) => p.name === 'OrderNumber')!;
+
+    // `Contoso.OnlineOrder` declares the unresolved base and is the *current*
+    // type of the path, so the tolerance has to apply to either side.
+    expect(sales.annotations?.['T.Upcast']).toBe('upcast label');
+  });
 });
 
 describe('paths through a navigation property', () => {
@@ -193,6 +298,46 @@ describe('paths through a navigation property', () => {
     // property's target type; reading it as a structural property's `type`
     // (which a navigation property does not have) silently dropped the path.
     expect(serial.annotations?.['Core.Description']).toBe('through the nav');
+  });
+
+  it('resolves the navigation target through its qualified reference', async () => {
+    const crossNamespace = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityType Name="Box">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Widgets" Type="Collection(Z.Widget)" />
+      </EntityType>
+      <Annotations Target="N.Box/Widgets/ZProp">
+        <Annotation Term="Core.Description" String="from Z" />
+      </Annotations>
+    </Schema>
+    <Schema Namespace="Z" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="ZProp" Type="Edm.String" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+    const model = await parseCSDL(crossNamespace);
+    const zWidget = model.entities.find((e) => e.qualifiedName === 'Z.Widget')!;
+    const nWidget = model.entities.find((e) => e.qualifiedName === 'N.Widget')!;
+
+    // Both namespaces declare `Widget`, so the short `targetType` would resolve
+    // to the same-namespace `N.Widget` and drop the path. The qualified
+    // reference is what names `Z.Widget`.
+    expect(
+      zWidget.properties.find((p) => p.name === 'ZProp')!.annotations?.['Core.Description'],
+    ).toBe('from Z');
+    expect(nWidget.properties.find((p) => p.name === 'ZProp')).toBeUndefined();
   });
 });
 
