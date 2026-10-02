@@ -1131,12 +1131,12 @@ type OverloadSelection<T extends ODataAction | ODataFunction> =
 /**
  * Pick the overload that matches the supplied parameter names.
  *
- * OData V4.01 Part 1 §11.5.4.2 selects a function overload whose declared
+ * OData V4.01 Part 1 §11.5.3.2 selects a function overload whose declared
  * parameter set matches the supplied names before anything else, so the
  * fewest declared parameters wins and a superset cannot shadow an exact match
  * (#65). Binding-type specificity breaks an arity tie: §11.5.1 lets a
  * candidate bound to a base type stay invocable through a derived entity set,
- * but §11.5.4.2 selects by the type of the URL segment, which is the set's own
+ * but §11.5.3.2 selects by the type of the URL segment, which is the set's own
  * type, so the candidate bound to the most derived type wins (lowest
  * `bindingDepth`). A genuine tie — same binding depth and same parameter count
  * — is refused as ambiguous, mirroring the service-side rule ("Services SHOULD
@@ -1187,10 +1187,17 @@ function selectCallableOverload<T extends ODataAction | ODataFunction>(
  *
  * OData V4.01 Part 1 §11.5.1: an operation bound to a type is invocable
  * through a resource whose type is that type or a type derived from it.
- * §11.5.4.2 then selects the overload by the type of the URL segment, so this
- * depth is the binding-type specificity signal. Unbound callables (depth 0)
- * and references that do not resolve (also 0) cannot be judged and pass, as
- * the boolean filter did before.
+ * §11.5.3.2 (functions) and §11.5.4.2 (actions) then select the overload by
+ * the type of the URL segment, so this depth is the binding-type specificity
+ * signal: 0 is the set's own type and larger numbers are further up its
+ * inheritance chain. Unbound callables rank 0.
+ *
+ * A binding type the model does not resolve (`Edm.EntityType`, an alias from
+ * another document) is invocable in principle and still passes the filter, but
+ * it cannot be ranked and must never outrank a resolved candidate, so it ranks
+ * `Infinity`; ranking it 0 made it look like the set's own type and let it win
+ * ahead of a resolved base type. An unresolvable set type ranks everyone 0,
+ * since no depth can be computed at all.
  */
 function bindingDepthForSet(
   item: ODataAction | ODataFunction,
@@ -1201,10 +1208,11 @@ function bindingDepthForSet(
   const bindingElement = unwrapCollection(
     (item.parameters ?? []).find((p) => p.isBinding)?.type,
   )?.type;
-  if (!bindingElement) return 0;
+  if (!bindingElement) return Number.POSITIVE_INFINITY;
   const bindingType = findTypeInScope(metadata.entities, bindingElement, item.namespace);
   const setType = findEntityByName(metadata.entities, set.entityTypeQualified ?? set.entityType);
-  if (!bindingType || !setType) return 0;
+  if (!setType) return 0;
+  if (!bindingType) return Number.POSITIVE_INFINITY;
   const depth = resolveInheritanceChain(setType, metadata.entities).indexOf(bindingType);
   return depth >= 0 ? depth : undefined;
 }

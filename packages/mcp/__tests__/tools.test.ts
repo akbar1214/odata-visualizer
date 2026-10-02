@@ -1604,6 +1604,23 @@ const boundCompositionCSDL = `<?xml version="1.0" encoding="utf-8"?>
         <Parameter Name="it" Type="N.A" />
         <ReturnType Type="Collection(Edm.EntityType)" />
       </Function>
+      <Function Name="Mixed" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="Mixed" IsBound="true">
+        <Parameter Name="it" Type="Edm.EntityType" />
+        <ReturnType Type="Edm.String" />
+      </Function>
+      <Function Name="Missing" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <ReturnType Type="N.Missing" />
+      </Function>
+      <Function Name="Sum" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <Parameter Name="vals" Type="Collection(Edm.Int32)" />
+        <ReturnType Type="Edm.Int32" />
+      </Function>
       <Function Name="OneAddr" IsBound="true">
         <Parameter Name="it" Type="N.A" />
         <ReturnType Type="N.Addr" />
@@ -1870,11 +1887,28 @@ describe('bound overload specificity and return shapes', () => {
 
     // `Pick(N.Derived, Edm.Int32)` is bound to the set's own type, but
     // `Pick(N.A)` exactly matches the supplied (empty) parameter set, and
-    // §11.5.4.2 matches parameters before binding specificity breaks an arity
+    // §11.5.3.2 matches parameters before binding specificity breaks an arity
     // tie — so no false "x was not supplied" note.
     expect(result.isError).toBeUndefined();
     expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/Deriveds('1')/N.Pick");
     expect(textOf(result)).not.toContain('"x"');
+  });
+
+  it('prefers a resolved binding type over an unresolvable one', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'Mixed',
+      entitySet: 'Deriveds',
+      keys: { Id: '1' },
+      select: ['Id'],
+    });
+
+    // `Mixed(Edm.EntityType)` cannot be resolved in the model, so it must rank
+    // least derived rather than as the set's own type; otherwise it wins the
+    // tie and its Edm.String return drops the caller's $select.
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/Deriveds('1')/N.Mixed()?$select=Id");
+    expect(textOf(result)).not.toContain('Edm.String');
   });
 
   it('filters overloads by the binding type of the entity set', async () => {
@@ -2078,6 +2112,42 @@ describe('bound overload specificity and return shapes', () => {
     expect(emittedUrl(textOf(result))).toBe(
       "<serviceRoot>/As('1')/N.AnyEntities()?$select=Id&$top=3",
     );
+  });
+
+  it('drops structured options from a return type that does not resolve', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'Missing',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      select: ['Street'],
+      top: 3,
+    });
+
+    // `N.Missing` is not declared, so nothing proves it can carry
+    // $select/$expand and both options must be dropped with a note — emitting
+    // `$select=Street` would compose a URL the service is expected to reject.
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.Missing");
+    expect(textOf(result)).toContain('$select');
+    expect(textOf(result)).toContain('$top');
+    expect(textOf(result)).toContain('not applicable');
+  });
+
+  it('types a collection-valued function parameter element by element', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'Sum',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      parameters: { vals: [1, 2] },
+    });
+
+    // Unwrapping `Collection(...)` is what types each element as Edm.Int32;
+    // without it the array is quoted as an unknown-typed literal instead.
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.Sum(vals=1,2)");
+    expect(textOf(result)).not.toContain("Collection(Edm.Int32)'");
   });
 
   it('refuses a collection-bound function on an entity set of another type', async () => {
