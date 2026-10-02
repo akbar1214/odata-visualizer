@@ -400,6 +400,13 @@ export async function parseCSDL(
 
   const queue: XmlElement[] = [];
   const visitedUris = new Set<string>();
+  /**
+   * URIs whose load failed. `visitedUris` is populated before the fetch to
+   * guard against cycles, so a second `<edmx:Reference>` to the same URI is
+   * skipped; without this set its `edmx:Include` names would never be recorded
+   * and a stray qualifier could resolve through a namesake (#77).
+   */
+  const failedUris = new Set<string>();
   const maxExternalDocuments = options.maxExternalDocuments ?? 25;
   let externalDocumentsLoaded = 0;
 
@@ -491,7 +498,12 @@ export async function parseCSDL(
       }
 
       const absoluteUri = resolveReferenceUri(uri, options.baseUri);
-      if (visitedUris.has(absoluteUri)) continue;
+      if (visitedUris.has(absoluteUri)) {
+        // A URI whose first attempt failed still contributes the Include names
+        // of every reference that names it (#77).
+        if (failedUris.has(absoluteUri)) recordUnresolvedReference(uri, reference);
+        continue;
+      }
 
       if (externalDocumentsLoaded >= maxExternalDocuments) {
         recordUnresolvedReference(uri, reference);
@@ -512,6 +524,7 @@ export async function parseCSDL(
         }
         await loadReferences(externalDocument.references, externalDocumentId);
       } catch {
+        failedUris.add(absoluteUri);
         recordUnresolvedReference(uri, reference);
       }
     }
