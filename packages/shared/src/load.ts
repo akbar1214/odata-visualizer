@@ -119,14 +119,15 @@ const DENIED_FETCH_HEADERS = new Set([
 ]);
 
 /**
- * True when a value carries a control character undici refuses: every C0
- * control except HTAB, plus DEL. Without this the fetch throws and the route
- * reports what is really a caller error as a 500.
+ * True when a value carries a character fetch cannot carry: a C0 control
+ * except HTAB, DEL, or anything above U+00FF (`Headers.set` needs a
+ * ByteString). Without this the fetch throws and the route reports what is
+ * really a caller error as a 500.
  */
 function hasInvalidHeaderValueCharacter(value: string): boolean {
   for (let i = 0; i < value.length; i += 1) {
     const code = value.charCodeAt(i);
-    if (code !== 0x09 && (code <= 0x1f || code === 0x7f)) return true;
+    if (code !== 0x09 && (code <= 0x1f || code === 0x7f || code > 0xff)) return true;
   }
   return false;
 }

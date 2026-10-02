@@ -34,6 +34,7 @@ const sharedDocument = `<?xml version="1.0"?>
 interface FetchCall {
   url: string;
   headers: Headers;
+  init?: RequestInit;
 }
 
 /** Serve the given documents and record the headers every request carried. */
@@ -43,7 +44,7 @@ function stubFetch(documents: Record<string, string>): FetchCall[] {
     'fetch',
     vi.fn(async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
-      calls.push({ url, headers: new Headers(init?.headers) });
+      calls.push({ url, headers: new Headers(init?.headers), init });
       const body = documents[url];
       if (!body) throw new Error(`unexpected fetch: ${url}`);
       return new Response(body, { status: 200 });
@@ -59,7 +60,7 @@ function stubFetchWith(handler: (url: string) => Response): FetchCall[] {
     'fetch',
     vi.fn(async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
-      calls.push({ url, headers: new Headers(init?.headers) });
+      calls.push({ url, headers: new Headers(init?.headers), init });
       return handler(url);
     }),
   );
@@ -109,6 +110,20 @@ describe('validateFetchHeaders', () => {
 
   it('accepts a horizontal tab in a header value', () => {
     expect(validateFetchHeaders({ 'x-note': 'a\tb' })).toEqual({ 'x-note': 'a\tb' });
+  });
+
+  it('rejects characters above U+00FF', () => {
+    // `Headers.set` needs a ByteString; without this, fetch throws and the
+    // route reports what is really a caller error as a 500.
+    for (const value of ['caf\u20ac', 'a\ud83d\ude00b', 'a\u0100b']) {
+      expect(() => validateFetchHeaders({ 'x-api-key': value })).toThrow(
+        /invalid character in its value/,
+      );
+    }
+  });
+
+  it('accepts Latin-1 obs-text', () => {
+    expect(validateFetchHeaders({ 'x-note': 'caf\u00e9' })).toEqual({ 'x-note': 'caf\u00e9' });
   });
 
   it('rejects framing and hop-by-hop headers', () => {
@@ -252,6 +267,8 @@ describe('parseCSDLUrl manual redirects', () => {
       rootUrl,
       'https://cdn.example.com/odata/$metadata',
     ]);
+    // Automatic following is what leaks a custom credential cross-origin.
+    expect(calls.map((call) => call.init?.redirect)).toEqual(['manual', 'manual']);
     expect(calls[0].headers.get('x-api-key')).toBe('secret');
     expect(calls[1].headers.get('x-api-key')).toBeNull();
     expect(metadata.entities.map((entity) => entity.qualifiedName)).toContain('Root.Thing');
@@ -269,6 +286,7 @@ describe('parseCSDLUrl manual redirects', () => {
       rootUrl,
       'https://api.example.com/odata/v4/$metadata',
     ]);
+    expect(calls.map((call) => call.init?.redirect)).toEqual(['manual', 'manual']);
     expect(calls[1].headers.get('x-api-key')).toBe('secret');
   });
 
@@ -290,8 +308,31 @@ describe('parseCSDLUrl manual redirects', () => {
       referenceUrl,
       'https://cdn.example.com/shared.xml',
     ]);
+    expect(calls.map((call) => call.init?.redirect)).toEqual(['manual', 'manual', 'manual']);
     expect(calls[1].headers.get('x-api-key')).toBe('secret');
     expect(calls[2].headers.get('x-api-key')).toBeNull();
+  });
+
+  it('cancels a redirect hop body before following it', async () => {
+    const cancel = vi.fn();
+    const hopBody = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('discarded'));
+      },
+      cancel,
+    });
+    const calls = stubFetchWith((url) => {
+      if (url === rootUrl) {
+        return new Response(hopBody, { status: 302, headers: { location: '/odata/v4/$metadata' } });
+      }
+      return new Response(plainDocument, { status: 200 });
+    });
+
+    await parseCSDLUrl(rootUrl, { headers: { 'x-api-key': 'secret' } });
+
+    expect(calls).toHaveLength(2);
+    // An undrained body pins the connection instead of returning it to the pool.
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it('gives up after too many redirects', async () => {
@@ -301,5 +342,6 @@ describe('parseCSDLUrl manual redirects', () => {
       /too many redirects/i,
     );
     expect(calls).toHaveLength(6);
+    expect(calls.every((call) => call.init?.redirect === 'manual')).toBe(true);
   });
 });

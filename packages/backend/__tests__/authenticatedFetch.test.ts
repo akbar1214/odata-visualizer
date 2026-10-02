@@ -314,6 +314,27 @@ describe('parse routes forward caller headers', () => {
     expect(res.body.error).toMatch(/x-api-key/);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('POST /url rejects a header value above U+00FF with 400', async () => {
+    const fetchMock = vi.fn(async () => new Response(minimalCSDL, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    // `Headers.set` needs a ByteString; each of these used to pass validation
+    // and then throw inside the fetch, surfacing as a 500.
+    for (const value of ['caf\u20ac', 'a\ud83d\ude00b', 'a\u0100b']) {
+      const res = await request(createApp())
+        .post('/api/parse/url')
+        .send({
+          url: 'https://windchill.example.com/odata/$metadata',
+          headers: { 'x-api-key': value },
+        });
+
+      expect(res.status, value).toBe(400);
+      expect(res.body.success, value).toBe(false);
+      expect(res.body.error, value).toMatch(/x-api-key/);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('baseUrl policy errors are caller errors', () => {
