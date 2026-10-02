@@ -464,12 +464,13 @@ function buildKeySegment(
 
 /**
  * What the JSON body needs while each parameter is coerced: whether the
- * IEEE754 string form is available for a value binary64 cannot carry, and
- * whether it was actually used, so the caller can declare the matching
- * content type.
+ * IEEE754 string form is available for a value binary64 cannot carry, whether
+ * the declared parameter puts every Int64/Decimal into that form, and whether
+ * it was actually used, so the caller can declare the matching content type.
  */
 interface BodyEncoding {
   ieee754Compatible: boolean;
+  stringEncodeAll: boolean;
   stringEncodesIeee754: boolean;
 }
 
@@ -589,6 +590,15 @@ function coerceScalar(
       // `formatV4Literal` maps the string "null" to a null literal; in a JSON
       // body null is the value, never the string.
       throw new Error(`Invalid ${type} value: ${String(value)} (expected a number)`);
+    }
+    // OData JSON Format v4.01 §3.2 "Controlling the Representation of
+    // Numbers": with IEEE754Compatible=true the service MUST serialize
+    // Edm.Int64 and Edm.Decimal numbers as strings. The parameter is declared
+    // for the whole body, so once any value forces the flip, every
+    // Int64/Decimal in it — exact ones included — takes the string form
+    // rather than emitting a mixed payload.
+    if (encoding.stringEncodeAll && (type === 'Edm.Int64' || type === 'Edm.Decimal')) {
+      return literal;
     }
     if (INTEGER_TYPES.has(type) && BigInt(JSON.stringify(num)) !== BigInt(literal)) {
       // `BigInt(literal) !== BigInt(num)` is not enough: `num` can hold the
@@ -1690,18 +1700,34 @@ function buildBody(
   metadata: ODataMetadata,
   ieee754Compatible: boolean,
 ): { body: Record<string, unknown>; contentType: string } {
-  const encoding: BodyEncoding = { ieee754Compatible, stringEncodesIeee754: false };
-  const body: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(parameters)) {
-    const type = declaredParameterType(item, name);
-    body[name] = type ? coerceBodyValue(type, value, metadata, encoding) : value;
+  const build = (
+    stringEncodeAll: boolean,
+  ): { body: Record<string, unknown>; encoding: BodyEncoding } => {
+    const encoding: BodyEncoding = {
+      ieee754Compatible,
+      stringEncodeAll,
+      stringEncodesIeee754: false,
+    };
+    const body: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(parameters)) {
+      const type = declaredParameterType(item, name);
+      body[name] = type ? coerceBodyValue(type, value, metadata, encoding) : value;
+    }
+    return { body, encoding };
+  };
+
+  const plain = build(false);
+  if (!plain.encoding.stringEncodesIeee754) {
+    // Nothing needed the string form, so the body keeps bare JSON numbers and
+    // the plain media type.
+    return { body: plain.body, contentType: 'application/json' };
   }
+  // §4.1 "Header Content-Type": requests MUST include the IEEE754Compatible
+  // parameter if Edm.Int64 and Edm.Decimal numbers are represented as strings.
+  // Rebuild with the body-wide string form (§3.2), so the declared parameter
+  // covers every Int64/Decimal value, not only the inexact one that forced it.
   return {
-    body,
-    // The string form is only emitted when a value needs it, so a body whose
-    // numbers are all exact keeps the plain media type.
-    contentType: encoding.stringEncodesIeee754
-      ? 'application/json;IEEE754Compatible=true'
-      : 'application/json',
+    body: build(true).body,
+    contentType: 'application/json;IEEE754Compatible=true',
   };
 }

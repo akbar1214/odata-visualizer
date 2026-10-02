@@ -18,6 +18,13 @@ export interface CreateAppOptions {
   mcp?: boolean;
   /** Allow load_metadata over HTTP. Defaults to MCP_ALLOW_LOAD === "1". */
   allowLoadMetadata?: boolean;
+  /**
+   * Emit Edm.Int64/Edm.Decimal body values as strings under
+   * `application/json;IEEE754Compatible=true`. Defaults to
+   * MCP_IEEE754_COMPATIBLE !== "0"; when false the plain content type is used
+   * and a value a JSON number cannot carry exactly is refused.
+   */
+  ieee754Compatible?: boolean;
   /** Hostnames allowed in the Host header for /mcp. Defaults to MCP_ALLOWED_HOSTS or localhost. */
   allowedHosts?: string[];
   /** Bearer token required for the REST API. Defaults to API_TOKEN. */
@@ -103,6 +110,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     mountMcp(app, metadataStore.accessors, {
       token: mcpToken,
       allowLoadMetadata: options.allowLoadMetadata ?? process.env['MCP_ALLOW_LOAD'] === '1',
+      ieee754Compatible: options.ieee754Compatible ?? process.env['MCP_IEEE754_COMPATIBLE'] !== '0',
       allowedHosts: options.allowedHosts ?? parseList(process.env['MCP_ALLOWED_HOSTS']),
       maxSessions: options.maxSessions,
       sessionIdleMs: options.sessionIdleMs,

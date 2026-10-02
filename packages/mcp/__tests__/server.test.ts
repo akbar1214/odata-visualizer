@@ -12,6 +12,19 @@ const windchillXml = readFileSync(
   'utf-8',
 );
 
+/** A minimal action with an Edm.Int64 parameter, for the content-type choice. */
+const numericActionCsdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Num" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <Action Name="Adjust">
+        <Parameter Name="Big" Type="Edm.Int64" />
+      </Action>
+      <EntityContainer Name="Container" />
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
 const EXPECTED_TOOLS = [
   'build_action_invocation',
   'build_function_invocation',
@@ -118,5 +131,24 @@ describe('createMcpServer', () => {
     const result = await client.callTool({ name: 'list_entities', arguments: { limit: 1 } });
     expect(result.isError).toBeFalsy();
     expect(resultText(result)).toContain('WindchillEntity');
+  });
+
+  it('refuses an unrepresentable Int64 body value when ieee754Compatible is disabled', async () => {
+    // The option must reach the tool handler through createMcpServer, not only
+    // through a direct createToolHandler embedder.
+    const store = createMetadataStore();
+    store.set(await parseCSDL(numericActionCsdl), {
+      sourceName: 'numeric.xml',
+      sourceType: 'file',
+    });
+    const client = await connect(store, { ieee754Compatible: false });
+
+    const result = await client.callTool({
+      name: 'build_action_invocation',
+      arguments: { actionName: 'Adjust', parameters: { Big: '9007199254740993' } },
+    });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('Invalid Edm.Int64');
+    await client.close();
   });
 });

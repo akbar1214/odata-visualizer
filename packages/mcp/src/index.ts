@@ -24,7 +24,12 @@ async function main() {
     }
   }
 
-  const server = createMcpServer(store, { allowLoadMetadata: true });
+  const server = createMcpServer(store, {
+    allowLoadMetadata: true,
+    // The stdio surface has no CLI flags; like the HTTP surface, the escape
+    // hatch from IEEE754 string encoding is MCP_IEEE754_COMPATIBLE=0.
+    ieee754Compatible: process.env['MCP_IEEE754_COMPATIBLE'] !== '0',
+  });
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
