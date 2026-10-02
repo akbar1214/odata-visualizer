@@ -453,6 +453,11 @@ const RESOURCE_SEGMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/
  * cannot validate. `queryValidation.test.ts` pins that decision; supporting
  * them needs a real expression validator, not a wider pattern here.
  *
+ * The gap also applies after a type prefix, because `selectItem`'s
+ * `( optionallyQualifiedEntityTypeName / … ) "/" ( selectProperty / … )`
+ * alternative puts a `selectProperty` (options and all) after the prefix, so
+ * `NS.Part/Addresses($filter=…;$top=5)` is unsupported for the same reason.
+ *
  * This previously used the plain-identifier matcher, which rejected `*` and
  * every structural path — the two most common shapes in practice.
  */

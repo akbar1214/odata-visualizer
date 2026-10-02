@@ -227,9 +227,7 @@ describe('odata-demo-metadata.xml', () => {
     );
     const model = await parseCSDL(xml);
 
-    const suppliers = model.entityContainers[0]!.entitySets.find(
-      (s) => s.name === 'Suppliers',
-    )!;
+    const suppliers = model.entityContainers[0]!.entitySets.find((s) => s.name === 'Suppliers')!;
     // `Target="ODataDemo.DemoService/Suppliers"` — the qualified container form.
     expect(suppliers.annotations).toBeDefined();
 

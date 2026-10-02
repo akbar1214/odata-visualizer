@@ -136,8 +136,8 @@ export const IDENTIFIER_UNSAFE: ReadonlySet<string> = Object.freeze(
  * Percent-encode a metadata-derived identifier for its position in a URL.
  *
  * The default is `IDENTIFIER_UNSAFE`; a caller can pass a stricter set. MCP
- * emits whole URLs and keeps the default, because `&` and `#` are legal in the
- * path itself.
+ * emits whole URLs and keeps the default, because `&` is legal raw in a path
+ * and the default already encodes `#`.
  */
 export function encodeIdentifierForUrl(
   identifier: string,

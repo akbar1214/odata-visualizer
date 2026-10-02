@@ -377,8 +377,13 @@ describe('Windchill-like CSDL', () => {
     expect(part?.annotations?.['PTC.Operations']).toContain('CREATE');
     expect(part?.label).toBe('A product structure part');
 
-    const description = part?.properties.find((p) => p.name === 'description' ||
-      result.entities.find((e) => e.name === 'WindchillEntity')?.properties.find((p) => p.name === 'description'));
+    const description = part?.properties.find(
+      (p) =>
+        p.name === 'description' ||
+        result.entities
+          .find((e) => e.name === 'WindchillEntity')
+          ?.properties.find((p) => p.name === 'description'),
+    );
     // description lives on the base type
     const base = result.entities.find((e) => e.name === 'WindchillEntity');
     const descProp = base?.properties.find((p) => p.name === 'description');
@@ -467,8 +472,7 @@ describe('Windchill-like CSDL', () => {
   it('derives relationships from V4 navigation properties', async () => {
     const result = await parseCSDL(windchillCSDL);
     const rel = result.relationships.find(
-      (r) =>
-        r.from.entity === 'PTC.ProdMgmt.Part' && r.to.entity === 'PTC.ProdMgmt.CADDocument',
+      (r) => r.from.entity === 'PTC.ProdMgmt.Part' && r.to.entity === 'PTC.ProdMgmt.CADDocument',
     );
     expect(rel).toBeDefined();
     expect(rel?.name).toBe('Part_Documents');

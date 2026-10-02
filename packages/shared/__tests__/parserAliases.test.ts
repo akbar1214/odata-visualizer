@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { parseCSDL } from '../src/parser.js';
-import { getEffectiveKeys, getEffectiveProperties, resolveInheritanceChain } from '../src/resolve.js';
+import {
+  getEffectiveKeys,
+  getEffectiveProperties,
+  resolveInheritanceChain,
+} from '../src/resolve.js';
 
 /**
  * CSDL lets a schema alias its own namespace with `Schema/@Alias`, and every

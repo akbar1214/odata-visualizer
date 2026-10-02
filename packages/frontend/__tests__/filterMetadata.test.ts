@@ -65,11 +65,7 @@ describe('filterMetadata', () => {
     const metadata = await load();
     // Customer has an "Orders" navigation property, so it matches "order".
     const result = filterMetadata(metadata, { search: 'order' });
-    expect(result.entities.map((e) => e.name).sort()).toEqual([
-      'Customer',
-      'Order',
-      'OrderLine',
-    ]);
+    expect(result.entities.map((e) => e.name).sort()).toEqual(['Customer', 'Order', 'OrderLine']);
     expect(result.relationships).toHaveLength(2);
   });
 

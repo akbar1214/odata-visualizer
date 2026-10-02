@@ -34,8 +34,6 @@ describe('shared package resolution', () => {
     // or it would be swallowed by the `shared` entry.
     const index = (specifier: string) => aliases.findIndex((a) => a.find === specifier);
 
-    expect(index('@odata-visualizer/shared/load')).toBeLessThan(
-      index('@odata-visualizer/shared'),
-    );
+    expect(index('@odata-visualizer/shared/load')).toBeLessThan(index('@odata-visualizer/shared'));
   });
 });

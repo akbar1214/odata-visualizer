@@ -3,7 +3,9 @@ import { validateMetadataUrl } from '../src/services/urlPolicy.js';
 
 describe('validateMetadataUrl', () => {
   it('accepts http(s) URLs when no allowlist is configured', () => {
-    expect(() => validateMetadataUrl('https://windchill.example.com/odata/$metadata')).not.toThrow();
+    expect(() =>
+      validateMetadataUrl('https://windchill.example.com/odata/$metadata'),
+    ).not.toThrow();
     expect(() => validateMetadataUrl('http://windchill.example.com/odata/$metadata')).not.toThrow();
   });
 

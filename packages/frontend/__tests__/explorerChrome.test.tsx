@@ -43,9 +43,7 @@ describe('MetadataExplorer chrome', () => {
     const complexChip = screen.getByRole('button', { name: 'Complex' });
     expect(complexChip).toBeDefined();
     // "All" is the pressed default; the tab of the same name is separate.
-    expect(screen.getByRole('button', { name: 'All' }).getAttribute('aria-pressed')).toBe(
-      'true',
-    );
+    expect(screen.getByRole('button', { name: 'All' }).getAttribute('aria-pressed')).toBe('true');
   });
 
   it('does not show result counts or chips on the stats tab', async () => {
