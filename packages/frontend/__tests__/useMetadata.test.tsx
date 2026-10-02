@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act, cleanup } from '@testing-library/react';
+import { StrictMode } from 'react';
 import type { ODataEntity, ODataMetadata } from '@odata-visualizer/shared';
 import { useMetadata } from '../src/hooks/useMetadata';
 
@@ -36,6 +37,14 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 const pinnedInfo = {
@@ -92,6 +101,34 @@ describe('useMetadata hydration', () => {
     expect(result.current.pinned).toBe(true);
     expect(result.current.sourceName).toBe('pinned.xml');
     expect(result.current.fileSizeBytes).toBe(2048);
+  });
+
+  it('ignores a stale hydration response from a superseded mount', async () => {
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    fetchMock
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+
+    const { result } = renderHook(() => useMetadata(), { wrapper: StrictMode });
+
+    // StrictMode mounts the effect twice, so the first fetch is superseded.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      second.resolve(
+        jsonResponse({ success: true, pinned: false, metadata: makeMetadata(2), info: null }),
+      );
+    });
+    await waitFor(() => expect(result.current.metadata?.entities).toHaveLength(2));
+
+    await act(async () => {
+      first.resolve(
+        jsonResponse({ success: true, pinned: false, metadata: makeMetadata(1), info: null }),
+      );
+    });
+
+    expect(result.current.metadata?.entities).toHaveLength(2);
   });
 });
 

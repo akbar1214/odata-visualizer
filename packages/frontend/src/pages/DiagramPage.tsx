@@ -52,7 +52,9 @@ export function DiagramPage({
             <div className="flex items-center gap-4 text-sm text-engineering-200">
               {pinned && (
                 <span className="rounded border border-engineering-400 px-2 py-0.5 text-xs text-engineering-100">
-                  Metadata pinned by the server: {sourceName}
+                  {sourceName
+                    ? `Metadata pinned by the server: ${sourceName}`
+                    : 'Metadata pinned by the server'}
                 </span>
               )}
               <span>{metadata.entities.length} entities</span>
