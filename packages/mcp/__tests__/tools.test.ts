@@ -1501,6 +1501,9 @@ const boundCompositionCSDL = `<?xml version="1.0" encoding="utf-8"?>
         <Key><PropertyRef Name="Id" /></Key>
         <Property Name="Id" Type="Edm.String" Nullable="false" />
       </EntityType>
+      <ComplexType Name="Addr">
+        <Property Name="Street" Type="Edm.String" />
+      </ComplexType>
       <Function Name="AllOf" IsBound="true">
         <Parameter Name="it" Type="Collection(N.A)" />
         <ReturnType Type="Collection(N.C)" />
@@ -1527,6 +1530,55 @@ const boundCompositionCSDL = `<?xml version="1.0" encoding="utf-8"?>
         <Parameter Name="required" Type="Edm.String" />
         <ReturnType Type="N.C" />
       </Function>
+      <Function Name="Sup" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <Parameter Name="a" Type="Edm.String" />
+        <Parameter Name="b" Type="Edm.String" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="Sup" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <Parameter Name="a" Type="Edm.Int32" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="BT" IsBound="true">
+        <Parameter Name="it" Type="N.D" />
+        <Parameter Name="factor" Type="Edm.String" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="BT" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <Parameter Name="factor" Type="Edm.Int32" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="Z" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <Parameter Name="x" Type="Edm.Int32" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="Z" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="OneAddr" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <ReturnType Type="N.Addr" />
+      </Function>
+      <Function Name="ManyAddr" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <ReturnType Type="Collection(N.Addr)" />
+      </Function>
+      <Function Name="NoReturn" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+      </Function>
+      <Action Name="BAct" IsBound="true">
+        <Parameter Name="it" Type="N.D" />
+        <Parameter Name="factor" Type="Edm.String" />
+      </Action>
+      <Action Name="BAct" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <Parameter Name="factor" Type="Edm.Int32" />
+      </Action>
       <EntityContainer Name="C1">
         <EntitySet Name="As" EntityType="N.A" />
         <EntitySet Name="Cs" EntityType="N.C" />
@@ -1656,6 +1708,276 @@ describe('bound function composition', () => {
     expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.Numbers()?$top=3");
     expect(textOf(result)).toContain('$select');
     expect(textOf(result)).toContain('not applicable');
+  });
+});
+
+/**
+ * #65: overload selection is by the most specific covering signature and by
+ * the binding type the entity set exposes; a single-valued structured return
+ * keeps only the options OData V4.01 Part 2 §5.1 allows on it.
+ */
+describe('bound overload specificity and return shapes', () => {
+  function emittedUrl(text: string): string {
+    const line = text.split('\n').find((l) => l.startsWith('GET ') || l.startsWith('POST '));
+    return (line ?? '').replace(/^(GET|POST) /, '');
+  }
+
+  it('prefers the exact overload over a superset that covers it', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'Sup',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      parameters: { a: 2 },
+    });
+
+    expect(result.isError).toBeUndefined();
+    // The `(a, b)` overload covers `a`, but the `(a)` overload is exact, so
+    // the false "b was not supplied" note must not appear.
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.Sup(a=2)");
+    expect(textOf(result)).not.toContain('"b"');
+  });
+
+  it('types a literal by the exact overload, not the covering superset', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'Sup',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      parameters: { a: 2 },
+    });
+
+    // The superset types `a` as Edm.String, which would render `a='2'`.
+    expect(textOf(result)).toContain('N.Sup(a=2)');
+    expect(textOf(result)).not.toContain("a='2'");
+  });
+
+  it('filters overloads by the binding type of the entity set', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'BT',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      parameters: { factor: 2 },
+    });
+
+    // `BT(N.D, Edm.String)` is declared first; `As` exposes N.A, whose
+    // overload types factor as Edm.Int32.
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.BT(factor=2)");
+  });
+
+  it('filters action overloads by the binding type too', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_action_invocation', {
+      actionName: 'BAct',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      parameters: { factor: '2' },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(textOf(result)).toContain('"factor": 2');
+    expect(textOf(result)).not.toContain('"factor": "2"');
+  });
+
+  it('accepts a base-bound function on a derived entity set', async () => {
+    const { parseCSDL } = await import('@odata-visualizer/shared');
+    const csdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base"><Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" /></EntityType>
+      <EntityType Name="Derived" BaseType="N.Base" />
+      <EntityType Name="C" />
+      <Function Name="OnBase" IsBound="true">
+        <Parameter Name="it" Type="N.Base" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <EntityContainer Name="C1"><EntitySet Name="Deriveds" EntityType="N.Derived" /></EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+    const store = createMetadataStore();
+    store.set(await parseCSDL(csdl), { sourceName: 'derived.xml', sourceType: 'file' });
+    const handler = createToolHandler(store, { allowLoadMetadata: false });
+
+    const result = await handler('build_function_invocation', {
+      functionName: 'OnBase',
+      entitySet: 'Deriveds',
+      keys: { Id: '1' },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/Deriveds('1')/N.OnBase");
+  });
+
+  it('selects the zero-parameter overload when no parameters are supplied', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'Z',
+      entitySet: 'As',
+      keys: { Id: '1' },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.Z");
+    expect(textOf(result)).not.toContain('"x"');
+  });
+
+  it('keeps only $select/$expand on a single complex return', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'OneAddr',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      select: ['Street'],
+      top: 3,
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.OneAddr()?$select=Street");
+    expect(textOf(result)).toContain('$top');
+    expect(textOf(result)).toContain('not applicable');
+  });
+
+  it('drops paging from a single entity return too', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'B',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      filters: [{ property: 'Id', operator: 'eq', value: '1' }],
+      top: 3,
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.B");
+    expect(textOf(result)).toContain('$filter');
+    expect(textOf(result)).toContain('$top');
+    expect(textOf(result)).toContain('not applicable');
+  });
+
+  it('keeps $select and paging on a collection of complex values', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'ManyAddr',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      select: ['Street'],
+      top: 3,
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe(
+      "<serviceRoot>/As('1')/N.ManyAddr()?$select=Street&$top=3",
+    );
+  });
+
+  it('keeps paging on a collection of entities', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'AllOf',
+      entitySet: 'As',
+      top: 3,
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe('<serviceRoot>/As/N.AllOf()?$top=3');
+  });
+
+  it('drops every option from a return that declares no type', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'NoReturn',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      select: ['Id'],
+      top: 3,
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.NoReturn");
+    expect(textOf(result)).toContain('$select');
+    expect(textOf(result)).toContain('$top');
+    expect(textOf(result)).toContain('not applicable');
+  });
+
+  it('refuses a collection-bound function on an entity set of another type', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'AllOf',
+      entitySet: 'Cs',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('is bound to entity set "Cs"');
+    expect(textOf(result)).toContain('N.AllOf(it)');
+  });
+
+  it('refuses a keyed invocation on an entity set of another type', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'B',
+      entitySet: 'Cs',
+      keys: { Id: '1' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('is bound to entity set "Cs"');
+  });
+
+  it('lists every function overload in get_function_details', async () => {
+    const handler = await boundCompositionHandler();
+    const details = await handler('get_function_details', { name: 'B' });
+    const text = textOf(details);
+
+    expect(text).toContain('Overload 1 of 2');
+    expect(text).toContain('Overload 2 of 2');
+    expect(text).toContain('it: N.A (binding)');
+    expect(text).toContain('factor: Edm.Int32');
+  });
+
+  it('lists every action overload in get_action_details', async () => {
+    const handler = await boundCompositionHandler();
+    const details = await handler('get_action_details', { name: 'BAct' });
+    const text = textOf(details);
+
+    expect(text).toContain('Overload 1 of 2');
+    expect(text).toContain('Overload 2 of 2');
+    expect(text).toContain('factor: Edm.String');
+    expect(text).toContain('factor: Edm.Int32');
+  });
+
+  it('notes that keys are ignored for a collection-bound function', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'AllOf',
+      entitySet: 'As',
+      keys: { Id: '1' },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(textOf(result)).toContain('keys');
+    expect(textOf(result)).toContain('ignored');
+  });
+
+  it('reads the binding parameter by flag, not by position', async () => {
+    const { parseCSDL } = await import('@odata-visualizer/shared');
+    const metadata = await parseCSDL(boundCompositionCSDL);
+    const fn = metadata.functions.find((f) => f.name === 'NeedsParam')!;
+    // The parser only ever flags index 0; reordering pins the flag contract
+    // the invocation builder already honours.
+    fn.parameters = [fn.parameters[1], { ...fn.parameters[0], isBinding: true }];
+    const store = createMetadataStore();
+    store.set(metadata, { sourceName: 'swapped.xml', sourceType: 'file' });
+    const handler = createToolHandler(store, { allowLoadMetadata: false });
+
+    const details = await handler('get_function_details', { name: 'NeedsParam' });
+
+    expect(details.isError).toBeUndefined();
+    expect(textOf(details)).toContain('<serviceRoot>/As(Id=<Id>)/N.NeedsParam');
   });
 });
 
