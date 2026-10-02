@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { fileURLToPath } from 'node:url';
-import { createToolHandler, handleToolCall, getMetadata, resetMetadata } from '../src/tools.js';
+import {
+  createToolHandler,
+  handleToolCall,
+  getMetadata,
+  resetMetadata,
+  type ToolHandlerOptions,
+} from '../src/tools.js';
 import { createMetadataStore } from '../src/store.js';
 import { textOf } from './textOf.js';
 
@@ -1146,6 +1152,7 @@ const numericCSDL = `<?xml version="1.0" encoding="utf-8"?>
         <Parameter Name="Precise" Type="Edm.Single" />
         <Parameter Name="Grade" Type="Num.Score" />
         <Parameter Name="Counts" Type="Collection(Edm.Int32)" />
+        <Parameter Name="Bigs" Type="Collection(Edm.Int64)" />
       </Action>
       <TypeDefinition Name="Score" UnderlyingType="Edm.Int32" />
       <EntityContainer Name="Container">
@@ -1156,11 +1163,11 @@ const numericCSDL = `<?xml version="1.0" encoding="utf-8"?>
 </edmx:Edmx>`;
 
 /** Calls `build_action_invocation` on an unbound action with numeric parameters. */
-async function adjust(parameters: Record<string, unknown>) {
+async function adjust(parameters: Record<string, unknown>, options: ToolHandlerOptions = {}) {
   const { parseCSDL } = await import('@odata-visualizer/shared');
   const store = createMetadataStore();
   store.set(await parseCSDL(numericCSDL), { sourceName: 'numeric.xml', sourceType: 'file' });
-  const handler = createToolHandler(store, { allowLoadMetadata: false });
+  const handler = createToolHandler(store, { allowLoadMetadata: false, ...options });
   return handler('build_action_invocation', { actionName: 'Adjust', parameters });
 }
 
@@ -1221,25 +1228,63 @@ describe('numeric action body coercion', () => {
     }
   });
 
-  it('rejects an Int64 literal that a JSON number cannot carry exactly', async () => {
+  /**
+   * A JSON number is binary64 and stops carrying integers exactly at 2^53, so
+   * the body path emits the validated literal as a JSON string instead and
+   * declares `application/json;IEEE754Compatible=true`: the OData JSON Format
+   * lets the service read that string back exactly. Both the printed
+   * Content-Type and the curl example must carry the same media type.
+   */
+  it('accepts an Int64 past 2^53 as an IEEE754Compatible JSON string', async () => {
     // 2^53 + 1: in EDM Int64 range, but Number() rounds it to 2^53.
     const result = await adjust({ Big: '9007199254740993' });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain('Invalid Edm.Int64');
-    expect(textOf(result)).toContain('exact');
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    expect(text).toContain('"Big": "9007199254740993"');
+    expect(text).toContain('Content-Type: application/json;IEEE754Compatible=true');
+    expect(text).toContain("-H 'Content-Type: application/json;IEEE754Compatible=true'");
+    expect(text).not.toContain("-H 'Content-Type: application/json'");
   });
 
-  it('rejects Edm.Int64 MAX for the same reason', async () => {
-    const result = await adjust({ Big: '9223372036854775807' });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain('Invalid Edm.Int64');
-    expect(textOf(result)).toContain('exact');
+  it('string-encodes every Int64 whose JSON digits would differ from the input', async () => {
+    // MAX rounds to 2^63; each of the others has an exact `Number`, but the
+    // shortest round-tripping decimal JSON.stringify emits uses different
+    // digits: 2^62 -> ...388000, 2^60 -> ...847000, MIN -> ...776000.
+    for (const input of [
+      '9223372036854775807',
+      '4611686018427387904',
+      '1152921504606846976',
+      '-9223372036854775808',
+      '-9007199254740993',
+    ]) {
+      const result = await adjust({ Big: input });
+      expect(result.isError, `${input} must be accepted`).toBeUndefined();
+      const text = textOf(result);
+      expect(text).toContain('IEEE754Compatible=true');
+      expect(emittedBody(text)['Big'], `${input} must be emitted verbatim`).toBe(input);
+    }
+  });
+
+  it('keeps the refusal when IEEE754Compatible is disabled', async () => {
+    // The plain `application/json` content type cannot carry the digits, so
+    // the old refusal remains correct wherever string encoding is unavailable.
+    for (const input of ['9007199254740993', '9223372036854775807', '-9007199254740993']) {
+      const result = await adjust({ Big: input }, { ieee754Compatible: false });
+      expect(result.isError, `${input} must be refused`).toBe(true);
+      expect(textOf(result)).toContain('Invalid Edm.Int64');
+      expect(textOf(result)).toContain('exact');
+    }
   });
 
   it('accepts an Int64 value that survives the round trip through a number', async () => {
     const result = await adjust({ Big: '9007199254740992' }); // 2^53
     expect(result.isError).toBeUndefined();
-    expect(textOf(result)).toContain('"Big": 9007199254740992');
+    const text = textOf(result);
+    expect(text).toContain('"Big": 9007199254740992');
+    // Exactly representable: no gratuitous string encoding or content type.
+    expect(text).toContain('Content-Type: application/json\n');
+    expect(text).toContain("-H 'Content-Type: application/json'");
+    expect(text).not.toContain('IEEE754Compatible');
   });
 
   it('emits an accepted Int64 with exactly the digits the caller sent', async () => {
@@ -1251,28 +1296,6 @@ describe('numeric action body coercion', () => {
       const body = emittedBody(textOf(result));
       expect(String(body['Big']), `${input} must be emitted verbatim`).toBe(input);
     }
-  });
-
-  it('rejects every Int64 whose JSON digits would differ from the input', async () => {
-    // Each of these has an exact `Number`, so the old BigInt(num) check passed
-    // them, but the shortest round-tripping decimal JSON.stringify emits uses
-    // different digits: 2^62 -> ...388000, 2^60 -> ...847000, MIN -> ...776000.
-    for (const input of ['4611686018427387904', '1152921504606846976', '-9223372036854775808']) {
-      const result = await adjust({ Big: input });
-      expect(result.isError, `${input} must be rejected`).toBe(true);
-      expect(textOf(result)).toContain('Invalid Edm.Int64');
-      expect(textOf(result)).toContain('exact');
-    }
-  });
-
-  it('rejects negative Int64 values whose JSON digits would differ', async () => {
-    // -9007199254740993 rounds to -...992; the sign decides which side of the
-    // comparison the rounded value lands on, so the negative case is pinned
-    // separately from 2^53 + 1.
-    const result = await adjust({ Big: '-9007199254740993' });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain('Invalid Edm.Int64');
-    expect(textOf(result)).toContain('exact');
   });
 
   it('rejects Int64 input past the EDM 64-bit range', async () => {
@@ -1336,12 +1359,21 @@ describe('numeric action body coercion', () => {
     expect(textOf(bad)).toContain('Invalid Edm.Int32');
   });
 
+  it('string-encodes a collection element and marks the body compatible', async () => {
+    const result = await adjust({ Bigs: ['9007199254740993'] });
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    expect(emittedBody(text)['Bigs']).toEqual(['9007199254740993']);
+    expect(text).toContain('IEEE754Compatible=true');
+  });
+
   /**
    * Edm.Decimal is a decimal type: the JSON body must denote the same decimal
    * the caller sent. `Number` rounds most 38-digit values, and JSON.stringify
    * prints the shortest round-tripping decimal, so both steps need checking —
    * `BigInt` cannot be used because Decimal literals may have a fraction or an
-   * exponent.
+   * exponent. A decimal that survives neither test is emitted as the literal
+   * string under the compatible content type, exactly like Edm.Int64.
    */
   it('accepts a Decimal whose JSON serialization denotes the same value', async () => {
     const cases: Array<[string, number]> = [
@@ -1359,16 +1391,32 @@ describe('numeric action body coercion', () => {
     }
   });
 
-  it('rejects a Decimal whose JSON serialization denotes a different value', async () => {
+  it('emits a Decimal past binary64 precision as an IEEE754Compatible string', async () => {
     // 2^53 + 1 -> JSON prints ...992; a 20-significant-digit fraction
-    // collapses to 1. The emitted body would silently carry a different
-    // decimal than the caller sent.
-    for (const input of ['9007199254740993', '1.0000000000000000001']) {
+    // collapses to 1. A bare JSON number would silently carry a different
+    // decimal than the caller sent, so the literal becomes a JSON string.
+    for (const input of ['9007199254740993', '1.0000000000000000001', '0.30000000000000000001']) {
       const result = await adjust({ Money: input });
-      expect(result.isError, `${input} must be rejected`).toBe(true);
-      expect(textOf(result)).toContain('Invalid Edm.Decimal');
-      expect(textOf(result)).toContain('exact');
+      expect(result.isError, `${input} must be accepted`).toBeUndefined();
+      const text = textOf(result);
+      expect(text).toContain('IEEE754Compatible=true');
+      expect(emittedBody(text)['Money'], `${input} must be emitted verbatim`).toBe(input);
     }
+  });
+
+  it('keeps the 38-digit Decimal cap under IEEE754Compatible encoding', async () => {
+    // The cap is a deliberate product limit, not a binary64 artifact, so it
+    // must not be relaxed by the string encoding.
+    const result = await adjust({ Money: '9'.repeat(39) });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('Invalid Edm.Decimal');
+  });
+
+  it('keeps the Decimal refusal when IEEE754Compatible is disabled', async () => {
+    const result = await adjust({ Money: '1.0000000000000000001' }, { ieee754Compatible: false });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('Invalid Edm.Decimal');
+    expect(textOf(result)).toContain('exact');
   });
 
   it('coerces Edm.Single to a JSON number, not a string', async () => {

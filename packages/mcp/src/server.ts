@@ -33,6 +33,7 @@ export function createMcpServer(
 
   const handleToolCall = createToolHandler(accessors, {
     allowLoadMetadata: options.allowLoadMetadata,
+    ieee754Compatible: options.ieee754Compatible,
   });
 
   const filterSchema = z.object({

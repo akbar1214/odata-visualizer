@@ -56,6 +56,14 @@ export type ToolHandler = (name: string, args: Record<string, unknown>) => Promi
 export interface ToolHandlerOptions {
   /** When false, the load_metadata tool is rejected (e.g. the HTTP server). */
   allowLoadMetadata?: boolean;
+  /**
+   * When true (the default), an Edm.Int64/Edm.Decimal action body value that a
+   * bare JSON number cannot carry verbatim is emitted as a JSON string and the
+   * body declares `application/json;IEEE754Compatible=true`, which OData
+   * services read back exactly. When false, the plain `application/json`
+   * content type cannot carry it, so the value is refused instead.
+   */
+  ieee754Compatible?: boolean;
 }
 
 const DEFAULT_LIMIT = 50;
@@ -454,13 +462,29 @@ function buildKeySegment(
     .join(',')})`;
 }
 
-function coerceBodyValue(type: string, value: unknown, metadata: ODataMetadata): unknown {
+/**
+ * What the JSON body needs while each parameter is coerced: whether the
+ * IEEE754 string form is available for a value binary64 cannot carry, and
+ * whether it was actually used, so the caller can declare the matching
+ * content type.
+ */
+interface BodyEncoding {
+  ieee754Compatible: boolean;
+  stringEncodesIeee754: boolean;
+}
+
+function coerceBodyValue(
+  type: string,
+  value: unknown,
+  metadata: ODataMetadata,
+  encoding: BodyEncoding,
+): unknown {
   const collection = unwrapCollection(type);
   if (collection?.isCollection) {
     const items = Array.isArray(value) ? value : [value];
-    return items.map((v) => coerceScalar(collection.type, v, metadata));
+    return items.map((v) => coerceScalar(collection.type, v, metadata, encoding));
   }
-  return coerceScalar(type, value, metadata);
+  return coerceScalar(type, value, metadata, encoding);
 }
 
 /**
@@ -500,11 +524,36 @@ function denotesSameDecimal(left: string, right: string): boolean {
   return a.negative === b.negative && a.digits === b.digits && a.exponent === b.exponent;
 }
 
-function coerceScalar(type: string, value: unknown, metadata: ODataMetadata): unknown {
+/**
+ * A validated literal that binary64 cannot carry verbatim: emit it as a JSON
+ * string when the IEEE754-compatible content type was chosen, and refuse it
+ * under the plain content type, where a bare JSON number would lose digits.
+ */
+function encodeInexactNumber(
+  type: string,
+  value: unknown,
+  literal: string,
+  encoding: BodyEncoding,
+): string {
+  if (!encoding.ieee754Compatible) {
+    throw new Error(
+      `Invalid ${type} value: ${String(value)} (cannot be represented exactly as a JSON number)`,
+    );
+  }
+  encoding.stringEncodesIeee754 = true;
+  return literal;
+}
+
+function coerceScalar(
+  type: string,
+  value: unknown,
+  metadata: ODataMetadata,
+  encoding: BodyEncoding,
+): unknown {
   if (value === null || value === undefined) return value;
 
   const typeDef = metadata.typeDefinitions.find((t) => t.qualifiedName === type || t.name === type);
-  if (typeDef) return coerceScalar(typeDef.underlyingType, value, metadata);
+  if (typeDef) return coerceScalar(typeDef.underlyingType, value, metadata, encoding);
 
   if (type === 'Edm.Boolean') {
     if (typeof value === 'boolean') return value;
@@ -531,7 +580,9 @@ function coerceScalar(type: string, value: unknown, metadata: ODataMetadata): un
     // valid. The JSON body needs the number behind that literal, so convert
     // only after validation, and only when the conversion is exact: `Number`
     // would otherwise turn `1e999` into `Infinity` (JSON `null`) and silently
-    // round Int64 values past 2^53.
+    // round Int64 values past 2^53. An inexact value is not refused outright:
+    // under `application/json;IEEE754Compatible=true` its literal travels as
+    // a JSON string, which the service reads back exactly.
     const literal = formatV4Literal(String(value), type);
     const num = Number(literal);
     if (!Number.isFinite(num)) {
@@ -547,17 +598,13 @@ function coerceScalar(type: string, value: unknown, metadata: ODataMetadata): un
       // never switches to exponent notation for them and `BigInt` always
       // parses the result. The set comes from the shared formatter so the
       // guard cannot drift out of step with the syntax it validated.
-      throw new Error(
-        `Invalid ${type} value: ${String(value)} (cannot be represented exactly as a JSON number)`,
-      );
+      return encodeInexactNumber(type, value, literal, encoding);
     }
     if (type === 'Edm.Decimal' && !denotesSameDecimal(literal, JSON.stringify(num))) {
       // Decimal is a decimal type, so the JSON text must denote the same
       // decimal the caller sent: `Number` may round it, and even when it does
       // not, `JSON.stringify` may print a different (shortest) spelling.
-      throw new Error(
-        `Invalid ${type} value: ${String(value)} (cannot be represented exactly as a JSON number)`,
-      );
+      return encodeInexactNumber(type, value, literal, encoding);
     }
     return num;
   }
@@ -592,6 +639,7 @@ export function createToolHandler(
   options: ToolHandlerOptions = {},
 ): ToolHandler {
   const allowLoadMetadata = options.allowLoadMetadata ?? true;
+  const ieee754Compatible = options.ieee754Compatible ?? true;
   const noMetadataMessage = allowLoadMetadata
     ? 'No metadata loaded. Call load_metadata first with a file path, URL, or the backend.'
     : 'No metadata loaded. Upload a file in the OData Visualizer UI first.';
@@ -1041,7 +1089,7 @@ export function createToolHandler(
           );
         }
 
-        return buildInvocation('POST', action.item, metadata, args, false);
+        return buildInvocation('POST', action.item, metadata, args, false, ieee754Compatible);
       }
 
       case 'build_function_invocation': {
@@ -1082,7 +1130,7 @@ export function createToolHandler(
           );
         }
 
-        return buildInvocation('GET', func.item, metadata, args, true);
+        return buildInvocation('GET', func.item, metadata, args, true, ieee754Compatible);
       }
 
       default:
@@ -1279,9 +1327,10 @@ function buildInvocation(
   metadata: ODataMetadata,
   args: Record<string, unknown>,
   isFunction: boolean,
+  ieee754Compatible: boolean,
 ): ToolResult {
   try {
-    return buildInvocationUnsafe(method, item, metadata, args, isFunction);
+    return buildInvocationUnsafe(method, item, metadata, args, isFunction, ieee754Compatible);
   } catch (error) {
     const label = isFunction ? 'function' : 'action';
     return errorResult(
@@ -1325,6 +1374,7 @@ function buildInvocationUnsafe(
   metadata: ODataMetadata,
   args: Record<string, unknown>,
   isFunction: boolean,
+  ieee754Compatible: boolean,
 ): ToolResult {
   const entitySetName = asString(args['entitySet']);
   const keys = (args['keys'] as Record<string, string> | undefined) ?? {};
@@ -1441,9 +1491,8 @@ function buildInvocationUnsafe(
     return textResult(lines.join('\n'));
   }
 
-  lines.push('Content-Type: application/json');
-
-  const body = buildBody(item, parameters, metadata);
+  const { body, contentType } = buildBody(item, parameters, metadata, ieee754Compatible);
+  lines.push(`Content-Type: ${contentType}`);
   lines.push('');
   lines.push('Body:');
   lines.push(JSON.stringify(body, null, 2));
@@ -1453,7 +1502,7 @@ function buildInvocationUnsafe(
     [
       `curl -X ${method}`,
       `  '${shellEscape(`${root}/${fullPath}`)}'`,
-      "  -H 'Content-Type: application/json'",
+      `  -H 'Content-Type: ${contentType}'`,
       `  -d '${shellEscape(JSON.stringify(body))}'`,
     ].join(' \\\n'),
   );
@@ -1639,11 +1688,20 @@ function buildBody(
   item: ODataAction | ODataFunction,
   parameters: Record<string, unknown>,
   metadata: ODataMetadata,
-): Record<string, unknown> {
+  ieee754Compatible: boolean,
+): { body: Record<string, unknown>; contentType: string } {
+  const encoding: BodyEncoding = { ieee754Compatible, stringEncodesIeee754: false };
   const body: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(parameters)) {
     const type = declaredParameterType(item, name);
-    body[name] = type ? coerceBodyValue(type, value, metadata) : value;
+    body[name] = type ? coerceBodyValue(type, value, metadata, encoding) : value;
   }
-  return body;
+  return {
+    body,
+    // The string form is only emitted when a value needs it, so a body whose
+    // numbers are all exact keeps the plain media type.
+    contentType: encoding.stringEncodesIeee754
+      ? 'application/json;IEEE754Compatible=true'
+      : 'application/json',
+  };
 }
