@@ -556,6 +556,88 @@ describe('buildODataQuery asserts the resolved resource segment', () => {
     expect(warnings[0]).toMatch(/could not be built/);
     expect(warnings[0]).toContain('Invalid entitySet');
   });
+
+  const containerSetCsdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityContainer Name="C1">
+        <EntitySet Name="Cont/Th#ings" EntityType="N.Thing" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('keeps the separators of a multi-segment fallback path while encoding each segment', async () => {
+    const model = await parseCSDL(containerSetCsdl);
+    const warnings: string[] = [];
+    const url = buildODataQuery(getDefaultQuery('Thing'), model, (message) =>
+      warnings.push(message),
+    );
+
+    // Encoding the whole path as one segment would emit `/Cont%2FTh%23ings`, a
+    // single segment naming no set. The `/` separator must survive, and the
+    // `#` in the second segment must not, so `assertResourceSegment` still
+    // refuses the name and this is the fallback path.
+    expect(url).toBe('/Cont/Th%23ings');
+    expect(url).not.toContain('%2F');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('Invalid entitySet');
+  });
+
+  const apostropheSetCsdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityContainer Name="C1">
+        <EntitySet Name="Own's" EntityType="N.Thing" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('encodes the fallback through the shared identifier encoder, not encodeURIComponent', async () => {
+    const model = await parseCSDL(apostropheSetCsdl);
+    const warnings: string[] = [];
+    const url = buildODataQuery(getDefaultQuery('Thing'), model, (message) =>
+      warnings.push(message),
+    );
+
+    // `encodeURIComponent` leaves `'` raw, unlike the shared identifier set,
+    // and `assertResourceSegment` refuses `Own's`, so this is the fallback.
+    // Emitting it raw would read as an OData string literal, not the set name.
+    expect(url).toBe('/Own%27s');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('Invalid entitySet');
+  });
+
+  it('names the encoding failure when a set name contains an unpaired surrogate', async () => {
+    const model = await loadModel();
+    const orders = model.entityContainers[0].entitySets.find((set) => set.name === 'Orders')!;
+    orders.name = 'Or\uD800ders';
+
+    const warnings: string[] = [];
+    const url = buildODataQuery(getDefaultQuery('Order'), model, (message) =>
+      warnings.push(message),
+    );
+
+    // No safe path can be emitted. Returning '' without naming the encoding
+    // failure let the caller attribute the empty preview to an entity set that
+    // is not exposed.
+    expect(url).toBe('');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/could not be encoded/);
+    expect(warnings[0]).toContain('unpaired surrogate');
+    expect(warnings[0]).not.toContain('could not be built');
+  });
 });
 
 /**
