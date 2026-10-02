@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseCSDL } from '../src/parser.js';
+import { getTraversalEdges } from '../src/paths.js';
 import {
   findEntitiesByName,
   getEffectiveKeys,
   getEffectiveProperties,
   getEffectiveNavigationProperties,
+  getTargetEntityName,
   resolveInheritanceChain,
 } from '../src/resolve.js';
 
@@ -698,7 +700,16 @@ describe('edmx:Include and edmx:Reference', () => {
       <EntityType Name="Thing">
         <Key><PropertyRef Name="Id" /></Key>
         <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Orders" Relationship="Ghost.R1" FromRole="Thing" ToRole="Order" />
       </EntityType>
+      <EntityType Name="Order">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Association Name="R1">
+        <End Type="Main.Thing" Role="Thing" Multiplicity="1" />
+        <End Type="Main.Order" Role="Order" Multiplicity="*" />
+      </Association>
     </Schema>
   </edmx:DataServices>
 </edmx:Edmx>`;
@@ -711,6 +722,51 @@ describe('edmx:Include and edmx:Reference', () => {
 
     expect(result.unresolvedReferences).toEqual(['shared.xml']);
     expect(result.unresolvedReferenceIncludes).toEqual(['First', 'Ghost']);
+
+    // The symptom, not just the parser arrays: `Ghost` is pending, so the
+    // namesake association `R1` must not be guessed. Losing the recorded name
+    // would make this resolve to `Order` (and derive a traversal edge) again.
+    const thing = result.entities.find((entity) => entity.name === 'Thing');
+    expect(thing).toBeDefined();
+    expect(getTargetEntityName('Orders', thing!, result)).toBeUndefined();
+    expect(getTraversalEdges(result).filter((edge) => edge.kind === 'nav')).toEqual([]);
+  });
+
+  it('records nothing for a second reference to a URI that already loaded', async () => {
+    // The #77 guard is keyed on failure, not on visitation: a loaded document
+    // has nothing unresolved to report. Recording its duplicate reference's
+    // stray `Ghost` Include would mark `Ghost` pending and block a legitimate
+    // namesake fallback, exactly as if the document had failed to load.
+    const duplicateReference = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx"
+           xmlns="http://docs.oasis-open.org/odata/ns/edm">
+  <edmx:Reference Uri="shared.xml">
+    <edmx:Include Namespace="Ext" Alias="ext" />
+  </edmx:Reference>
+  <edmx:Reference Uri="shared.xml">
+    <edmx:Include Namespace="Ghost" />
+  </edmx:Reference>
+  <edmx:DataServices>
+    <Schema Namespace="Main" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+    let calls = 0;
+    const result = await parseCSDL(duplicateReference, {
+      baseUri: 'https://host/odata/main.xml',
+      loadExternal: async () => {
+        calls += 1;
+        return externalDoc;
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(result.unresolvedReferences).toBeUndefined();
+    expect(result.unresolvedReferenceIncludes).toBeUndefined();
   });
 
   it('records the Include names of a reference that exceeds the document cap', async () => {
