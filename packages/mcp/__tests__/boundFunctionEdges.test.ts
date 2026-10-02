@@ -26,6 +26,10 @@ const FIXTURE = `<?xml version="1.0" encoding="utf-8"?>
         <Parameter Name="limit" Type="Edm.Int32" />
         <ReturnType Type="N.C" />
       </Function>
+      <Function Name="Many" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <ReturnType Type="Collection(N.C)" />
+      </Function>
       <Function Name="Unbound">
         <ReturnType Type="N.C" />
       </Function>
@@ -196,8 +200,10 @@ describe('build_function_invocation composes query options', () => {
   });
 
   it('types filter literals from the function return type', async () => {
+    // Paging and filtering need a collection-valued result; `Many` returns
+    // `Collection(N.C)`, so both options survive and are typed from N.C.
     const result = await handleToolCall('build_function_invocation', {
-      functionName: 'B',
+      functionName: 'Many',
       entitySet: 'As',
       keys: { Id: '1' },
       filters: [{ property: 'Id', operator: 'eq', value: '1' }],
@@ -205,6 +211,19 @@ describe('build_function_invocation composes query options', () => {
     });
 
     expect(emittedUrl(textOf(result))).toContain("?$filter=Id%20eq%20'1'&$top=2");
+  });
+
+  it('drops paging from a single entity return with a note', async () => {
+    const result = await handleToolCall('build_function_invocation', {
+      functionName: 'B',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      top: 2,
+    });
+
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.B");
+    expect(textOf(result)).toContain('$top');
+    expect(textOf(result)).toContain('not applicable');
   });
 
   it('warns when an $expand target is not on the return type', async () => {

@@ -229,9 +229,9 @@ function matchNames<T>(items: T[], name: string, namesFor: (item: T) => string[]
 function describeType(type: string, metadata: ODataMetadata): string {
   if (type.startsWith('Edm.')) return type;
 
-  const collection = /^Collection\((.*)\)$/.exec(type);
-  if (collection) {
-    return `Collection(${describeType(collection[1], metadata)})`;
+  const collection = unwrapCollection(type);
+  if (collection?.isCollection) {
+    return `Collection(${describeType(collection.type, metadata)})`;
   }
 
   const enumType = metadata.enumTypes.find((e) => e.qualifiedName === type || e.name === type);
@@ -363,7 +363,10 @@ function formatCallableDetails(
 
   lines.push('\nInvocation:');
   if (item.isBound) {
-    const bindingType = unwrapCollection(item.parameters[0]?.type);
+    // The binding parameter is the one flagged `isBinding`, the same rule the
+    // invocation builder applies; index 0 only happens to be it today.
+    const binding = (item.parameters ?? []).find((p) => p.isBinding);
+    const bindingType = unwrapCollection(binding?.type);
     const elementType = bindingType?.type ?? 'Entity';
     const set = getAllEntitySets(metadata).find(
       (s) =>
@@ -412,8 +415,8 @@ function shortName(qualified: string): string {
 }
 
 function sampleValue(type: string, metadata: ODataMetadata): unknown {
-  const collection = /^Collection\((.*)\)$/.exec(type);
-  if (collection) return [sampleScalar(collection[1], metadata)];
+  const collection = unwrapCollection(type);
+  if (collection?.isCollection) return [sampleScalar(collection.type, metadata)];
   return sampleScalar(type, metadata);
 }
 
@@ -866,8 +869,8 @@ export function createToolHandler(
         const actionName = asString(args['name']);
         if (!actionName) return errorResult('Error: name is required');
 
-        const action = findCallable(metadata.actions, actionName);
-        if (!action) {
+        const actions = findCallableCandidates(metadata.actions, actionName);
+        if (actions.length === 0) {
           const suggestions = suggestNames(
             actionName,
             metadata.actions.map((a) => a.name),
@@ -876,13 +879,15 @@ export function createToolHandler(
             `Action "${actionName}" not found.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
           );
         }
-        const importName = metadata.actionImports.find(
-          (i) => i.qualifiedActionName === action.qualifiedName || i.actionName === action.name,
-        )?.name;
+        const baseUrl = asString(args['baseUrl']);
         try {
-          return textResult(
-            formatCallableDetails(action, metadata, importName, asString(args['baseUrl']), false),
-          );
+          const details = actions.map((action) => {
+            const importName = metadata.actionImports.find(
+              (i) => i.qualifiedActionName === action.qualifiedName || i.actionName === action.name,
+            )?.name;
+            return formatCallableDetails(action, metadata, importName, baseUrl, false);
+          });
+          return textResult(formatOverloadDetails(details));
         } catch (error) {
           return errorResult(
             `Error building invocation sketch: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -896,8 +901,8 @@ export function createToolHandler(
         const functionName = asString(args['name']);
         if (!functionName) return errorResult('Error: name is required');
 
-        const func = findCallable(metadata.functions, functionName);
-        if (!func) {
+        const funcs = findCallableCandidates(metadata.functions, functionName);
+        if (funcs.length === 0) {
           const suggestions = suggestNames(
             functionName,
             metadata.functions.map((f) => f.name),
@@ -906,13 +911,15 @@ export function createToolHandler(
             `Function "${functionName}" not found.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
           );
         }
-        const importName = metadata.functionImports.find(
-          (i) => i.qualifiedFunctionName === func.qualifiedName || i.functionName === func.name,
-        )?.name;
+        const baseUrl = asString(args['baseUrl']);
         try {
-          return textResult(
-            formatCallableDetails(func, metadata, importName, asString(args['baseUrl']), true),
-          );
+          const details = funcs.map((func) => {
+            const importName = metadata.functionImports.find(
+              (i) => i.qualifiedFunctionName === func.qualifiedName || i.functionName === func.name,
+            )?.name;
+            return formatCallableDetails(func, metadata, importName, baseUrl, true);
+          });
+          return textResult(formatOverloadDetails(details));
         } catch (error) {
           return errorResult(
             `Error building invocation sketch: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -1010,8 +1017,16 @@ export function createToolHandler(
           );
         }
 
+        const bound = narrowCandidatesByEntitySet(
+          candidates,
+          metadata,
+          asString(args['entitySet']),
+          actionName,
+        );
+        if (!Array.isArray(bound)) return bound;
+
         const rawParameters = (args['parameters'] as Record<string, unknown> | undefined) ?? {};
-        const action = selectCallableOverload(candidates, rawParameters);
+        const action = selectCallableOverload(bound, rawParameters);
         if (!action) {
           return errorResult(
             `No overload of "${actionName}" accepts the supplied parameters. Overloads: ${formatOverloadSignatures(candidates)}.`,
@@ -1038,8 +1053,16 @@ export function createToolHandler(
           );
         }
 
+        const bound = narrowCandidatesByEntitySet(
+          candidates,
+          metadata,
+          asString(args['entitySet']),
+          functionName,
+        );
+        if (!Array.isArray(bound)) return bound;
+
         const rawParameters = (args['parameters'] as Record<string, unknown> | undefined) ?? {};
-        const func = selectCallableOverload(candidates, rawParameters);
+        const func = selectCallableOverload(bound, rawParameters);
         if (!func) {
           return errorResult(
             `No overload of "${functionName}" accepts the supplied parameters. Overloads: ${formatOverloadSignatures(candidates)}.`,
@@ -1081,13 +1104,6 @@ function findCallableCandidates<T extends ODataAction | ODataFunction>(
   return items.filter((i) => i.name.toLowerCase() === shortName(name).toLowerCase());
 }
 
-function findCallable<T extends ODataAction | ODataFunction>(
-  items: T[],
-  name: string,
-): T | undefined {
-  return findCallableCandidates(items, name)[0];
-}
-
 /**
  * Pick the overload whose declared parameters cover every supplied name.
  *
@@ -1095,6 +1111,13 @@ function findCallable<T extends ODataAction | ODataFunction>(
  * unknown-parameter error keeps naming the operation's own parameters. With
  * several candidates, an unmatched set returns `undefined` and the caller
  * reports the overloads instead of pretending the first one was meant.
+ *
+ * The most specific covering overload wins: the fewest declared parameters,
+ * with declaration order breaking ties. Picking the first cover instead let a
+ * superset declared earlier shadow an exact match — `Sup(it, a, b)` over
+ * `Sup(it, a)` — which emitted a false missing-`b` note and typed `a` by the
+ * wrong signature. The same rule makes the zero-parameter overload win when no
+ * parameters are supplied, so a parameterised declaration cannot hide it.
  */
 function selectCallableOverload<T extends ODataAction | ODataFunction>(
   candidates: T[],
@@ -1102,11 +1125,64 @@ function selectCallableOverload<T extends ODataAction | ODataFunction>(
 ): T | undefined {
   if (candidates.length <= 1) return candidates[0];
   const supplied = Object.keys(parameters).map((name) => name.toLowerCase());
-  if (supplied.length === 0) return candidates[0];
-  return candidates.find((candidate) =>
+  const covering = candidates.filter((candidate) =>
     supplied.every((name) =>
       (candidate.parameters ?? []).some((p) => p.name.toLowerCase() === name),
     ),
+  );
+  if (covering.length === 0) return undefined;
+  return covering.reduce((best, candidate) =>
+    (candidate.parameters ?? []).length < (best.parameters ?? []).length ? candidate : best,
+  );
+}
+
+/**
+ * Is a bound callable invocable through this entity set? OData V4 §11.2.2: a
+ * function bound to a type is invocable on that type and its derived types, so
+ * the set's type must be the binding element type or inherit from it. Unbound
+ * callables and references that do not resolve cannot be judged and pass.
+ */
+function bindsToEntitySet(
+  item: ODataAction | ODataFunction,
+  set: ODataEntitySet,
+  metadata: ODataMetadata,
+): boolean {
+  if (!item.isBound) return true;
+  const bindingElement = unwrapCollection(
+    (item.parameters ?? []).find((p) => p.isBinding)?.type,
+  )?.type;
+  if (!bindingElement) return true;
+  const bindingType = findTypeInScope(metadata.entities, bindingElement, item.namespace);
+  const setType = findEntityByName(metadata.entities, set.entityTypeQualified ?? set.entityType);
+  if (!bindingType || !setType) return true;
+  return resolveInheritanceChain(setType, metadata.entities).includes(bindingType);
+}
+
+/**
+ * Narrow overload candidates to the ones the supplied entity set can invoke.
+ *
+ * CSDL allows bound functions and actions to overload by binding type, so a
+ * candidate bound to an unrelated type must not win on parameter names alone —
+ * it would type the literals with the wrong signature. A set whose type is not
+ * a binding type of any candidate is refused rather than composed into a path
+ * the service would reject.
+ */
+function narrowCandidatesByEntitySet<T extends ODataAction | ODataFunction>(
+  candidates: T[],
+  metadata: ODataMetadata,
+  entitySetName: string | undefined,
+  name: string,
+): T[] | ToolResult {
+  if (!entitySetName) return candidates;
+  const set = findEntitySet(metadata, entitySetName);
+  // An unknown set is reported by the invocation path with its suggestions.
+  if (!set) return candidates;
+  const matching = candidates.filter((candidate) => bindsToEntitySet(candidate, set, metadata));
+  if (matching.length > 0) return matching;
+  return errorResult(
+    `No overload of "${name}" is bound to entity set "${set.name}" (type ${
+      set.entityTypeQualified ?? set.entityType
+    }). Overloads: ${formatOverloadSignatures(candidates)}.`,
   );
 }
 
@@ -1118,6 +1194,17 @@ function formatOverloadSignatures(items: Array<ODataAction | ODataFunction>): st
         `${item.qualifiedName ?? item.name}(${(item.parameters ?? []).map((p) => p.name).join(', ')})`,
     )
     .join('; ');
+}
+
+/**
+ * Render one detail block per overload, labelled when a name resolves to more
+ * than one, so the details tools show every signature rather than the first.
+ */
+function formatOverloadDetails(details: string[]): string {
+  if (details.length <= 1) return details.join('');
+  return details
+    .map((detail, index) => `Overload ${index + 1} of ${details.length}:\n${detail}`)
+    .join('\n\n');
 }
 
 function buildInvocation(
@@ -1195,6 +1282,7 @@ function buildInvocationUnsafe(
 
   const binding = (item.parameters ?? []).find((p) => p.isBinding);
   const bindingIsCollection = unwrapCollection(binding?.type)?.isCollection ?? false;
+  const notes: string[] = [];
 
   let path: string;
   if (item.isBound) {
@@ -1218,7 +1306,13 @@ function buildInvocationUnsafe(
     if (bindingIsCollection) {
       // The binding parameter addresses the whole collection, so no key
       // predicate may be spliced in; supplied keys are ignored rather than
-      // silently composing on one entity of the collection.
+      // silently composing on one entity of the collection — and the caller
+      // is told so, rather than left wondering where they went.
+      if (Object.keys(keys).length > 0) {
+        notes.push(
+          `Note: keys were ignored because "${item.name}" is bound to the collection "${set.name}"; the invocation addresses the whole set.`,
+        );
+      }
       path = `${encodeIdentifierForUrl(set.name)}/${encodeIdentifierForUrl(item.qualifiedName ?? item.name)}`;
     } else {
       const entity = findEntityByName(metadata.entities, set.entityTypeQualified ?? set.entityType);
@@ -1275,8 +1369,8 @@ function buildInvocationUnsafe(
     lines.push('');
     lines.push('Example:');
     lines.push(`curl '${shellEscape(`${root}/${fullPath}`)}'`);
-    if (queryWarnings.length > 0 || missingWarnings.length > 0) {
-      lines.push('', ...queryWarnings, ...missingWarnings);
+    if (queryWarnings.length > 0 || missingWarnings.length > 0 || notes.length > 0) {
+      lines.push('', ...queryWarnings, ...missingWarnings, ...notes);
     }
     return textResult(lines.join('\n'));
   }
@@ -1297,8 +1391,8 @@ function buildInvocationUnsafe(
       `  -d '${shellEscape(JSON.stringify(body))}'`,
     ].join(' \\\n'),
   );
-  if (missingWarnings.length > 0) {
-    lines.push('', ...missingWarnings);
+  if (missingWarnings.length > 0 || notes.length > 0) {
+    lines.push('', ...missingWarnings, ...notes);
   }
 
   return textResult(lines.join('\n'));
@@ -1338,18 +1432,28 @@ function formatInlineParams(
 }
 
 /**
- * The entity type a function returns, when it returns one; `undefined` for
- * primitive, collection-of-primitive or unresolved returns, which cannot carry
- * `$select`/`$expand` and may not carry paging at all.
+ * The shape of a function's return: the structured (entity or complex) type it
+ * resolves to, when there is one, and whether the return is a collection.
+ *
+ * `$select`/`$expand` need a structured result; paging, filtering and ordering
+ * additionally need a collection (OData V4.01 Part 2 §5.1). Keeping the two
+ * apart is what lets a single complex return keep the former and drop the
+ * latter, while a collection of primitives keeps the latter and drops the
+ * former.
  */
-function functionReturnEntityName(
+function functionReturnShape(
   item: ODataAction | ODataFunction,
   metadata: ODataMetadata,
-): string | undefined {
+): { structuredName?: string; isCollection: boolean } {
   const returnType = unwrapCollection(item.returnType);
-  if (!returnType || !returnType.type || returnType.type.startsWith('Edm.')) return undefined;
-  const entity = findTypeInScope(metadata.entities, returnType.type, item.namespace);
-  return entity ? (entity.qualifiedName ?? entity.name) : undefined;
+  if (!returnType || returnType.type.startsWith('Edm.')) {
+    return { isCollection: returnType?.isCollection ?? false };
+  }
+  const structured = findTypeInScope(metadata.entities, returnType.type, item.namespace);
+  return {
+    structuredName: structured ? (structured.qualifiedName ?? structured.name) : undefined,
+    isCollection: returnType.isCollection,
+  };
 }
 
 /**
@@ -1381,13 +1485,16 @@ function buildFunctionQueryOptions(
   let skip = asNumber(args['skip']);
   let count = typeof args['count'] === 'boolean' ? args['count'] : undefined;
 
-  const returnEntityName = functionReturnEntityName(item, metadata);
-  if (!returnEntityName) {
-    const returnsCollection = unwrapCollection(item.returnType)?.isCollection ?? false;
-    const omitted: string[] = [];
-    const drop = (name: string): void => {
-      omitted.push(name);
-    };
+  const returnShape = functionReturnShape(item, metadata);
+  const structured = returnShape.structuredName !== undefined;
+  const omitted: string[] = [];
+  const drop = (name: string): void => {
+    omitted.push(name);
+  };
+  // $select/$expand need a structured result; filtering, sorting and paging
+  // need a collection — a collection of primitives is still a collection,
+  // while a single entity or complex value is not.
+  if (!structured) {
     if ((select?.length ?? 0) > 0) {
       drop('$select');
       select = undefined;
@@ -1396,37 +1503,37 @@ function buildFunctionQueryOptions(
       drop('$expand');
       expand = undefined;
     }
-    // A collection of primitives is still a collection, so filtering, sorting
-    // and paging it remain legal; a scalar result has nothing to page.
-    if (!returnsCollection) {
-      if ((filters?.length ?? 0) > 0) {
-        drop('$filter');
-        filters = undefined;
-      }
-      if (orderBy !== undefined) {
-        drop('$orderby');
-        orderBy = undefined;
-      }
-      if (top !== undefined) {
-        drop('$top');
-        top = undefined;
-      }
-      if (skip !== undefined) {
-        drop('$skip');
-        skip = undefined;
-      }
-      if (count === true) {
-        drop('$count');
-        count = undefined;
-      }
+  }
+  if (!returnShape.isCollection) {
+    if ((filters?.length ?? 0) > 0) {
+      drop('$filter');
+      filters = undefined;
     }
-    if (omitted.length > 0) {
-      warnings.push(
-        `Note: ${item.qualifiedName ?? item.name} returns ${item.returnType ?? 'an unknown type'}, which is not an entity type; ${omitted.join(', ')} ${
-          omitted.length === 1 ? 'is' : 'are'
-        } not applicable and ${omitted.length === 1 ? 'was' : 'were'} omitted.`,
-      );
+    if (orderBy !== undefined) {
+      drop('$orderby');
+      orderBy = undefined;
     }
+    if (top !== undefined) {
+      drop('$top');
+      top = undefined;
+    }
+    if (skip !== undefined) {
+      drop('$skip');
+      skip = undefined;
+    }
+    if (count === true) {
+      drop('$count');
+      count = undefined;
+    }
+  }
+  if (omitted.length > 0) {
+    warnings.push(
+      `Note: ${item.qualifiedName ?? item.name} returns ${item.returnType ?? 'an unknown type'}, which ${
+        structured ? 'is a single value' : 'is not an entity or complex type'
+      }; ${omitted.join(', ')} ${
+        omitted.length === 1 ? 'is' : 'are'
+      } not applicable and ${omitted.length === 1 ? 'was' : 'were'} omitted.`,
+    );
   }
 
   const hasOptions =
@@ -1440,7 +1547,7 @@ function buildFunctionQueryOptions(
   if (!hasOptions) return '';
 
   return buildQueryOptions({
-    rootEntityName: returnEntityName,
+    rootEntityName: returnShape.structuredName,
     metadata,
     select,
     expand,
