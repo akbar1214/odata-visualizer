@@ -10,6 +10,7 @@ import {
   assertResourceSegment,
   buildQueryOptions,
   buildQueryUrl,
+  encodeIdentifierForUrl,
   findEntitiesByName,
   findEntityByName,
   formatV4Literal,
@@ -452,7 +453,18 @@ export function buildODataQuery(
 
     const entitySet = resolveResourcePath(query.entityName, metadata);
     if (!entitySet) return '';
-    path = `/${entitySet}`;
+    // The catch below falls back to this path, and the set name comes from the
+    // model. `assertResourceSegment` refuses a name that is not a resource path
+    // (`Th#ings`), so the fallback would otherwise undo the refusal by
+    // re-emitting it raw — a pasted `/Th#ings` truncates at the fragment and
+    // lands on `/Th`. Encode each segment the way every other metadata-derived
+    // identifier is emitted; for a name the assertion accepts this is the
+    // identity. (A bound-function path is asserted where it is built, so it is
+    // already safe to fall back to.)
+    path = `/${entitySet
+      .split('/')
+      .map((segment) => encodeIdentifierForUrl(segment))
+      .join('/')}`;
 
     // `buildQueryUrl` rather than `buildQueryOptions`: it asserts the set path
     // first, so a set name that is not a resource path (`As?evil=1`) is

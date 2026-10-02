@@ -520,9 +520,40 @@ describe('buildODataQuery asserts the resolved resource segment', () => {
     const warnings: string[] = [];
     const url = buildODataQuery(getDefaultQuery('A'), model, (message) => warnings.push(message));
 
-    expect(url).toBe('/As?evil=1');
+    // Encoded on emit: raw, `?` and `=` would fold the refused name into the
+    // query string of a request that still looks like a working set path.
+    expect(url).toBe('/As%3Fevil%3D1');
     expect(url).not.toContain('$top');
     expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('Invalid entitySet');
+  });
+
+  const fragmentSetCsdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityContainer Name="C1">
+        <EntitySet Name="Th#ings" EntityType="N.Thing" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('encodes the fallback so a # in the set name cannot truncate the path', async () => {
+    const model = await parseCSDL(fragmentSetCsdl);
+    const warnings: string[] = [];
+    const url = buildODataQuery(getDefaultQuery('Thing'), model, (message) => warnings.push(message));
+
+    // `assertResourceSegment` is right to refuse the name; the fallback must
+    // not undo the refusal by re-emitting it raw, or a pasted `/Th#ings`
+    // truncates at the fragment and lands on `/Th`.
+    expect(url).toBe('/Th%23ings');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/could not be built/);
     expect(warnings[0]).toContain('Invalid entitySet');
   });
 });

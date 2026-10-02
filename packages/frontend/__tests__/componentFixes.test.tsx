@@ -91,6 +91,23 @@ describe('EntityNode property budget', () => {
   });
 });
 
+describe('EntityNode header', () => {
+  afterEach(() => cleanup());
+
+  it('falls back to the type name when the type has no label', () => {
+    renderNode(<EntityNode {...nodeProps(entity('Widget'))} />);
+
+    expect(screen.getByText('Widget')).toBeDefined();
+  });
+
+  it('prefers a label over the type name', () => {
+    renderNode(<EntityNode {...nodeProps(entity('Widget', { label: 'A flange assembly' }))} />);
+
+    expect(screen.getByText('A flange assembly')).toBeDefined();
+    expect(screen.queryByText('Widget')).toBeNull();
+  });
+});
+
 describe('QueryPreview empty state', () => {
   afterEach(() => cleanup());
 
