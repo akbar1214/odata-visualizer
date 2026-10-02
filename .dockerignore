@@ -1,0 +1,10 @@
+# Build from source: host installs and build output must not ride along
+# (pnpm's package-level node_modules are symlinks into the root store, and the
+# builder regenerates every dist/).
+.git
+.idea
+.DS_Store
+**/node_modules
+**/dist
+**/coverage
+**/*.log

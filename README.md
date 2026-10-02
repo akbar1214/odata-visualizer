@@ -20,7 +20,7 @@ An interactive web application for visualizing OData metadata as entity-relation
 | Diagram | React Flow (@xyflow/react) |
 | Layout | ELK.js |
 | Styling | Tailwind CSS |
-| Backend | Node.js 20 + Express |
+| Backend | Node.js 24 + Express |
 | XML Parser | fast-xml-parser |
 | MCP Server | Model Context Protocol SDK |
 | Package Manager | pnpm |
@@ -31,7 +31,7 @@ An interactive web application for visualizing OData metadata as entity-relation
 
 ### Prerequisites
 
-- Node.js 20+ (Node 24.14.0–24.18.1 have a loader abort under test load — see [Testing](#testing))
+- Node.js 24 (LTS; the container image uses `node:24-alpine`). Node 24.14.0–24.18.1 have a loader abort under test load — see [Testing](#testing)
 - pnpm
 
 ### Installation
@@ -117,6 +117,8 @@ pnpm container:run
 
 The application will be available at http://localhost:3001
 
+The image binds `HOST=0.0.0.0` so a published port reaches it — outside a container the server binds `127.0.0.1` by default. If you expose it beyond localhost, set `API_TOKEN` and set `MCP_ALLOWED_HOSTS` to the hostnames you serve for `/mcp` (it replaces the localhost default); see [Pinned metadata](#pinned-metadata-metadata_file) for a read-only deployment.
+
 ## Project Structure
 
 ```
@@ -198,6 +200,7 @@ Clear this session's model, or all of them when no session id is supplied.
 | Env var | Default | Purpose |
 |---------|---------|---------|
 | `PORT` | `3001` | Backend port (also serves MCP) |
+| `HOST` | `127.0.0.1`; the container image sets `0.0.0.0` | Interface the server binds. The image binds all interfaces so a published port works |
 | `API_TOKEN` | unset | When set, `/api/*` requires `Authorization: Bearer <token>` |
 | `MCP_TOKEN` | unset | When set, `/mcp` requires `Authorization: Bearer <token>` |
 | `MCP_ALLOW_LOAD` | unset | `1` exposes `load_metadata` over HTTP (arbitrary file reads / SSRF) |

@@ -119,7 +119,7 @@ Configuration:
 
 When the backend is pinned with `METADATA_FILE`, `load_metadata` is not registered for sessions started while the store is pinned (the shipped startup pins before mounting, so every session) and `MCP_ALLOW_LOAD` is ignored — see [Pinned metadata](../../README.md#pinned-metadata-metadata_file) in the root README.
 
-For safety, `load_metadata` is **not registered at all** on the HTTP endpoint: metadata comes from uploads, so the tool would only ever be a way to read arbitrary files or make the server fetch arbitrary URLs. A localhost host-header guard is applied to `/mcp`; set `MCP_ALLOWED_HOSTS` if you serve it from another hostname.
+For safety, `load_metadata` is **not registered at all** on the HTTP endpoint: metadata comes from uploads, so the tool would only ever be a way to read arbitrary files or make the server fetch arbitrary URLs. A localhost host-header guard is applied to `/mcp`; set `MCP_ALLOWED_HOSTS` to the hostnames you serve if they are not localhost (it replaces the localhost default).
 
 ## stdio transport (standalone)
 
