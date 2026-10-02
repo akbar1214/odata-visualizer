@@ -105,6 +105,103 @@ describe('aliases are scoped to their own document', () => {
 });
 
 /**
+ * The prefix guard — "a prefix that names an actual schema is a namespace, not
+ * an alias" — was built from every namespace in the model. CSDL scopes both
+ * aliases *and* the namespaces they may collide with to the declaring document
+ * (4.01 §4.2), so another document's namespace must neither block an alias
+ * that document declared nor refuse to be expanded by one.
+ */
+describe('the namespace guard is scoped to its own document', () => {
+  it('expands a local alias even when another document owns that namespace', async () => {
+    const docC = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Shadow" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Coll">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const docB = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:Reference Uri="https://example.org/c.xml">
+    <edmx:Include Namespace="Shadow" />
+  </edmx:Reference>
+  <edmx:DataServices>
+    <Schema Namespace="B" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Anchor">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const model = await parseCSDL(
+      `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="T" Alias="Shadow" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityType Name="Thing" BaseType="Shadow.Base" />
+      <edmx:Reference Uri="https://example.org/b.xml"><edmx:Include Namespace="B" /></edmx:Reference>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`,
+      { loadExternal: async (uri) => (uri.includes('c.xml') ? docC : docB) },
+    );
+
+    // Document C declares the namespace `Shadow`; document T's own alias of
+    // that name still refers to T, because C's schemas are not in T's scope.
+    expect(model.entities.find((e) => e.qualifiedName === 'T.Thing')!.baseType).toBe('T.Base');
+  });
+
+  it('expands an alias even when another document declares that namespace', async () => {
+    const external = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="T" Alias="Shadow" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Base">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <EntityType Name="Thing" BaseType="Shadow.Base" />
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+    const model = await parseCSDL(
+      `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Shadow" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Coll">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <edmx:Reference Uri="https://example.org/t.xml">
+        <edmx:Include Namespace="T" />
+      </edmx:Reference>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`,
+      { loadExternal: async () => external },
+    );
+
+    // The mirror case: the root declares the namespace `Shadow`, the loaded
+    // document declares `Alias="Shadow"`. The root's namespace must not
+    // suppress the loaded document's alias.
+    expect(model.entities.find((e) => e.qualifiedName === 'T.Thing')!.baseType).toBe('T.Base');
+  });
+});
+
+/**
  * `a || b` returns only the first spelling, so an element carrying both the
  * unprefixed and the `edm:`-prefixed form silently lost a group. The pattern
  * appeared at ~20 sites, not just the two originally flagged.

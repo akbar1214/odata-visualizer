@@ -36,6 +36,11 @@ const types = `
       <EntityType Name="Derived" BaseType="N.Base">
         <Property Name="DerivedProp" Type="Edm.String" />
       </EntityType>
+      <EntityType Name="Other">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="OtherProp" Type="Edm.String" />
+      </EntityType>
       <EntityType Name="Widget">
         <Key><PropertyRef Name="Id" /></Key>
         <Property Name="Id" Type="Edm.String" Nullable="false" />
@@ -130,6 +135,65 @@ describe('type-cast segments', () => {
 
     expect(base.annotations?.['Core.Description']).toBe('via cast');
   });
+
+  it('rejects a cast to an unrelated type instead of attaching to its property', async () => {
+    const model = await parseCSDL(csdl(block('N.Derived/N.Other/OtherProp', 'unrelated cast')));
+    const other = model.entities
+      .find((e) => e.qualifiedName === 'N.Other')!
+      .properties.find((p) => p.name === 'OtherProp')!;
+
+    // Invalid CSDL: `N.Other` is not in `N.Derived`'s inheritance chain, so the
+    // path never names `N.Other.OtherProp`. Attaching the block to it stored an
+    // annotation on a property the target never mentions.
+    expect(other.annotations).toBeUndefined();
+  });
+
+  it('resolves a cast down to a derived type', async () => {
+    const model = await parseCSDL(csdl(block('N.Base/N.Derived/DerivedProp', 'downcast')));
+    const derived = model.entities
+      .find((e) => e.qualifiedName === 'N.Derived')!
+      .properties.find((p) => p.name === 'DerivedProp')!;
+
+    // A cast narrows as well as widens: the named type may derive from the
+    // current one, which is how a set over a base type reaches a subtype's
+    // property.
+    expect(derived.annotations?.['Core.Description']).toBe('downcast');
+  });
+});
+
+describe('paths through a navigation property', () => {
+  const csdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Parts" Type="Collection(N.Part)" />
+      </EntityType>
+      <EntityType Name="Part">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Serial" Type="Edm.String" />
+      </EntityType>
+      <Annotations Target="N.Widget/Parts/Serial">
+        <Annotation Term="Core.Description" String="through the nav" />
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
+  it('walks from a navigation property to the type it targets', async () => {
+    const model = await parseCSDL(csdl);
+    const serial = model.entities
+      .find((e) => e.qualifiedName === 'N.Part')!
+      .properties.find((p) => p.name === 'Serial')!;
+
+    // The segment after a navigation property must resolve through the
+    // property's target type; reading it as a structural property's `type`
+    // (which a navigation property does not have) silently dropped the path.
+    expect(serial.annotations?.['Core.Description']).toBe('through the nav');
+  });
 });
 
 describe('container-child-qualified property paths', () => {
@@ -177,6 +241,21 @@ describe('container-child-qualified property paths', () => {
     );
 
     expect(widgetProperty(model, 'Name').label).toBe('inline');
+  });
+
+  it('still lets an inline annotation win over a targeted singleton annotation', async () => {
+    const model = await parseCSDL(
+      csdl(block('N.Container/Solo', 'via target')).replace(
+        '<Singleton Name="Solo" Type="N.Widget" />',
+        `<Singleton Name="Solo" Type="N.Widget">
+          <Annotation Term="Core.Description" String="inline" />
+        </Singleton>`,
+      ),
+    );
+    const singleton = model.entityContainers[0].singletons![0];
+
+    expect(singleton.annotations?.['Core.Description']).toBe('inline');
+    expect(singleton.label).toBe('inline');
   });
 
   it('annotates a property through a singleton and overrides the type target', async () => {
@@ -257,6 +336,33 @@ describe('action and function targets', () => {
 
     expect(intOverload.annotations?.['Core.Description']).toBe('sloppy overload');
     expect(stringOverload.annotations).toBeUndefined();
+  });
+
+  it('does not match a selector with more types than the overload has parameters', async () => {
+    const model = await parseCSDL(
+      csdl(block('N.Lookup(Edm.String, Edm.Int32)', 'too many parameters')),
+    );
+
+    // The selector has two types; both `Lookup` overloads take one. Without
+    // the arity check the first type matched and both blocks attached.
+    for (const overload of model.functions.filter((f) => f.name === 'Lookup')) {
+      expect(overload.annotations).toBeUndefined();
+    }
+  });
+
+  it('still lets an inline annotation win over a targeted action annotation', async () => {
+    const model = await parseCSDL(
+      csdl(block('N.Reset', 'via target')).replace(
+        '<Action Name="Reset" />',
+        `<Action Name="Reset">
+          <Annotation Term="Core.Description" String="inline" />
+        </Action>`,
+      ),
+    );
+    const action = model.actions.find((a) => a.name === 'Reset')!;
+
+    expect(action.annotations?.['Core.Description']).toBe('inline');
+    expect(action.label).toBe('inline');
   });
 });
 
@@ -517,6 +623,25 @@ describe('targets that stay unsupported', () => {
     for (const overload of model.functions.filter((f) => f.name === 'Lookup')) {
       expect(overload.annotations).toBeUndefined();
     }
+  });
+
+  it('ignores a term-cast target rather than attaching to the annotated element', async () => {
+    const model = await parseCSDL(csdl(block('N.Widget/@Core.Description', 'an annotation value')));
+    const widget = model.entities.find((e) => e.qualifiedName === 'N.Widget')!;
+
+    // §14.2.2 allows a final `@Term` segment to annotate an annotation value.
+    // The model has no slot below an annotation, so the block is a no-op — it
+    // must not fall back to the element the path starts from.
+    expect(widget.annotations).toBeUndefined();
+  });
+
+  it('ignores a qualified term-cast target', async () => {
+    const model = await parseCSDL(
+      csdl(block('N.Widget/@Core.Description#Tablet', 'a qualified annotation value')),
+    );
+    const widget = model.entities.find((e) => e.qualifiedName === 'N.Widget')!;
+
+    expect(widget.annotations).toBeUndefined();
   });
 
   it('ignores a target whose container child is unknown', async () => {

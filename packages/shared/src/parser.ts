@@ -66,6 +66,9 @@ const parser = new XMLParser(XML_PARSER_OPTIONS);
 /** Shared empty table, so a document with no aliases needs no allocation. */
 const EMPTY_ALIASES: Map<string, string> = new Map();
 
+/** Shared empty set, so an unscoped lookup needs no allocation. */
+const EMPTY_NAMESPACES: Set<string> = new Set();
+
 const MEMBER_VALUE_ATTRS = ['@_Value', '@_value'] as const;
 const ANNOTATION_SCALAR_ATTRS = [
   '@_String',
@@ -169,11 +172,11 @@ function resolveReferenceUri(uri: string, baseUri: string | undefined): string {
  * Replace an `Alias.Type` reference with `Namespace.Type` using the aliases
  * declared by edmx:Include elements.
  *
- * A prefix that names an actual schema is treated as a namespace, not an alias.
- * An alias is only valid within the document that declares it (CSDL 4.01 §4.2),
- * so a document-local alias must never rewrite a reference into a *different*
- * document's namespace — which is what a single document-global alias map would
- * otherwise do.
+ * A prefix that names a schema in the caller's document is treated as a
+ * namespace, not an alias. Both sides of that guard are document-local
+ * (CSDL 4.01 §4.2): the alias table and the namespace set are resolved for the
+ * document that declares the reference, so a namespace declared in some other
+ * document neither rewrites a reference nor blocks a legitimate alias.
  */
 function expandAlias(type: string, aliases: Map<string, string>, namespaces?: Set<string>): string {
   const collection = /^Collection\((.*)\)$/.exec(type);
@@ -197,19 +200,23 @@ function expandAliasesInMetadata(
     element?: object,
     document?: number,
   ) => Map<string, string>,
-  namespaces: Set<string>,
+  namespacesFor: (namespace?: string, element?: object, document?: number) => Set<string>,
 ): void {
   /**
    * Expansion is per element, not global: an alias is only valid inside the
    * document that declares it, so each element resolves against its own
-   * document's table.
+   * document's table — and against the namespaces that same document declares.
    */
   const expanderFor =
     (namespace: string | undefined, element?: object) =>
     (value: string | undefined): string | undefined =>
       value === undefined
         ? undefined
-        : expandAlias(value, aliasesForNamespace(namespace, element), namespaces);
+        : expandAlias(
+            value,
+            aliasesForNamespace(namespace, element),
+            namespacesFor(namespace, element),
+          );
 
   let expand = expanderFor(undefined);
 
@@ -369,6 +376,13 @@ export async function parseCSDL(
    * properties, wrong keys, wrong inheritance chain.
    */
   const aliasesByDocument = new Map<number, Map<string, string>>();
+  /**
+   * Namespaces declared by each document's own schemas, for the prefix guard
+   * in `expandAlias`. Both an alias and the namespace it could collide with
+   * are document-local (CSDL 4.01 §4.2), so a namespace declared elsewhere in
+   * the model must not decide how this document's references resolve.
+   */
+  const namespacesByDocument = new Map<number, Set<string>>();
   /** Which document each schema namespace came from. */
   const documentOfNamespace = new Map<string, number>();
   /** Imports carry no namespace, so their document is recorded directly. */
@@ -415,7 +429,14 @@ export async function parseCSDL(
 
   const registerSchema = (schema: XmlElement, document: number): void => {
     const namespace = str(schema['@_Namespace']);
-    if (!namespace || registry.has(namespace)) return;
+    if (!namespace) return;
+    let documentNamespaces = namespacesByDocument.get(document);
+    if (!documentNamespaces) {
+      documentNamespaces = new Set<string>();
+      namespacesByDocument.set(document, documentNamespaces);
+    }
+    documentNamespaces.add(namespace);
+    if (registry.has(namespace)) return;
     registry.set(namespace, schema);
     documentOfNamespace.set(namespace, document);
     queue.push(schema);
@@ -498,23 +519,20 @@ export async function parseCSDL(
 
   await loadReferences(rootDocument.references, nextDocumentId);
 
-  // Model-global, matching #25. CSDL aliases are document-local, so a document
-  // that declares an alias equal to a *different* document's namespace does not
-  // get that alias expanded here. Scoping this set per document is a behaviour
-  // change that belongs with the rest of the #25 work — tracked in #28.
-  const registeredNamespaces = new Set(registry.keys());
+  const documentIdFor = (namespace?: string, element?: object, document?: number): number =>
+    (element !== undefined ? documentOfElement.get(element) : undefined) ??
+    document ??
+    (namespace ? documentOfNamespace.get(namespace) : undefined) ??
+    0;
   const aliasesForNamespace = (
     namespace?: string,
     element?: object,
     document?: number,
-  ): Map<string, string> => {
-    const resolved =
-      (element !== undefined ? documentOfElement.get(element) : undefined) ??
-      document ??
-      (namespace ? documentOfNamespace.get(namespace) : undefined) ??
-      0;
-    return aliasesByDocument.get(resolved) ?? EMPTY_ALIASES;
-  };
+  ): Map<string, string> =>
+    aliasesByDocument.get(documentIdFor(namespace, element, document)) ?? EMPTY_ALIASES;
+  /** The namespaces in scope for the same element or document. */
+  const namespacesFor = (namespace?: string, element?: object, document?: number): Set<string> =>
+    namespacesByDocument.get(documentIdFor(namespace, element, document)) ?? EMPTY_NAMESPACES;
 
   while (queue.length > 0) {
     const schema = queue.shift() as XmlElement;
@@ -641,7 +659,7 @@ export async function parseCSDL(
       for (const nav of entity.navigationProperties) {
         if (!nav.targetType) continue;
         const rel = relationshipFromNavigationProperty(entity, nav, namespace, (v) =>
-          expandAlias(v, aliasesForNamespace(namespace), registeredNamespaces),
+          expandAlias(v, aliasesForNamespace(namespace), namespacesFor(namespace)),
         );
         if (!rel) continue;
         if (!relationships.some((r) => isSameDerivedRelationship(r, rel))) {
@@ -682,13 +700,8 @@ export async function parseCSDL(
     typeDefinitions,
   };
 
-  expandAliasesInMetadata(metadata, aliasesForNamespace, registeredNamespaces);
-  applyTargetedAnnotations(
-    metadata,
-    targetedAnnotations,
-    aliasesForNamespace,
-    registeredNamespaces,
-  );
+  expandAliasesInMetadata(metadata, aliasesForNamespace, namespacesFor);
+  applyTargetedAnnotations(metadata, targetedAnnotations, aliasesForNamespace, namespacesFor);
 
   // Derived types often omit <Key> (it is inherited). Backfill keys from
   // the base-type chain so consumers (and the complex-type heuristic) work.
@@ -820,8 +833,10 @@ function relationshipFromNavigationProperty(
  *   `NS.Action`, `NS.Function` (with `(parameterTypes)` to pick one overload)
  *   and `NS.Container`;
  * - `NS.Type/Property/Nested` with property, navigation-property and type-cast
- *   segments; a nested annotation is stored on the property of the complex
- *   type that declares it, the closest shape the model has;
+ *   segments; a cast must name the current type or a type on its inheritance
+ *   chain, so an unrelated type is rejected rather than attached to; a nested
+ *   annotation is stored on the property of the complex type that declares it,
+ *   the closest shape the model has;
  * - `NS.Container/EntitySet`, `NS.Container/Singleton`,
  *   `NS.Container/ActionImport`, `NS.Container/FunctionImport`, and a
  *   property/navigation path below a set or singleton;
@@ -835,7 +850,10 @@ function relationshipFromNavigationProperty(
  * reads; the collision is recorded and pinned by a test instead.
  *
  * Still unsupported: parameter and `$ReturnType` targets (the model has no
- * field for them), term casts, and the trailing `@Term#Qualifier` form.
+ * field for them), term casts, and the trailing `@Term#Qualifier` form — each
+ * pinned by a test as a no-op rather than an attachment. A target naming a term
+ * definition itself (`MySchema.MyTerm`) is a no-op too: terms are not part of
+ * the parsed model, so there is nothing to decorate.
  *
  * Targets that name nothing in the document are ignored rather than reported:
  * an `Annotations` block commonly targets a type from an `edmx:Reference` that
@@ -855,7 +873,7 @@ function applyTargetedAnnotations(
     element?: object,
     document?: number,
   ) => Map<string, string>,
-  namespaces: Set<string>,
+  namespacesFor: (namespace?: string, element?: object, document?: number) => Set<string>,
 ): void {
   // Inline annotations win over targeted ones. Snapshot which terms each
   // element declared inline *before* any block is applied, so a later block
@@ -913,10 +931,12 @@ function applyTargetedAnnotations(
     // revisit when one does.
     if (block.qualifier) continue;
 
-    // The namespace guard added in #25 matters here too: a prefix that names an
-    // actual schema is a namespace, not an alias, so an annotation target
-    // cannot be rewritten into another document's namespace.
+    // The namespace guard added in #25 matters here too: a prefix that names a
+    // schema declared in this block's document is a namespace, not an alias,
+    // so an annotation target cannot be rewritten by a same-named alias from
+    // that document. Resolved for the block's own document, not the model.
     const aliases = aliasesForNamespace(undefined, undefined, block.document);
+    const namespaces = namespacesFor(undefined, undefined, block.document);
     // Every qualified name in a target path is in scope, so every segment is
     // expanded. Expanding the whole string only reaches the first segment,
     // which silently dropped a cast written with an alias:
@@ -1266,9 +1286,14 @@ function walkPropertyPath(
   for (let index = 0; index < segments.length; index += 1) {
     const segment = segments[index];
     if (segment.includes('.')) {
-      // A qualified segment is a type cast, not a property name.
-      current = findTypeInScope(metadata.entities, segment, current?.namespace);
+      // A qualified segment is a type cast, not a property name. It only names
+      // a type the path can reach when that type and the current one share an
+      // inheritance chain; an unrelated type used to attach the annotation to
+      // a property the target never mentions.
       if (!current) return undefined;
+      const cast = findTypeInScope(metadata.entities, segment, current.namespace);
+      if (!cast || !isRelatedByInheritance(cast, current, metadata.entities)) return undefined;
+      current = cast;
       continue;
     }
     if (!current) return undefined;
@@ -1285,6 +1310,14 @@ function walkPropertyPath(
     if (!current) return undefined;
   }
   return undefined;
+}
+
+/** Is one type the same as, a base of, or a derived type of the other? */
+function isRelatedByInheritance(a: ODataEntity, b: ODataEntity, entities: ODataEntity[]): boolean {
+  return (
+    resolveInheritanceChain(a, entities).includes(b) ||
+    resolveInheritanceChain(b, entities).includes(a)
+  );
 }
 
 /** Resolve a set's or singleton's declared type, then walk the path. */
