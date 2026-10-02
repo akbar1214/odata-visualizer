@@ -56,7 +56,7 @@ Authentication (basic, bearer, or SSO) and execution are intentionally out of sc
 
 ## Prerequisites
 
-- Node.js 20+
+- Node.js 20+ (Node 24.14.0–24.18.1 have a loader abort under test load — see the [Testing section](../README.md#testing))
 - pnpm
 - An MCP-compatible client (Claude Desktop, Cursor, Windsurf, etc.)
 
