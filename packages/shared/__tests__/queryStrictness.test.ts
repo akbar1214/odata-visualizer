@@ -165,8 +165,9 @@ describe('key predicates: unquoted values must be keyPropertyValue alternatives'
 /**
  * The quoted-value rules are deliberate and must not regress: %XX escapes are
  * allowed (also what the MCP key builder emits), while a raw / or \ would
- * change which resource the URL addresses, and space/#/?/& and control
- * characters would corrupt the URL.
+ * change which resource the URL addresses, and space/#/? and control
+ * characters would corrupt the URL. A raw `&` is legal (`pchar-no-SQUOTE`)
+ * and accepted — see `queryGrammar.test.ts`.
  */
 describe('key predicates: quoted-value safety must not regress', () => {
   it('rejects URL-breaking characters inside quotes', () => {
@@ -176,7 +177,6 @@ describe('key predicates: quoted-value safety must not regress', () => {
       "Parts('a b')",
       "Parts('a#b')",
       "Parts('a?b')",
-      "Parts('a&b')",
       "Parts('50%')",
       "Parts('a%ZZb')",
       "Parts('a\u0000b')",
@@ -220,6 +220,12 @@ describe('key predicates: %27 is a quote, not content', () => {
     expect(() => buildQueryUrl({ entitySet: "Parts('a%27')" })).toThrow(/entitySet/);
     // Official ABNF case: 'O%27Neil' does not terminate.
     expect(() => buildQueryUrl({ entitySet: "Parts('O%27Neil')" })).toThrow(/entitySet/);
+  });
+
+  it('accepts %22, which pct-encoded-no-SQUOTE admits', () => {
+    // Only %27 is excluded: the ABNF puts %2x in a second alternative whose
+    // only excluded second digit is 7, so %22 was wrongly refused.
+    expect(buildQueryUrl({ entitySet: "Parts('a%22b')" })).toBe("/Parts('a%22b')");
   });
 
   it('rejects percent escapes outside pct-encoded-no-SQUOTE', () => {

@@ -128,6 +128,26 @@ describe('buildQueryUrl: key predicates', () => {
     expect(() => buildQueryUrl({ entitySet: "Parts('a b')" })).toThrow(/entitySet/);
   });
 
+  it('accepts raw &, which pchar-no-SQUOTE lists explicitly', () => {
+    // pchar-no-SQUOTE = unreserved / pct-encoded-no-SQUOTE / other-delims /
+    // "$" / "&" / "=" / ":" / "@". The refusal was a broad URL guard, not a
+    // grammar rule: a raw `&` in a path cannot start a query parameter, and
+    // rendered path values keep it raw too (PATH_UNSAFE omits it).
+    expect(buildQueryUrl({ entitySet: "Parts('a&b')" })).toBe("/Parts('a&b')");
+    expect(buildQueryUrl({ entitySet: "Parts('a%26b')" })).toBe("/Parts('a%26b')");
+  });
+
+  it('accepts the URL-neutral superset the grammar does not list', () => {
+    // `"`, `<`, `>`, `^`, `` ` `` and `|` are not pchar units and non-ASCII is
+    // outside the ASCII ABNF, but URL parsers percent-encode or pass them
+    // through without changing which resource is addressed (`curl` accepts all
+    // of them); the looseness predates this comment, so it is pinned rather
+    // than tightened.
+    for (const value of ['a"b', 'a<b', 'a>b', 'a^b', 'a`b', 'a|b', 'café']) {
+      expect(buildQueryUrl({ entitySet: `Parts('${value}')` })).toBe(`/Parts('${value}')`);
+    }
+  });
+
   it('accepts a key on a container-qualified path', () => {
     expect(buildQueryUrl({ entitySet: "Container/Parts('P1')" })).toBe("/Container/Parts('P1')");
   });
@@ -138,7 +158,6 @@ describe('buildQueryUrl: key predicates', () => {
       "Parts('a#b')",
       "Parts('a?b')",
       "Parts('a%b')",
-      "Parts('a&b')",
       "Parts('a') or (1 eq 1",
       'Parts()',
       "Parts('unbalanced)",
