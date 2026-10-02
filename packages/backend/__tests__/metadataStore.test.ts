@@ -130,4 +130,73 @@ describe('createModelStore', () => {
     expect(m.listFor('tab1').map((entry) => entry.id)).toEqual(['tab1']);
     expect(m.listFor('nobody')).toEqual([]);
   });
+
+  it('serves the pinned model from get for any id and from current', async () => {
+    const pinned = store.lockTo(await metadata(), { sourceName: 'pinned.xml' });
+
+    expect(store.isLocked()).toBe(true);
+    expect(store.get('any-session')).toBe(pinned);
+    expect(store.get()).toBe(pinned);
+    expect(store.current()).toBe(pinned);
+  });
+
+  it('lists only the pinned model under the default bucket', async () => {
+    store.lockTo(await metadata(), { sourceName: 'pinned.xml' });
+
+    const expected = [expect.objectContaining({ id: 'default', sourceName: 'pinned.xml' })];
+    expect(store.list()).toEqual(expected);
+    expect(store.listFor('x')).toEqual(expected);
+    expect(store.listFor()).toEqual(expected);
+  });
+
+  it('refuses to replace or clear the pinned model', async () => {
+    const pinned = store.lockTo(await metadata(), { sourceName: 'pinned.xml' });
+
+    expect(() => store.save('a', pinned.metadata, { sourceName: 'other' })).toThrow(
+      'Metadata is pinned and cannot be replaced',
+    );
+    expect(() => store.clear()).toThrow('Metadata is pinned and cannot be cleared');
+    expect(() => store.clear('a')).toThrow('Metadata is pinned and cannot be cleared');
+    expect(() => store.clearAll()).toThrow('Metadata is pinned and cannot be cleared');
+
+    // The pin survived the refused calls untouched.
+    expect(store.current()).toBe(pinned);
+    expect(store.get('a')).toBe(pinned);
+    expect(store.list()).toHaveLength(1);
+  });
+
+  it('replaces the pinned model on a second lockTo', async () => {
+    store.lockTo(await metadata(), { sourceName: 'first.xml' });
+    const second = store.lockTo(await metadata(), { sourceName: 'second.xml' });
+
+    expect(store.current()).toBe(second);
+    expect(store.get('any-session')).toBe(second);
+    expect(store.list()).toEqual([
+      expect.objectContaining({ id: 'default', sourceName: 'second.xml' }),
+    ]);
+  });
+
+  it('restores normal save, clear and get semantics after unlock', async () => {
+    store.lockTo(await metadata(), { sourceName: 'pinned.xml' });
+    store.unlock();
+
+    expect(store.isLocked()).toBe(false);
+    store.save('a', await metadata(), { sourceName: 'a.xml' });
+    expect(store.get('a')?.info.sourceName).toBe('a.xml');
+    expect(store.get('pinned')).toBeNull();
+    expect(store.current()?.info.sourceName).toBe('a.xml');
+
+    store.clear('a');
+    expect(store.get('a')).toBeNull();
+    expect(store.current()).toBeNull();
+  });
+
+  it('defaults loadedAt on lockTo when info omits it', async () => {
+    const before = new Date().toISOString();
+    const pinned = store.lockTo(await metadata(), { sourceName: 'pinned.xml' });
+    const after = new Date().toISOString();
+
+    expect(pinned.info.loadedAt >= before && pinned.info.loadedAt <= after).toBe(true);
+    expect(store.current()?.info.loadedAt).toBe(pinned.info.loadedAt);
+  });
 });
