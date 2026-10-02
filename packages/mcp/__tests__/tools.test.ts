@@ -1887,7 +1887,7 @@ describe('bound overload specificity and return shapes', () => {
 
     // `Pick(N.Derived, Edm.Int32)` is bound to the set's own type, but
     // `Pick(N.A)` exactly matches the supplied (empty) parameter set, and
-    // §11.5.3.2 matches parameters before binding specificity breaks an arity
+    // "Function overload resolution" matches parameters before binding specificity breaks an arity
     // tie — so no false "x was not supplied" note.
     expect(result.isError).toBeUndefined();
     expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/Deriveds('1')/N.Pick");

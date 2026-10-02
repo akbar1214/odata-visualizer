@@ -140,7 +140,7 @@ function resolveEntityType(
  *
  * Nav edges are derived per entity so inherited navigation properties are
  * traversable from each derived type under that type's own identity. Bound
- * functions follow the same rule (OData V4.01 Part 1 §11.5.1): a function
+ * functions follow the same rule (OData V4.01 Part 1 "Binding an Operation to a Resource"): a function
  * bound to `Base` is invocable on every type that inherits it, so each
  * inheriting graph identity gets its own edge. Inheritance is one-directional:
  * a function bound to `Mid` yields no edge from `Base`, which `Mid` itself

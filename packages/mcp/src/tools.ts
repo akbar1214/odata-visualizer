@@ -1131,12 +1131,12 @@ type OverloadSelection<T extends ODataAction | ODataFunction> =
 /**
  * Pick the overload that matches the supplied parameter names.
  *
- * OData V4.01 Part 1 §11.5.3.2 selects a function overload whose declared
+ * OData V4.01 Part 1 "Function overload resolution" selects a function overload whose declared
  * parameter set matches the supplied names before anything else, so the
  * fewest declared parameters wins and a superset cannot shadow an exact match
- * (#65). Binding-type specificity breaks an arity tie: §11.5.1 lets a
+ * (#65). Binding-type specificity breaks an arity tie: "Binding an Operation to a Resource" lets a
  * candidate bound to a base type stay invocable through a derived entity set,
- * but §11.5.3.2 selects by the type of the URL segment, which is the set's own
+ * but "Function overload resolution" selects by the type of the URL segment, which is the set's own
  * type, so the candidate bound to the most derived type wins (lowest
  * `bindingDepth`). A genuine tie — same binding depth and same parameter count
  * — is refused as ambiguous, mirroring the service-side rule ("Services SHOULD
@@ -1185,9 +1185,9 @@ function selectCallableOverload<T extends ODataAction | ODataFunction>(
  * How far a bound callable's binding type sits from the entity set's type in
  * the inheritance chain, or `undefined` when the set cannot invoke it.
  *
- * OData V4.01 Part 1 §11.5.1: an operation bound to a type is invocable
+ * OData V4.01 Part 1 "Binding an Operation to a Resource": an operation bound to a type is invocable
  * through a resource whose type is that type or a type derived from it.
- * §11.5.3.2 (functions) and §11.5.4.2 (actions) then select the overload by
+ * "Function overload resolution" (functions) and "Action Overload Resolution" (actions) then select the overload by
  * the type of the URL segment, so this depth is the binding-type specificity
  * signal: 0 is the set's own type and larger numbers are further up its
  * inheritance chain. Unbound callables rank 0.
