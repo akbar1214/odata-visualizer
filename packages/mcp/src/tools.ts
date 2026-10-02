@@ -6,6 +6,7 @@ import type {
   ODataFunction,
   ODataMetadata,
   ODataParameter,
+  ODataProperty,
   ODataRelationship,
   ODataTypeDefinition,
 } from '@odata-visualizer/shared';
@@ -616,14 +617,41 @@ function resolveUnderlyingType(
 }
 
 /**
+ * The complex type's own and inherited properties, base first, each paired
+ * with the namespace of the type that declared it.
+ *
+ * `getEffectiveProperties` flattens the inheritance chain and drops the
+ * declaring namespace, but an inherited property's type reference resolves in
+ * the namespace of the type that declared it, not the derived type's — so the
+ * chain is walked here instead.
+ */
+function effectiveComplexProperties(
+  entity: ODataEntity,
+  metadata: ODataMetadata,
+): Array<{ property: ODataProperty; namespace: string | undefined }> {
+  const seen = new Set<string>();
+  const properties: Array<{ property: ODataProperty; namespace: string | undefined }> = [];
+  for (const declaring of [...resolveInheritanceChain(entity, metadata.entities)].reverse()) {
+    for (const property of declaring.properties) {
+      if (seen.has(property.name)) continue;
+      seen.add(property.name);
+      properties.push({ property, namespace: declaring.namespace });
+    }
+  }
+  return properties;
+}
+
+/**
  * Coerce a complex value member by member.
  *
- * Member names are matched case-insensitively and re-emitted under the
- * declared spelling, exactly as top-level parameter names are. A member the
- * type does not declare is refused, mirroring `assertKnownParameters` for an
- * unknown top-level parameter — a typo would otherwise reach the service as an
- * unknown property. An open type carries dynamic members, which are legal and
- * pass through untouched.
+ * Member names are matched exact-case first and then case-insensitively,
+ * re-emitted under the declared spelling, exactly as top-level parameter names
+ * are. A member the type does not declare is refused, mirroring
+ * `assertKnownParameters` for an unknown top-level parameter — a typo would
+ * otherwise reach the service as an unknown property. An open type carries
+ * dynamic members, which are legal and pass through untouched. A value that is
+ * not an object is refused: every scalar path validates its shape, and a
+ * complex parameter is no different.
  */
 function coerceComplex(
   entity: ODataEntity,
@@ -631,9 +659,11 @@ function coerceComplex(
   metadata: ODataMetadata,
   encoding: BodyEncoding,
 ): unknown {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
-
   const typeName = entity.qualifiedName ?? entity.name;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`Invalid ${typeName} value: ${JSON.stringify(value)} (expected an object)`);
+  }
+
   encoding.complexDepth += 1;
   try {
     if (encoding.complexDepth > MAX_COMPLEX_DEPTH) {
@@ -642,31 +672,32 @@ function coerceComplex(
       );
     }
 
-    const properties = getEffectiveProperties(entity, metadata.entities);
-    const byLowerName = new Map(properties.map((p) => [p.name.toLowerCase(), p]));
-    const coerced: Record<string, unknown> = {};
+    const properties = effectiveComplexProperties(entity, metadata);
+    const entries: Array<[string, unknown]> = [];
     for (const [name, member] of Object.entries(value)) {
-      const property = byLowerName.get(name.toLowerCase());
-      if (!property) {
+      const declared =
+        properties.find((p) => p.property.name === name) ??
+        properties.find((p) => p.property.name.toLowerCase() === name.toLowerCase());
+      if (!declared) {
         if (entity.openType) {
-          coerced[name] = member;
+          entries.push([name, member]);
           continue;
         }
         throw new Error(
           `Unknown member "${name}" for complex type ${typeName}. Declared properties: ${
-            properties.map((p) => p.name).join(', ') || '(none)'
+            properties.map((p) => p.property.name).join(', ') || '(none)'
           }.`,
         );
       }
-      coerced[property.name] = coerceBodyValue(
-        property.type,
-        member,
-        metadata,
-        encoding,
-        entity.namespace,
-      );
+      entries.push([
+        declared.property.name,
+        coerceBodyValue(declared.property.type, member, metadata, encoding, declared.namespace),
+      ]);
     }
-    return coerced;
+    // `Object.fromEntries` defines every key as an own data property, so a
+    // dynamic member named `__proto__` survives instead of hitting an object
+    // literal's prototype setter.
+    return Object.fromEntries(entries);
   } finally {
     encoding.complexDepth -= 1;
   }

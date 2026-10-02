@@ -1161,6 +1161,8 @@ const numericCSDL = `<?xml version="1.0" encoding="utf-8"?>
         <Parameter Name="Ghost" Type="Num.Missing" />
         <Parameter Name="Wrapped" Type="Num.Wrapped" />
         <Parameter Name="Loop" Type="Num.Loop" />
+        <Parameter Name="Caseful" Type="Num.Caseful" />
+        <Parameter Name="Derived" Type="App.Derived" />
       </Action>
       <TypeDefinition Name="Score" UnderlyingType="Edm.Int32" />
       <TypeDefinition Name="BigRef" UnderlyingType="Edm.Int64" />
@@ -1174,6 +1176,7 @@ const numericCSDL = `<?xml version="1.0" encoding="utf-8"?>
         <Property Name="Details" Type="Num.Details" />
         <Property Name="Tags" Type="Collection(Edm.Int64)" />
         <Property Name="Ref" Type="Num.BigRef" />
+        <Property Name="Bundles" Type="Collection(Num.Details)" />
       </ComplexType>
       <ComplexType Name="Node">
         <Property Name="Next" Type="Num.Node" />
@@ -1181,9 +1184,29 @@ const numericCSDL = `<?xml version="1.0" encoding="utf-8"?>
       <ComplexType Name="Open" OpenType="true">
         <Property Name="Amount" Type="Edm.Decimal" />
       </ComplexType>
+      <ComplexType Name="Caseful">
+        <Property Name="Amount" Type="Edm.Decimal" />
+        <Property Name="amount" Type="Edm.Int64" />
+      </ComplexType>
       <EntityContainer Name="Container">
         <EntitySet Name="Items" EntityType="Num.Item" />
       </EntityContainer>
+    </Schema>
+    <Schema Namespace="Base" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <ComplexType Name="BaseComplex">
+        <Property Name="Value" Type="Shadow" />
+      </ComplexType>
+      <ComplexType Name="Shadow">
+        <Property Name="Amount" Type="Edm.Decimal" />
+      </ComplexType>
+    </Schema>
+    <Schema Namespace="App" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <ComplexType Name="Derived" BaseType="Base.BaseComplex">
+        <Property Name="Note" Type="Edm.String" />
+      </ComplexType>
+      <ComplexType Name="Shadow">
+        <Property Name="Amount" Type="Edm.String" />
+      </ComplexType>
     </Schema>
   </edmx:DataServices>
 </edmx:Edmx>`;
@@ -1634,6 +1657,65 @@ describe('complex action body coercion', () => {
     const result = await adjust({ Loop: '1' });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('Cyclic type definition');
+  });
+
+  it("resolves an inherited member's type in its declaring type's namespace", async () => {
+    const result = await adjust({ Derived: { Value: { Amount: '9007199254740993' } } });
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    expect(emittedBody(text)['Derived']).toEqual({ Value: { Amount: '9007199254740993' } });
+    // `Value` is declared on Base.BaseComplex and its type `Shadow` means
+    // Base.Shadow, whose Amount is an Edm.Decimal. App.Shadow.Amount is an
+    // Edm.String, so resolving in the derived type's namespace would leave
+    // this a bare string and never flip the header.
+    expect(text).toContain('IEEE754Compatible=true');
+  });
+
+  it('binds a case-colliding member to its exact-case declaration', async () => {
+    // Num.Caseful declares both `Amount` (Decimal) and `amount` (Int64); the
+    // exact key must bind to the exact declaration, not to the later one.
+    const exact = await adjust({ Caseful: { Amount: '1.5' } });
+    expect(exact.isError).toBeUndefined();
+    expect(emittedBody(textOf(exact))['Caseful']).toEqual({ Amount: 1.5 });
+
+    const lower = await adjust({ Caseful: { amount: '42' } });
+    expect(lower.isError).toBeUndefined();
+    expect(emittedBody(textOf(lower))['Caseful']).toEqual({ amount: 42 });
+  });
+
+  it('refuses a non-object value for a resolved complex parameter', async () => {
+    for (const value of ['garbage', 42, true, [1, 2]]) {
+      const result = await adjust({ Details: value });
+      expect(result.isError, `${JSON.stringify(value)} must be rejected`).toBe(true);
+      expect(textOf(result)).toContain('Invalid Num.Details');
+      expect(textOf(result)).toContain('expected an object');
+    }
+  });
+
+  it('keeps a dynamic __proto__ member of an open complex type', async () => {
+    const result = await adjust({ Open: { Amount: '1.5', ['__proto__']: 'kept' } });
+    expect(result.isError).toBeUndefined();
+    const open = emittedBody(textOf(result))['Open'] as Record<string, unknown>;
+    expect(open['Amount']).toBe(1.5);
+    expect(open['__proto__']).toBe('kept');
+  });
+
+  it('coerces a Collection(complex) member of a complex type', async () => {
+    const result = await adjust({
+      Envelope: { Bundles: [{ Amount: '1.5' }, { Amount: '9007199254740993' }] },
+    });
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    expect(emittedBody(text)['Envelope']).toEqual({
+      Bundles: [{ Amount: '1.5' }, { Amount: '9007199254740993' }],
+    });
+    expect(text).toContain('IEEE754Compatible=true');
+  });
+
+  it('matches an inherited member case-insensitively and re-emits the declared spelling', async () => {
+    const result = await adjust({ Derived: { value: { amount: '1.5' } } });
+    expect(result.isError).toBeUndefined();
+    expect(emittedBody(textOf(result))['Derived']).toEqual({ Value: { Amount: 1.5 } });
   });
 });
 
