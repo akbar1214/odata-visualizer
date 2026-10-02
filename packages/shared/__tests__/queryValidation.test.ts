@@ -471,6 +471,19 @@ describe('$select forms beyond star and plain paths', () => {
     expect(() => buildQueryUrl({ entitySet: 'Parts', select: ['Qty($top=5)'] })).toThrow(
       /\$select/,
     );
+    // The gap also applies after a type prefix: `selectItem` can put the same
+    // `selectProperty` (options and all) after the prefix, which is a distinct
+    // branch from the unprefixed form above. The plain path beside it is the
+    // accepted neighbour that must keep working.
+    expect(() =>
+      buildQueryUrl({
+        entitySet: 'Parts',
+        select: ["NS.Part/Addresses($filter=Name eq 'x';$top=5)"],
+      }),
+    ).toThrow(/\$select/);
+    expect(buildQueryUrl({ entitySet: 'Parts', select: ['NS.Part/Address/City'] })).toBe(
+      '/Parts?$select=NS.Part/Address/City',
+    );
   });
 });
 
