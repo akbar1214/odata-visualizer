@@ -1,17 +1,21 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { once } from 'node:events';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import request from 'supertest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { parseCSDL } from '@odata-visualizer/shared';
 import { createApp } from '../src/app.js';
-import { metadataStore } from '../src/services/metadataStore.js';
-import { loadPinnedMetadata, metadataFileFromEnv } from '../src/services/pinnedMetadata.js';
+import { createModelStore, metadataStore } from '../src/services/metadataStore.js';
+import {
+  loadPinnedMetadata,
+  metadataFileFromEnv,
+  pinFromEnv,
+} from '../src/services/pinnedMetadata.js';
 
 const minimalCSDL = `<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
@@ -47,6 +51,16 @@ async function pinStore(): Promise<void> {
     sourceType: 'file',
     fileSizeBytes: 42,
   });
+}
+
+/** `mkfifo` is POSIX-only; the FIFO test is skipped where it is missing. */
+function hasMkfifo(): boolean {
+  try {
+    execFileSync('sh', ['-c', 'command -v mkfifo'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 describe('metadataFileFromEnv', () => {
@@ -97,6 +111,58 @@ describe('loadPinnedMetadata', () => {
       await truncate(huge, 26 * 1024 * 1024);
 
       await expect(loadPinnedMetadata(huge)).rejects.toThrow(/exceed/i);
+    });
+  });
+
+  it('rejects a directory as not a regular file', async () => {
+    await withTempDir(async (dir) => {
+      await expect(loadPinnedMetadata(dir)).rejects.toThrow(/not a regular file/);
+    });
+  });
+
+  it.skipIf(!hasMkfifo())('rejects a FIFO as not a regular file instead of hanging', async () => {
+    await withTempDir(async (dir) => {
+      const fifo = join(dir, 'metadata.fifo');
+      execFileSync('mkfifo', [fifo]);
+
+      await expect(loadPinnedMetadata(fifo)).rejects.toThrow(/not a regular file/);
+    });
+  });
+});
+
+describe('pinFromEnv', () => {
+  it('locks the given store with the env-named file and returns its info', async () => {
+    await withTempDir(async (dir) => {
+      const file = join(dir, 'metadata.xml');
+      await writeFile(file, minimalCSDL);
+      const store = createModelStore();
+
+      const info = await pinFromEnv(store, { METADATA_FILE: `  ${file}  ` });
+
+      expect(info?.sourceName).toBe('metadata.xml');
+      expect(info?.sourceType).toBe('file');
+      expect(store.isLocked()).toBe(true);
+      expect(store.current()?.metadata.entities.map((e) => e.name)).toContain('Product');
+    });
+  });
+
+  it('returns null and leaves the store unlocked when the variable is unset', async () => {
+    const store = createModelStore();
+
+    expect(await pinFromEnv(store, {})).toBeNull();
+    expect(store.isLocked()).toBe(false);
+  });
+
+  it('rejects a load failure and leaves the store unlocked', async () => {
+    await withTempDir(async (dir) => {
+      const store = createModelStore();
+
+      await expect(pinFromEnv(store, { METADATA_FILE: join(dir, 'missing.xml') })).rejects.toThrow(
+        /METADATA_FILE/,
+      );
+
+      expect(store.isLocked()).toBe(false);
+      expect(store.current()).toBeNull();
     });
   });
 });
@@ -187,6 +253,19 @@ describe('pinned metadata via the API', () => {
     });
   });
 
+  it('leaves a pinned GET /api/parse/file unchanged, not a 403', async () => {
+    await pinStore();
+    const app = createApp();
+
+    // The guard is POST-only, so a method with no parse route keeps whatever
+    // the unlocked server did (404 without a frontend build, the SPA fallback
+    // otherwise) instead of turning into a pinned 403.
+    const pinned = await request(app).get('/api/parse/file');
+    const unlocked = await request(createApp()).get('/api/parse/file');
+    expect(pinned.status).not.toBe(403);
+    expect(pinned.status).toBe(unlocked.status);
+  });
+
   it('refuses DELETE /current with 403, not 500, while pinned', async () => {
     await pinStore();
     const app = createApp();
@@ -219,36 +298,29 @@ describe('MCP while pinned', () => {
     metadataStore.unlock();
   });
 
-  it('does not offer load_metadata even when MCP_ALLOW_LOAD=1', async () => {
+  it('drops load_metadata for new sessions once the store is pinned, even with MCP_ALLOW_LOAD=1', async () => {
     const previous = process.env['MCP_ALLOW_LOAD'];
     process.env['MCP_ALLOW_LOAD'] = '1';
 
-    const servers: Server[] = [];
-    const start = async (): Promise<string> => {
-      const started = createApp().listen(0);
-      servers.push(started);
-      await once(started, 'listening');
-      return `http://127.0.0.1:${(started.address() as AddressInfo).port}`;
-    };
-
+    // Started once while unlocked: the opt-in is live at mount time, so the
+    // check must happen per session rather than being baked in here.
+    const server = createApp().listen(0);
     try {
-      // Positive control: unlocked, the opt-in still registers the tool, so
-      // the absence below is the pin's doing rather than the defaults.
-      const unlockedUrl = await start();
-      expect(await listToolNames(unlockedUrl)).toContain('load_metadata');
+      await once(server, 'listening');
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+      expect(await listToolNames(url)).toContain('load_metadata');
 
       await pinStore();
-      const pinnedUrl = await start();
-      const tools = await listToolNames(pinnedUrl);
+
+      const tools = await listToolNames(url);
       expect(tools).not.toContain('load_metadata');
       expect(tools).toContain('build_query');
     } finally {
       if (previous === undefined) delete process.env['MCP_ALLOW_LOAD'];
       else process.env['MCP_ALLOW_LOAD'] = previous;
-      for (const server of servers) {
-        server.closeAllConnections?.();
-        await new Promise<void>((resolve) => server.close(() => resolve()));
-      }
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 });

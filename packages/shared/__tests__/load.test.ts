@@ -32,6 +32,18 @@ const siblingDocument = `<?xml version="1.0"?>
   </edmx:DataServices>
 </edmx:Edmx>`;
 
+const suppliedDocument = `<?xml version="1.0"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Supplied" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="OnlySupplied">
+        <Property Name="Id" Type="Edm.String" />
+      </EntityType>
+    </Schema>
+    <edmx:Reference Uri="sibling.xml"><edmx:Include Namespace="Sib" Alias="sib" /></edmx:Reference>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+
 beforeAll(async () => {
   workDir = await mkdtemp(join(tmpdir(), 'csdl-ref-'));
   nestedDir = join(workDir, 'nested');
@@ -66,5 +78,18 @@ describe('parseCSDLFile reference resolution', () => {
   it('refuses absolute file URIs', async () => {
     const metadata = await parseCSDLFile(mainPath);
     expect(metadata.unresolvedReferences).toContain('file:///etc/hostname');
+  });
+
+  it('parses supplied content instead of re-reading the file, still resolving references from the path', async () => {
+    // The on-disk document declares Main.Thing; the supplied one must win.
+    const path = join(nestedDir, 'supplied.xml');
+    await writeFile(path, mainDocument, 'utf-8');
+
+    const metadata = await parseCSDLFile(path, suppliedDocument);
+
+    expect(metadata.entities.map((e) => e.qualifiedName)).toContain('Supplied.OnlySupplied');
+    expect(metadata.entities.map((e) => e.qualifiedName)).not.toContain('Main.Thing');
+    // Relative references still resolve against the supplied path's directory.
+    expect(metadata.entities.map((e) => e.qualifiedName)).toContain('Sib.Base');
   });
 });

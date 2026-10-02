@@ -46,13 +46,16 @@ const upload = multer({
 });
 
 /**
- * Pre-handler middleware for every parse route: while `METADATA_FILE` pins the
- * model, uploads must be refused before multer has buffered a body or the URL
- * handler has validated anything. The body is a `ParseResponse` so existing
- * clients still understand the refusal.
+ * Pre-handler middleware for the parse routes, restricted to POST so methods
+ * that never had a route (`GET /api/parse/file` and friends) keep returning
+ * 404. While `METADATA_FILE` pins the model, POSTs are refused before the
+ * route handlers run — and, for multipart, before multer buffers the file.
+ * JSON bodies are parsed by `express.json` (10 MB limit) before this
+ * middleware, so an over-limit one is a 413 rather than the pinned 403. The
+ * body is a `ParseResponse` so existing clients still understand the refusal.
  */
-function refuseWhenPinned(_req: Request, res: Response, next: NextFunction): void {
-  if (!metadataStore.isLocked()) {
+function refuseWhenPinned(req: Request, res: Response, next: NextFunction): void {
+  if (req.method !== 'POST' || !metadataStore.isLocked()) {
     next();
     return;
   }
@@ -65,8 +68,8 @@ function refuseWhenPinned(_req: Request, res: Response, next: NextFunction): voi
   res.status(403).json(response);
 }
 
-// Wired before any route handler — and therefore before multer — so a pinned
-// server never buffers or validates an upload it is going to refuse.
+// Wired before any route handler, so a pinned POST never reaches multer or a
+// URL fetch (JSON bodies are parsed earlier, see the comment above).
 router.use(['/file', '/url', '/content'], refuseWhenPinned);
 
 /** Session id for per-browser isolation; falls back to the shared "current" model. */

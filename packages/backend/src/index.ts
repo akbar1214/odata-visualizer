@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { createApp } from './app.js';
 import { metadataStore } from './services/metadataStore.js';
-import { loadPinnedMetadata, metadataFileFromEnv } from './services/pinnedMetadata.js';
+import { metadataFileFromEnv, pinFromEnv } from './services/pinnedMetadata.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -27,25 +27,24 @@ const HOST = process.env['HOST'] || '127.0.0.1';
  * to start. The pin is read-once; restart the process to reload the file.
  */
 const pinnedFile = metadataFileFromEnv();
-if (pinnedFile) {
-  if (process.env['MCP_ALLOW_LOAD'] === '1') {
-    console.warn('⚠️  MCP_ALLOW_LOAD is ignored while METADATA_FILE pins the metadata store.');
-  }
+if (pinnedFile && process.env['MCP_ALLOW_LOAD'] === '1') {
+  console.warn('⚠️  MCP_ALLOW_LOAD is ignored while METADATA_FILE pins the metadata store.');
+}
 
-  try {
-    const { metadata, info } = await loadPinnedMetadata(pinnedFile);
-    metadataStore.lockTo(metadata, info);
+try {
+  const pinnedInfo = await pinFromEnv(metadataStore);
+  if (pinnedInfo) {
     console.log(
-      `📌 Metadata pinned from ${info.sourceName} (${info.fileSizeBytes} bytes); ` +
+      `📌 Metadata pinned from ${pinnedInfo.sourceName} (${pinnedInfo.fileSizeBytes} bytes); ` +
         'uploads, URL parsing and clears are disabled.',
     );
-  } catch (error) {
-    console.error(
-      `❌ Failed to load METADATA_FILE "${pinnedFile}":`,
-      error instanceof Error ? error.message : error,
-    );
-    process.exit(1);
   }
+} catch (error) {
+  console.error(
+    `❌ Failed to load METADATA_FILE "${pinnedFile}":`,
+    error instanceof Error ? error.message : error,
+  );
+  process.exit(1);
 }
 
 const app = createApp();

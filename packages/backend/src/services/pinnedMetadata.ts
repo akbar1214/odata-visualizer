@@ -1,9 +1,10 @@
 import { basename } from 'node:path';
-import { stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open, type FileHandle } from 'node:fs/promises';
 import type { ODataMetadata } from '@odata-visualizer/shared';
 import { parseCSDLFile } from '@odata-visualizer/shared/load';
 import { MAX_UPLOAD_BYTES } from './limits.js';
-import type { ModelInfo } from './metadataStore.js';
+import type { ModelInfo, ModelStore } from './metadataStore.js';
 
 /**
  * The file named by `METADATA_FILE`, or undefined when the variable is unset.
@@ -21,41 +22,102 @@ export interface PinnedMetadata {
   info: ModelInfo;
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'unknown error';
+}
+
+/** Read exactly `size` bytes from an already-fstat'ed handle. */
+async function readExactly(handle: FileHandle, size: number): Promise<string> {
+  const buffer = Buffer.alloc(size);
+  let offset = 0;
+  while (offset < size) {
+    const { bytesRead } = await handle.read(buffer, offset, size - offset, offset);
+    if (bytesRead === 0) break;
+    offset += bytesRead;
+  }
+  return buffer.toString('utf-8', 0, offset);
+}
+
 /**
  * Load the one document the server is pinned to.
  *
- * The size is checked before the file is read (and therefore before the XML is
- * expanded into an object graph) so an oversized file fails fast instead of
- * exhausting memory. `parseCSDLFile` resolves relative `edmx:Reference`
- * documents against the file's own directory and refuses ones that escape it.
+ * The file is opened once with `O_NONBLOCK` so a FIFO cannot hang startup, and
+ * every check and the whole read run against that one handle: fstat rejects
+ * non-regular files and enforces the upload cap, then exactly `stats.size`
+ * bytes are read, so a file replaced or grown after the check cannot be
+ * over-read. `parseCSDLFile` parses the bytes already read while still
+ * resolving relative `edmx:Reference` documents against the file's directory
+ * (and refusing ones that escape it).
  */
 export async function loadPinnedMetadata(file: string): Promise<PinnedMetadata> {
-  let fileSizeBytes: number;
+  let handle: FileHandle;
   try {
-    fileSizeBytes = (await stat(file)).size;
+    handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK);
   } catch (error) {
-    const cause = error instanceof Error ? error.message : 'unknown error';
-    throw new Error(`METADATA_FILE "${file}" cannot be read: ${cause}`);
+    throw new Error(`METADATA_FILE "${file}" cannot be read: ${errorMessage(error)}`);
   }
 
-  if (fileSizeBytes > MAX_UPLOAD_BYTES) {
-    throw new Error(
-      `METADATA_FILE "${file}" is ${fileSizeBytes} bytes, which exceeds the ` +
-        `${MAX_UPLOAD_BYTES}-byte limit`,
-    );
+  try {
+    let stats;
+    try {
+      stats = await handle.stat();
+    } catch (error) {
+      throw new Error(`METADATA_FILE "${file}" cannot be read: ${errorMessage(error)}`);
+    }
+    if (!stats.isFile()) {
+      throw new Error(`METADATA_FILE "${file}" is not a regular file`);
+    }
+    const fileSizeBytes = stats.size;
+    if (fileSizeBytes > MAX_UPLOAD_BYTES) {
+      throw new Error(
+        `METADATA_FILE "${file}" is ${fileSizeBytes} bytes, which exceeds the ` +
+          `${MAX_UPLOAD_BYTES}-byte limit`,
+      );
+    }
+
+    let xmlContent: string;
+    try {
+      xmlContent = await readExactly(handle, fileSizeBytes);
+    } catch (error) {
+      throw new Error(`METADATA_FILE "${file}" cannot be read: ${errorMessage(error)}`);
+    }
+
+    let metadata: ODataMetadata;
+    try {
+      metadata = await parseCSDLFile(file, xmlContent);
+    } catch (error) {
+      throw new Error(`METADATA_FILE "${file}" could not be parsed: ${errorMessage(error)}`);
+    }
+
+    return {
+      metadata,
+      info: {
+        // Basename only: `info` is echoed by /api/metadata/current and MCP, and
+        // the absolute path would leak the host's directory layout.
+        sourceName: basename(file),
+        sourceType: 'file',
+        fileSizeBytes,
+        loadedAt: new Date().toISOString(),
+      },
+    };
+  } finally {
+    await handle.close();
   }
+}
 
-  const metadata = await parseCSDLFile(file);
+/**
+ * Apply METADATA_FILE to the given store. Returns the pinned model's info, or
+ * null when the variable is unset (today's behavior). Failures are re-thrown
+ * so the caller can report the cause and refuse to start.
+ */
+export async function pinFromEnv(
+  store: ModelStore,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ModelInfo | null> {
+  const file = metadataFileFromEnv(env);
+  if (!file) return null;
 
-  return {
-    metadata,
-    info: {
-      // Basename only: `info` is echoed by /api/metadata/current and MCP, and
-      // the absolute path would leak the host's directory layout.
-      sourceName: basename(file),
-      sourceType: 'file',
-      fileSizeBytes,
-      loadedAt: new Date().toISOString(),
-    },
-  };
+  const { metadata, info } = await loadPinnedMetadata(file);
+  store.lockTo(metadata, info);
+  return info;
 }

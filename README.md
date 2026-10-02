@@ -213,7 +213,7 @@ Clear this session's model, or all of them when no session id is supplied.
 
 ### Pinned metadata (`METADATA_FILE`)
 
-Set `METADATA_FILE` to serve exactly one metadata document. It is loaded and parsed **before the server starts listening**; if the file is missing, too large (> 25 MB, the upload cap), or invalid, the process logs the path and cause and exits non-zero rather than start with no model. Relative `edmx:Reference` files resolve against the document's own directory (and may not escape it). The file is read once — restart the process to reload it.
+Set `METADATA_FILE` to serve exactly one metadata document. It is loaded and parsed **before the server starts listening**; if the file is missing, not a regular file (a directory or FIFO), too large (> 25 MB, the upload cap), or invalid, the process logs the path and cause and exits non-zero rather than start with no model. Relative `edmx:Reference` files resolve against the document's own directory (and may not escape it). The file is read once — restart the process to reload it.
 
 ```bash
 docker run -p 3001:3001 \
@@ -226,7 +226,7 @@ docker run -p 3001:3001 \
 While pinned:
 
 - every session and every MCP client sees the same model; `GET /api/metadata/current` reports `"pinned": true`
-- `POST /api/parse/file`, `/api/parse/url`, `/api/parse/content` and `DELETE /api/metadata/current` return **403**
+- `POST /api/parse/file`, `/api/parse/url`, `/api/parse/content` and `DELETE /api/metadata/current` return **403**. The guard runs before the route handlers, so a multipart upload is refused before multer buffers it; a JSON body is parsed by `express.json` first, so one above its 10 MB limit gets a 413 before the pinned check.
 - `/mcp` does not offer `load_metadata`, even when `MCP_ALLOW_LOAD=1`
 - `METADATA_URL_ALLOWLIST` / `METADATA_URL_BLOCK_PRIVATE` no longer matter: the `/api/parse/url` SSRF surface is gone, which makes pinned mode the safer way to expose the server beyond localhost. Still set `API_TOKEN` (and `MCP_TOKEN` / `MCP_ALLOWED_HOSTS`) for anything that is not loopback.
 

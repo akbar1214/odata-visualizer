@@ -28,12 +28,16 @@ function resolveSiblingPath(uri: string, baseDirectory: string): string {
  * Parse a CSDL document from disk. Relative `edmx:Reference/@Uri` values
  * resolve against the document's own location (and may not escape it), so
  * multi-file models load as one model.
+ *
+ * When `xmlContent` is supplied it is parsed instead of re-reading the file —
+ * callers that already hold the bytes (and validated their size) avoid a second
+ * read. `path` still anchors relative references.
  */
-export async function parseCSDLFile(path: string): Promise<ODataMetadata> {
+export async function parseCSDLFile(path: string, xmlContent?: string): Promise<ODataMetadata> {
   const absolutePath = isAbsolute(path) ? path : resolvePath(path);
   const baseDirectory = dirname(absolutePath);
-  const xmlContent = await readFile(absolutePath, 'utf-8');
-  return parseCSDL(xmlContent, {
+  const content = xmlContent ?? (await readFile(absolutePath, 'utf-8'));
+  return parseCSDL(content, {
     baseUri: `file://${absolutePath}`,
     loadExternal: async (uri) => readFile(resolveSiblingPath(uri, baseDirectory), 'utf-8'),
   });
