@@ -247,6 +247,30 @@ describe('parseCSDLUrl header forwarding', () => {
     ).rejects.toThrow(/not allowed/);
     expect(calls).toHaveLength(0);
   });
+
+  it('rejects falsy non-object headers before any fetch', async () => {
+    const calls = stubFetch({});
+
+    // A truthiness check would skip validation for these and fetch
+    // unauthenticated, the same silent drop the non-url guard prevents.
+    for (const headers of [null, '', 0, false]) {
+      await expect(
+        parseCSDLUrl('https://api.example.com/odata/$metadata', {
+          headers: headers as unknown as Record<string, string>,
+        }),
+      ).rejects.toThrow('Headers must be an object of string values');
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('treats an empty headers object as no headers', async () => {
+    const calls = stubFetch({ 'https://api.example.com/odata/$metadata': plainDocument });
+
+    await parseCSDLUrl('https://api.example.com/odata/$metadata', { headers: {} });
+
+    expect(calls).toHaveLength(1);
+    expect([...calls[0].headers.keys()]).toEqual(['accept']);
+  });
 });
 
 describe('parseCSDLUrl manual redirects', () => {

@@ -125,6 +125,25 @@ describe('createMcpServer', () => {
     expect(buildQuery!.description).toContain('does not define');
   });
 
+  it('advertises the load_metadata headers argument and its boundaries', async () => {
+    const client = await connect(createMetadataStore());
+    const { tools } = await client.listTools();
+    const loadMetadata = tools.find((t) => t.name === 'load_metadata');
+    expect(loadMetadata).toBeDefined();
+
+    const properties = (
+      loadMetadata!.inputSchema as {
+        properties?: Record<string, { description?: string }>;
+      }
+    ).properties;
+    const description = properties?.['headers']?.description ?? '';
+    expect(description).toContain('Authorization');
+    expect(description).toContain('validated');
+    expect(description).toContain('same-origin');
+    expect(description).toContain('never logged');
+    expect(description).toContain('type "url"');
+  });
+
   it('still exposes read-only tools when load_metadata is disabled', async () => {
     const store = createMetadataStore();
     store.set(await parseCSDL(windchillXml), { sourceName: 'windchill.xml' });

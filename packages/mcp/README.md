@@ -12,7 +12,7 @@ The MCP server exposes 15 tools that let an LLM understand an OData V4 model and
 
 | Tool | Description |
 |------|-------------|
-| `load_metadata` | Load metadata from a file path, URL, or the backend (`type: "server"`); returns a summary |
+| `load_metadata` | Load metadata from a file path, URL (optionally with request `headers`), or the backend (`type: "server"`); returns a summary |
 | `get_metadata_status` | Show what is loaded (source, time, counts) |
 | `search_entities` | Search types by name, label, property, or annotation text |
 | `list_entities` | List entities / complex types (paged, filter by kind) |
@@ -52,7 +52,7 @@ Typical offline workflow:
 3. `list_entity_sets` to find the set name.
 4. `build_query` / `build_action_invocation` / `build_function_invocation` to produce the request.
 
-Authentication (basic, bearer, or SSO) and execution are intentionally out of scope — the server never calls the service.
+Authentication for the metadata fetch is per-call via `headers` (see [Option 1](#option-1-url-fetch-from-odata-service)); executing requests against the service is intentionally out of scope — the server only fetches metadata documents (and, for `type: "server"`, the backend's current model).
 
 ## Prerequisites
 
@@ -80,6 +80,16 @@ Provide the `$metadata` endpoint URL of any OData service:
 source: https://services.odata.org/V4/OData/OData.svc/$metadata
 type: url
 ```
+
+If the endpoint requires credentials, pass per-call `headers` alongside a `url` source:
+
+```
+source: https://host/Windchill/servlet/odata/ProdMgmt/$metadata
+type: url
+headers: { "Authorization": "Bearer <token>" }
+```
+
+Headers are validated before any request is sent: invalid names, control characters, values above U+00FF, and framing headers such as `Host` or `Content-Length` are rejected. They are sent only to the metadata URL and same-origin `edmx:Reference` fetches, and are never logged. They are per call only — nothing is stored — and are not accepted with `type: "file"` or `type: "server"`.
 
 ### Option 2: Local file path
 

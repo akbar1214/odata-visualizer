@@ -8,6 +8,7 @@ import {
   type ToolHandlerOptions,
 } from '../src/tools.js';
 import { createMetadataStore } from '../src/store.js';
+import { loadMetadataFromSource } from '../src/metadata-loader.js';
 import { textOf } from './textOf.js';
 
 const minimalCSDL = `<?xml version="1.0" encoding="utf-8"?>
@@ -908,6 +909,166 @@ describe('load_metadata from backend server', () => {
     });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('JSON');
+  });
+});
+
+describe('load_metadata with URL headers', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const metadataUrl = 'https://api.example.com/odata/$metadata';
+
+  /** Answer every fetch with `body` and record the requests it received. */
+  function stubMetadataFetch(
+    body: string = minimalCSDL,
+  ): Array<{ url: string; init?: RequestInit }> {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL, init?: RequestInit) => {
+        calls.push({ url: String(input), init });
+        return new Response(body, { status: 200 });
+      }),
+    );
+    return calls;
+  }
+
+  it('sends per-call headers on the metadata URL fetch and parses the document', async () => {
+    const calls = stubMetadataFetch();
+    resetMetadata();
+
+    const result = await handleToolCall('load_metadata', {
+      source: metadataUrl,
+      type: 'url',
+      headers: { Authorization: 'Bearer t', 'X-Api-Key': 'k' },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(calls.map((call) => call.url)).toEqual([metadataUrl]);
+    const headers = new Headers(calls[0]?.init?.headers);
+    expect(headers.get('authorization')).toBe('Bearer t');
+    expect(headers.get('x-api-key')).toBe('k');
+    expect(getMetadata()?.entities).toHaveLength(2);
+  });
+
+  it('rejects a CRLF injection in a header value before any fetch', async () => {
+    const calls = stubMetadataFetch();
+    const result = await handleToolCall('load_metadata', {
+      source: metadataUrl,
+      type: 'url',
+      headers: { Authorization: 'Bearer t\r\nX-Evil: 1' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('invalid character in its value');
+    expect(textOf(result)).not.toContain('Bearer t');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects a denied framing header before any fetch', async () => {
+    const calls = stubMetadataFetch();
+    const result = await handleToolCall('load_metadata', {
+      source: metadataUrl,
+      type: 'url',
+      headers: { Host: 'evil.example' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('not allowed');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects a header value above U+00FF before any fetch', async () => {
+    const calls = stubMetadataFetch();
+    const result = await handleToolCall('load_metadata', {
+      source: metadataUrl,
+      type: 'url',
+      headers: { 'X-Api-Key': 'caf\u20ac' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('invalid character in its value');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('returns the validator error for non-object headers instead of crashing', async () => {
+    const calls = stubMetadataFetch();
+    const result = await handleToolCall('load_metadata', {
+      source: metadataUrl,
+      type: 'url',
+      headers: 'Bearer t',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('Headers must be an object of string values');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects falsy non-object headers instead of fetching unauthenticated', async () => {
+    const calls = stubMetadataFetch();
+
+    for (const headers of [null, '', 0, false]) {
+      const result = await handleToolCall('load_metadata', {
+        source: metadataUrl,
+        type: 'url',
+        headers,
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain('Headers must be an object of string values');
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects falsy non-object headers in loadMetadataFromSource without fetching', async () => {
+    const calls = stubMetadataFetch();
+
+    await expect(
+      loadMetadataFromSource({
+        type: 'url',
+        path: metadataUrl,
+        headers: null as unknown as Record<string, string>,
+      }),
+    ).rejects.toThrow('Headers must be an object of string values');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects headers before reading a file source', async () => {
+    const result = await handleToolCall('load_metadata', {
+      source: '/nonexistent/headers-only-for-url.xml',
+      type: 'file',
+      headers: { Authorization: 'Bearer t' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('headers are only supported for type "url"');
+    expect(textOf(result)).not.toContain('ENOENT');
+  });
+
+  it('rejects headers before calling the backend for a server source', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await handleToolCall('load_metadata', {
+      type: 'server',
+      headers: { Authorization: 'Bearer t' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('headers are only supported for type "url"');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('sends no extra header when headers are omitted', async () => {
+    const calls = stubMetadataFetch();
+    resetMetadata();
+
+    const result = await handleToolCall('load_metadata', { source: metadataUrl, type: 'url' });
+
+    expect(result.isError).toBeUndefined();
+    const headers = new Headers(calls[0]?.init?.headers);
+    expect([...headers.keys()]).toEqual(['accept']);
+    expect(headers.get('accept')).toBe('application/xml, text/xml, application/atomsvc+xml');
   });
 });
 

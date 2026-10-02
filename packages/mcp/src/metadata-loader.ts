@@ -6,11 +6,23 @@ export interface MetadataSource {
   type: MetadataSourceType;
   /** File path, URL, or backend base URL. Omitted for a default backend. */
   path?: string;
+  /**
+   * Request headers for the metadata URL (`type: 'url'` only), validated by
+   * the shared rules before any request. Credentials, so never logged.
+   */
+  headers?: Record<string, string>;
 }
 
 export const DEFAULT_BACKEND_URL = 'http://localhost:3001';
 
 export async function loadMetadataFromSource(source: MetadataSource): Promise<ODataMetadata> {
+  // A credential the caller believes is in effect must not be dropped on the
+  // floor: a file read or a backend call has no metadata request to attach it
+  // to, so accepting it there would silently unauthenticate the load.
+  if (source.headers !== undefined && source.type !== 'url') {
+    throw new Error('headers are only supported for type "url"');
+  }
+
   if (source.type === 'server') {
     return loadFromBackend(source.path);
   }
@@ -23,6 +35,7 @@ export async function loadMetadataFromSource(source: MetadataSource): Promise<OD
   if (!source.path) throw new Error('URL is required');
   return parseCSDLUrl(source.path, {
     accept: 'application/xml, text/xml, application/atomsvc+xml',
+    headers: source.headers,
   });
 }
 

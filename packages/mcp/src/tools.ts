@@ -841,6 +841,7 @@ export function createToolHandler(
 
         const source = asString(args['source']);
         const type = (args['type'] as MetadataSource['type']) ?? 'file';
+        const headers = args['headers'];
 
         if (!source && type !== 'server') {
           return errorResult('Error: source is required');
@@ -848,6 +849,14 @@ export function createToolHandler(
 
         try {
           const metadataSource: MetadataSource = { type, path: source };
+          if (headers !== undefined) {
+            // Carried through as-is, falsy values included: the shared
+            // validator rejects any non-object (`null`, `''`, `0`, `false`) or
+            // invalid value inside `loadMetadataFromSource`, so the failure
+            // surfaces through the catch below instead of fetching
+            // unauthenticated or crashing here.
+            metadataSource.headers = headers as Record<string, string>;
+          }
           const metadata = await loadMetadataFromSource(metadataSource);
           accessors.set(metadata, {
             sourceName: source ?? 'backend',
