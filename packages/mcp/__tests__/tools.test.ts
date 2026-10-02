@@ -1501,6 +1501,7 @@ const boundCompositionCSDL = `<?xml version="1.0" encoding="utf-8"?>
         <Key><PropertyRef Name="Id" /></Key>
         <Property Name="Id" Type="Edm.String" Nullable="false" />
       </EntityType>
+      <EntityType Name="Derived" BaseType="N.A" />
       <ComplexType Name="Addr">
         <Property Name="Street" Type="Edm.String" />
       </ComplexType>
@@ -1560,6 +1561,49 @@ const boundCompositionCSDL = `<?xml version="1.0" encoding="utf-8"?>
         <Parameter Name="it" Type="N.A" />
         <ReturnType Type="N.C" />
       </Function>
+      <Function Name="Tie" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <Parameter Name="factor" Type="Edm.String" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="Tie" IsBound="true">
+        <Parameter Name="it" Type="N.Derived" />
+        <Parameter Name="factor" Type="Edm.Int32" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="Pick" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="Pick" IsBound="true">
+        <Parameter Name="it" Type="N.Derived" />
+        <Parameter Name="x" Type="Edm.Int32" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="Amb" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <Parameter Name="a" Type="Edm.Int32" />
+        <Parameter Name="b" Type="Edm.Int32" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="Amb" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <Parameter Name="a" Type="Edm.Int32" />
+        <Parameter Name="c" Type="Edm.Int32" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <Function Name="AnyEntity" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <ReturnType Type="Edm.EntityType" />
+      </Function>
+      <Function Name="AnyComplex" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <ReturnType Type="Edm.ComplexType" />
+      </Function>
+      <Function Name="AnyEntities" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <ReturnType Type="Collection(Edm.EntityType)" />
+      </Function>
       <Function Name="OneAddr" IsBound="true">
         <Parameter Name="it" Type="N.A" />
         <ReturnType Type="N.Addr" />
@@ -1579,9 +1623,20 @@ const boundCompositionCSDL = `<?xml version="1.0" encoding="utf-8"?>
         <Parameter Name="it" Type="N.A" />
         <Parameter Name="factor" Type="Edm.Int32" />
       </Action>
+      <Action Name="AAmb" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <Parameter Name="a" Type="Edm.Int32" />
+        <Parameter Name="b" Type="Edm.Int32" />
+      </Action>
+      <Action Name="AAmb" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <Parameter Name="a" Type="Edm.Int32" />
+        <Parameter Name="c" Type="Edm.Int32" />
+      </Action>
       <EntityContainer Name="C1">
         <EntitySet Name="As" EntityType="N.A" />
         <EntitySet Name="Cs" EntityType="N.C" />
+        <EntitySet Name="Deriveds" EntityType="N.Derived" />
       </EntityContainer>
     </Schema>
   </edmx:DataServices>
@@ -1752,6 +1807,76 @@ describe('bound overload specificity and return shapes', () => {
     expect(textOf(result)).not.toContain("a='2'");
   });
 
+  it('refuses an equal-specificity overload tie instead of picking one', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'Amb',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      parameters: { a: 1 },
+    });
+
+    // `(it, a, b)` and `(it, a, c)` cover `a` at the same binding depth and
+    // the same arity, so neither is more specific; picking either would emit
+    // a false "not supplied" note for the parameter it does not declare.
+    expect(result.isError).toBe(true);
+    const text = textOf(result);
+    expect(text).toContain('Ambiguous');
+    expect(text).toContain('N.Amb(it, a, b)');
+    expect(text).toContain('N.Amb(it, a, c)');
+    expect(text).not.toContain('not supplied');
+  });
+
+  it('refuses an equal-specificity action tie too', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_action_invocation', {
+      actionName: 'AAmb',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      parameters: { a: 1 },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = textOf(result);
+    expect(text).toContain('Ambiguous');
+    expect(text).toContain('N.AAmb(it, a, b)');
+    expect(text).toContain('N.AAmb(it, a, c)');
+    expect(text).not.toContain('not supplied');
+  });
+
+  it('prefers the overload bound to the most derived type', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'Tie',
+      entitySet: 'Deriveds',
+      keys: { Id: '1' },
+      parameters: { factor: 2 },
+    });
+
+    // `Tie(N.A, Edm.String)` is declared first, but `Deriveds` exposes
+    // N.Derived, so the N.Derived overload's Edm.Int32 must type the literal.
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/Deriveds('1')/N.Tie(factor=2)");
+    expect(textOf(result)).not.toContain("factor='2'");
+  });
+
+  it('prefers the exact parameter match across binding types', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'Pick',
+      entitySet: 'Deriveds',
+      keys: { Id: '1' },
+    });
+
+    // `Pick(N.Derived, Edm.Int32)` is bound to the set's own type, but
+    // `Pick(N.A)` exactly matches the supplied (empty) parameter set, and
+    // §11.5.4.2 matches parameters before binding specificity breaks an arity
+    // tie — so no false "x was not supplied" note.
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/Deriveds('1')/N.Pick");
+    expect(textOf(result)).not.toContain('"x"');
+  });
+
   it('filters overloads by the binding type of the entity set', async () => {
     const handler = await boundCompositionHandler();
     const result = await handler('build_function_invocation', {
@@ -1904,6 +2029,57 @@ describe('bound overload specificity and return shapes', () => {
     expect(textOf(result)).toContain('not applicable');
   });
 
+  it('keeps $select and $expand on an Edm.EntityType return', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'AnyEntity',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      select: ['Id'],
+      expand: [{ navProperty: 'Related' }],
+      top: 3,
+    });
+
+    // Edm.EntityType is an abstract structured type, so §5.1 allows $select
+    // and $expand on it; only the paging option is not applicable to a single
+    // value.
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe(
+      "<serviceRoot>/As('1')/N.AnyEntity()?$select=Id&$expand=Related",
+    );
+    expect(textOf(result)).toContain('$top');
+    expect(textOf(result)).toContain('not applicable');
+  });
+
+  it('keeps $select on an Edm.ComplexType return', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'AnyComplex',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      select: ['Street'],
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe("<serviceRoot>/As('1')/N.AnyComplex()?$select=Street");
+  });
+
+  it('keeps $select and paging on a Collection(Edm.EntityType) return', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'AnyEntities',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      select: ['Id'],
+      top: 3,
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(emittedUrl(textOf(result))).toBe(
+      "<serviceRoot>/As('1')/N.AnyEntities()?$select=Id&$top=3",
+    );
+  });
+
   it('refuses a collection-bound function on an entity set of another type', async () => {
     const handler = await boundCompositionHandler();
     const result = await handler('build_function_invocation', {
@@ -1926,6 +2102,40 @@ describe('bound overload specificity and return shapes', () => {
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('is bound to entity set "Cs"');
+  });
+
+  it('lists the overloads when the binding filter leaves one that does not cover', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_function_invocation', {
+      functionName: 'BT',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      parameters: { bogus: 1 },
+    });
+
+    // The N.D-bound overload is filtered out, but `bogus` fits neither, so
+    // the overload listing is more useful than "Unknown parameter".
+    expect(result.isError).toBe(true);
+    const text = textOf(result);
+    expect(text).toContain('No overload of "BT"');
+    expect(text).toContain('N.BT(it, factor)');
+    expect(text).not.toContain('Unknown parameter');
+  });
+
+  it('lists the action overloads when the binding filter leaves one that does not cover', async () => {
+    const handler = await boundCompositionHandler();
+    const result = await handler('build_action_invocation', {
+      actionName: 'BAct',
+      entitySet: 'As',
+      keys: { Id: '1' },
+      parameters: { bogus: 1 },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = textOf(result);
+    expect(text).toContain('No overload of "BAct"');
+    expect(text).toContain('N.BAct(it, factor)');
+    expect(text).not.toContain('Unknown parameter');
   });
 
   it('lists every function overload in get_function_details', async () => {

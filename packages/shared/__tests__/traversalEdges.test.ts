@@ -349,10 +349,10 @@ describe('operation edge derivation', () => {
 });
 
 /**
- * OData V4 §11.2.2: a function bound to `Base` is invocable on `Derived`
- * instances. Bound-function edges must therefore be derived per entity, exactly
- * as inherited navigation properties are, so both the pathfinder and MCP can
- * discover the step from every inheriting type.
+ * OData V4.01 Part 1 §11.5.1: a function bound to `Base` is invocable on
+ * `Derived` instances. Bound-function edges must therefore be derived per
+ * entity, exactly as inherited navigation properties are, so both the
+ * pathfinder and MCP can discover the step from every inheriting type.
  */
 describe('bound functions on a base type', () => {
   /** The issue's fixture, verbatim. */

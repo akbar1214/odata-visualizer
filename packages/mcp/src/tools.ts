@@ -455,11 +455,10 @@ function buildKeySegment(
 }
 
 function coerceBodyValue(type: string, value: unknown, metadata: ODataMetadata): unknown {
-  const collection = /^Collection\((.*)\)$/.exec(type);
-  if (collection) {
-    const inner = collection[1];
+  const collection = unwrapCollection(type);
+  if (collection?.isCollection) {
     const items = Array.isArray(value) ? value : [value];
-    return items.map((v) => coerceScalar(inner, v, metadata));
+    return items.map((v) => coerceScalar(collection.type, v, metadata));
   }
   return coerceScalar(type, value, metadata);
 }
@@ -575,10 +574,10 @@ function declaredParameterType(
 
 function formatFunctionParamLiteral(type: string, value: unknown): string {
   if (value === null || value === undefined) return 'null';
-  const collection = /^Collection\((.*)\)$/.exec(type);
-  if (collection) {
+  const collection = unwrapCollection(type);
+  if (collection?.isCollection) {
     const items = Array.isArray(value) ? value : [value];
-    return items.map((v) => formatV4Literal(String(v), collection[1])).join(',');
+    return items.map((v) => formatV4Literal(String(v), collection.type)).join(',');
   }
   return formatV4Literal(String(value), type);
 }
@@ -1026,14 +1025,23 @@ export function createToolHandler(
         if (!Array.isArray(bound)) return bound;
 
         const rawParameters = (args['parameters'] as Record<string, unknown> | undefined) ?? {};
-        const action = selectCallableOverload(bound, rawParameters);
-        if (!action) {
+        const action = selectCallableOverload(
+          bound,
+          rawParameters,
+          bound.length < candidates.length,
+        );
+        if (action.kind === 'ambiguous') {
+          return errorResult(
+            `Ambiguous invocation of "${actionName}": more than one overload accepts the supplied parameters. Overloads: ${formatOverloadSignatures(action.items)}.`,
+          );
+        }
+        if (action.kind === 'none') {
           return errorResult(
             `No overload of "${actionName}" accepts the supplied parameters. Overloads: ${formatOverloadSignatures(candidates)}.`,
           );
         }
 
-        return buildInvocation('POST', action, metadata, args, false);
+        return buildInvocation('POST', action.item, metadata, args, false);
       }
 
       case 'build_function_invocation': {
@@ -1062,14 +1070,19 @@ export function createToolHandler(
         if (!Array.isArray(bound)) return bound;
 
         const rawParameters = (args['parameters'] as Record<string, unknown> | undefined) ?? {};
-        const func = selectCallableOverload(bound, rawParameters);
-        if (!func) {
+        const func = selectCallableOverload(bound, rawParameters, bound.length < candidates.length);
+        if (func.kind === 'ambiguous') {
+          return errorResult(
+            `Ambiguous invocation of "${functionName}": more than one overload accepts the supplied parameters. Overloads: ${formatOverloadSignatures(func.items)}.`,
+          );
+        }
+        if (func.kind === 'none') {
           return errorResult(
             `No overload of "${functionName}" accepts the supplied parameters. Overloads: ${formatOverloadSignatures(candidates)}.`,
           );
         }
 
-        return buildInvocation('GET', func, metadata, args, true);
+        return buildInvocation('GET', func.item, metadata, args, true);
       }
 
       default:
@@ -1104,62 +1117,101 @@ function findCallableCandidates<T extends ODataAction | ODataFunction>(
   return items.filter((i) => i.name.toLowerCase() === shortName(name).toLowerCase());
 }
 
+/** A candidate that survived binding-type narrowing, with how derived it is. */
+interface OverloadCandidate<T extends ODataAction | ODataFunction> {
+  item: T;
+  /** Steps from the entity set's type to the binding type (0 = the set's own type). */
+  bindingDepth: number;
+}
+
+/** The outcome of matching supplied parameter names against overloads. */
+type OverloadSelection<T extends ODataAction | ODataFunction> =
+  { kind: 'selected'; item: T } | { kind: 'ambiguous'; items: T[] } | { kind: 'none' };
+
 /**
- * Pick the overload whose declared parameters cover every supplied name.
+ * Pick the overload that matches the supplied parameter names.
  *
- * A name with one candidate is returned as-is, so the existing
- * unknown-parameter error keeps naming the operation's own parameters. With
- * several candidates, an unmatched set returns `undefined` and the caller
- * reports the overloads instead of pretending the first one was meant.
+ * OData V4.01 Part 1 §11.5.4.2 selects a function overload whose declared
+ * parameter set matches the supplied names before anything else, so the
+ * fewest declared parameters wins and a superset cannot shadow an exact match
+ * (#65). Binding-type specificity breaks an arity tie: §11.5.1 lets a
+ * candidate bound to a base type stay invocable through a derived entity set,
+ * but §11.5.4.2 selects by the type of the URL segment, which is the set's own
+ * type, so the candidate bound to the most derived type wins (lowest
+ * `bindingDepth`). A genuine tie — same binding depth and same parameter count
+ * — is refused as ambiguous, mirroring the service-side rule ("Services SHOULD
+ * avoid ambiguity ... MAY return 400") instead of silently picking by
+ * declaration order and emitting a "not supplied" note for a parameter the
+ * caller never meant to send. Declaration order only orders the reported
+ * candidates.
  *
- * The most specific covering overload wins: the fewest declared parameters,
- * with declaration order breaking ties. Picking the first cover instead let a
- * superset declared earlier shadow an exact match — `Sup(it, a, b)` over
- * `Sup(it, a)` — which emitted a false missing-`b` note and typed `a` by the
- * wrong signature. The same rule makes the zero-parameter overload win when no
- * parameters are supplied, so a parameterised declaration cannot hide it.
+ * `requireCoverage` is set when binding-type narrowing removed candidates: a
+ * lone survivor then still has to cover the supplied names, so a typo keeps
+ * the overload listing instead of being downgraded to a single-signature
+ * "Unknown parameter" error with no way to see the alternatives. A name that
+ * had a single declaration all along is returned as-is (when it covers), so
+ * that error keeps naming the operation's own parameters.
  */
 function selectCallableOverload<T extends ODataAction | ODataFunction>(
-  candidates: T[],
+  candidates: OverloadCandidate<T>[],
   parameters: Record<string, unknown>,
-): T | undefined {
-  if (candidates.length <= 1) return candidates[0];
+  requireCoverage: boolean,
+): OverloadSelection<T> {
   const supplied = Object.keys(parameters).map((name) => name.toLowerCase());
   const covering = candidates.filter((candidate) =>
     supplied.every((name) =>
-      (candidate.parameters ?? []).some((p) => p.name.toLowerCase() === name),
+      (candidate.item.parameters ?? []).some((p) => p.name.toLowerCase() === name),
     ),
   );
-  if (covering.length === 0) return undefined;
-  return covering.reduce((best, candidate) =>
-    (candidate.parameters ?? []).length < (best.parameters ?? []).length ? candidate : best,
-  );
+  if (covering.length === 0) {
+    if (!requireCoverage && candidates.length === 1) {
+      return { kind: 'selected', item: candidates[0].item };
+    }
+    return { kind: 'none' };
+  }
+  const parameterCount = (candidate: OverloadCandidate<T>): number =>
+    (candidate.item.parameters ?? []).length;
+  const arity = Math.min(...covering.map(parameterCount));
+  const exact = covering.filter((candidate) => parameterCount(candidate) === arity);
+  const bindingDepth = Math.min(...exact.map((candidate) => candidate.bindingDepth));
+  const mostDerived = exact.filter((candidate) => candidate.bindingDepth === bindingDepth);
+  if (mostDerived.length > 1) {
+    return { kind: 'ambiguous', items: mostDerived.map((candidate) => candidate.item) };
+  }
+  return { kind: 'selected', item: mostDerived[0].item };
 }
 
 /**
- * Is a bound callable invocable through this entity set? OData V4 §11.2.2: a
- * function bound to a type is invocable on that type and its derived types, so
- * the set's type must be the binding element type or inherit from it. Unbound
- * callables and references that do not resolve cannot be judged and pass.
+ * How far a bound callable's binding type sits from the entity set's type in
+ * the inheritance chain, or `undefined` when the set cannot invoke it.
+ *
+ * OData V4.01 Part 1 §11.5.1: an operation bound to a type is invocable
+ * through a resource whose type is that type or a type derived from it.
+ * §11.5.4.2 then selects the overload by the type of the URL segment, so this
+ * depth is the binding-type specificity signal. Unbound callables (depth 0)
+ * and references that do not resolve (also 0) cannot be judged and pass, as
+ * the boolean filter did before.
  */
-function bindsToEntitySet(
+function bindingDepthForSet(
   item: ODataAction | ODataFunction,
   set: ODataEntitySet,
   metadata: ODataMetadata,
-): boolean {
-  if (!item.isBound) return true;
+): number | undefined {
+  if (!item.isBound) return 0;
   const bindingElement = unwrapCollection(
     (item.parameters ?? []).find((p) => p.isBinding)?.type,
   )?.type;
-  if (!bindingElement) return true;
+  if (!bindingElement) return 0;
   const bindingType = findTypeInScope(metadata.entities, bindingElement, item.namespace);
   const setType = findEntityByName(metadata.entities, set.entityTypeQualified ?? set.entityType);
-  if (!bindingType || !setType) return true;
-  return resolveInheritanceChain(setType, metadata.entities).includes(bindingType);
+  if (!bindingType || !setType) return 0;
+  const depth = resolveInheritanceChain(setType, metadata.entities).indexOf(bindingType);
+  return depth >= 0 ? depth : undefined;
 }
 
 /**
- * Narrow overload candidates to the ones the supplied entity set can invoke.
+ * Narrow overload candidates to the ones the supplied entity set can invoke,
+ * recording how derived each candidate's binding type is.
  *
  * CSDL allows bound functions and actions to overload by binding type, so a
  * candidate bound to an unrelated type must not win on parameter names alone —
@@ -1172,12 +1224,18 @@ function narrowCandidatesByEntitySet<T extends ODataAction | ODataFunction>(
   metadata: ODataMetadata,
   entitySetName: string | undefined,
   name: string,
-): T[] | ToolResult {
-  if (!entitySetName) return candidates;
+): OverloadCandidate<T>[] | ToolResult {
+  const unranked = (): OverloadCandidate<T>[] =>
+    candidates.map((item) => ({ item, bindingDepth: 0 }));
+  if (!entitySetName) return unranked();
   const set = findEntitySet(metadata, entitySetName);
   // An unknown set is reported by the invocation path with its suggestions.
-  if (!set) return candidates;
-  const matching = candidates.filter((candidate) => bindsToEntitySet(candidate, set, metadata));
+  if (!set) return unranked();
+  const matching: OverloadCandidate<T>[] = [];
+  for (const item of candidates) {
+    const bindingDepth = bindingDepthForSet(item, set, metadata);
+    if (bindingDepth !== undefined) matching.push({ item, bindingDepth });
+  }
   if (matching.length > 0) return matching;
   return errorResult(
     `No overload of "${name}" is bound to entity set "${set.name}" (type ${
@@ -1432,26 +1490,34 @@ function formatInlineParams(
 }
 
 /**
- * The shape of a function's return: the structured (entity or complex) type it
- * resolves to, when there is one, and whether the return is a collection.
+ * The shape of a function's return: whether it is structured (entity or
+ * complex), the structured type it resolves to when the model names one, and
+ * whether the return is a collection.
  *
  * `$select`/`$expand` need a structured result; paging, filtering and ordering
- * additionally need a collection (OData V4.01 Part 2 §5.1). Keeping the two
+ * additionally need a collection (OData V4.01 Part 2 §5.1). Keeping the facets
  * apart is what lets a single complex return keep the former and drop the
  * latter, while a collection of primitives keeps the latter and drops the
- * former.
+ * former. `Edm.EntityType` and `Edm.ComplexType` are abstract structured types,
+ * so their values accept `$select`/`$expand` even though no concrete type can
+ * be resolved to validate property names.
  */
 function functionReturnShape(
   item: ODataAction | ODataFunction,
   metadata: ODataMetadata,
-): { structuredName?: string; isCollection: boolean } {
+): { structured: boolean; structuredName?: string; isCollection: boolean } {
   const returnType = unwrapCollection(item.returnType);
-  if (!returnType || returnType.type.startsWith('Edm.')) {
-    return { isCollection: returnType?.isCollection ?? false };
+  if (!returnType) return { structured: false, isCollection: false };
+  if (returnType.type === 'Edm.EntityType' || returnType.type === 'Edm.ComplexType') {
+    return { structured: true, isCollection: returnType.isCollection };
   }
-  const structured = findTypeInScope(metadata.entities, returnType.type, item.namespace);
+  if (returnType.type.startsWith('Edm.')) {
+    return { structured: false, isCollection: returnType.isCollection };
+  }
+  const resolved = findTypeInScope(metadata.entities, returnType.type, item.namespace);
   return {
-    structuredName: structured ? (structured.qualifiedName ?? structured.name) : undefined,
+    structured: resolved !== undefined,
+    structuredName: resolved ? (resolved.qualifiedName ?? resolved.name) : undefined,
     isCollection: returnType.isCollection,
   };
 }
@@ -1465,10 +1531,10 @@ function functionReturnShape(
  * function's return type through the same `buildQueryOptions` the query
  * builder uses.
  *
- * When the function does not return an entity, `$select`/`$expand` cannot
- * apply at all, and a scalar result has no collection to filter, sort or page:
- * those options are dropped with a warning rather than rendered into a URL the
- * service would reject.
+ * When the function does not return a structured (entity or complex) value,
+ * `$select`/`$expand` cannot apply at all, and a scalar result has no
+ * collection to filter, sort or page: those options are dropped with a warning
+ * rather than rendered into a URL the service would reject.
  */
 function buildFunctionQueryOptions(
   item: ODataAction | ODataFunction,
@@ -1486,7 +1552,7 @@ function buildFunctionQueryOptions(
   let count = typeof args['count'] === 'boolean' ? args['count'] : undefined;
 
   const returnShape = functionReturnShape(item, metadata);
-  const structured = returnShape.structuredName !== undefined;
+  const structured = returnShape.structured;
   const omitted: string[] = [];
   const drop = (name: string): void => {
     omitted.push(name);
