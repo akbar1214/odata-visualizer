@@ -1722,10 +1722,11 @@ describe('complex action body coercion', () => {
 
 /**
  * Parameter names come from the model, so a declared name like `__proto__`
- * must survive into the body as an own data property rather than hitting the
- * prototype setter of an object literal and disappearing.
+ * must survive into the body and the details sample as an own data property
+ * rather than hitting the prototype setter of an object literal and
+ * disappearing.
  */
-describe('prototype-safe body construction', () => {
+describe('prototype-safe object construction', () => {
   it('keeps a parameter literally named __proto__ in the emitted body', async () => {
     const result = await adjust({ ['__proto__']: '9007199254740993' });
     expect(result.isError).toBeUndefined();
@@ -1739,6 +1740,21 @@ describe('prototype-safe body construction', () => {
     // leaked onto the shared prototype.
     expect(Object.getPrototypeOf(body)).toBe(Object.prototype);
     expect(Object.keys(Object.prototype)).toEqual([]);
+  });
+
+  it('shows a declared __proto__ parameter in the details sample line', async () => {
+    const { parseCSDL } = await import('@odata-visualizer/shared');
+    const store = createMetadataStore();
+    store.set(await parseCSDL(numericCSDL), { sourceName: 'numeric.xml', sourceType: 'file' });
+    const handler = createToolHandler(store, { allowLoadMetadata: false });
+
+    const result = await handler('get_action_details', { name: 'Adjust' });
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    // The parameter list and the sample line must agree about the declared
+    // parameter.
+    expect(text).toContain('__proto__: Edm.Int64');
+    expect(text).toContain('"__proto__":0');
   });
 });
 

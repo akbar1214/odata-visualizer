@@ -368,8 +368,12 @@ function formatCallableDetails(
   if (!item.parameters || item.parameters.length === 0) lines.push('  (none)');
 
   const params = (item.parameters ?? []).filter((p) => !(item.isBound && p.isBinding));
-  const example: Record<string, unknown> = {};
-  for (const p of params) example[p.name] = sampleValue(p.type, metadata);
+  // `Object.fromEntries` defines each key as an own data property, so a
+  // declared parameter named `__proto__` survives into the sample line instead
+  // of hitting an object literal's prototype setter.
+  const example = Object.fromEntries(
+    params.map((p) => [p.name, sampleValue(p.type, metadata)] as const),
+  );
 
   lines.push('\nInvocation:');
   if (item.isBound) {
