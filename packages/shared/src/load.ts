@@ -271,7 +271,10 @@ export async function parseCSDLUrl(
     loadExternal?: (uri: string) => Promise<string>;
   } = {},
 ): Promise<ODataMetadata> {
-  const headers = options.headers ? validateFetchHeaders(options.headers) : undefined;
+  // `!== undefined`, not truthiness: `null`, `''`, `0` and `false` are
+  // non-objects and must reach the validator rather than skip it and fetch
+  // unauthenticated.
+  const headers = options.headers !== undefined ? validateFetchHeaders(options.headers) : undefined;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   // The root document's origin anchors which hops and references may carry the
   // credentials, even after the root fetch itself has been redirected.

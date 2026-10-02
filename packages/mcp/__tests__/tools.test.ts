@@ -8,6 +8,7 @@ import {
   type ToolHandlerOptions,
 } from '../src/tools.js';
 import { createMetadataStore } from '../src/store.js';
+import { loadMetadataFromSource } from '../src/metadata-loader.js';
 import { textOf } from './textOf.js';
 
 const minimalCSDL = `<?xml version="1.0" encoding="utf-8"?>
@@ -1001,6 +1002,34 @@ describe('load_metadata with URL headers', () => {
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('Headers must be an object of string values');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects falsy non-object headers instead of fetching unauthenticated', async () => {
+    const calls = stubMetadataFetch();
+
+    for (const headers of [null, '', 0, false]) {
+      const result = await handleToolCall('load_metadata', {
+        source: metadataUrl,
+        type: 'url',
+        headers,
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain('Headers must be an object of string values');
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects falsy non-object headers in loadMetadataFromSource without fetching', async () => {
+    const calls = stubMetadataFetch();
+
+    await expect(
+      loadMetadataFromSource({
+        type: 'url',
+        path: metadataUrl,
+        headers: null as unknown as Record<string, string>,
+      }),
+    ).rejects.toThrow('Headers must be an object of string values');
     expect(calls).toHaveLength(0);
   });
 

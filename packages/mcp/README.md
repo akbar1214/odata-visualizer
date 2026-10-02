@@ -52,7 +52,7 @@ Typical offline workflow:
 3. `list_entity_sets` to find the set name.
 4. `build_query` / `build_action_invocation` / `build_function_invocation` to produce the request.
 
-Authentication for the metadata fetch is per-call via `headers` (see [Option 1](#option-1-url-fetch-from-odata-service)); executing requests against the service is intentionally out of scope — the server never calls anything but the `$metadata` documents.
+Authentication for the metadata fetch is per-call via `headers` (see [Option 1](#option-1-url-fetch-from-odata-service)); executing requests against the service is intentionally out of scope — the server only fetches metadata documents (and, for `type: "server"`, the backend's current model).
 
 ## Prerequisites
 
