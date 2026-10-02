@@ -79,6 +79,17 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
   );
   const hiddenPathCount = foundPaths.length - selectablePaths.length;
 
+  // Every found path can be hidden (a parameterised function, or a function
+  // that is not the first hop). Calling that count "found" directly above
+  // "hidden" read as a contradiction now that such targets are offered, so
+  // when no path button can be shown the summary says so instead.
+  const foundSummary =
+    foundPaths.length === 0
+      ? 'No paths found'
+      : selectablePaths.length === 0
+        ? 'No composable paths found'
+        : `${foundPaths.length} path(s) found`;
+
   const handleSourceChange = useCallback((name: string) => {
     setSourceEntity(name);
     setTargetEntity('');
@@ -131,9 +142,7 @@ export function PathFinder({ metadata, currentEntity, onSelectPath }: PathFinder
 
       {searched && (
         <div className="space-y-2">
-          <div className="text-[10px] text-engineering-400">
-            {foundPaths.length === 0 ? 'No paths found' : `${foundPaths.length} path(s) found`}
-          </div>
+          <div className="text-[10px] text-engineering-400">{foundSummary}</div>
 
           {hiddenPathCount > 0 && (
             <div className="text-[10px] text-engineering-400">
