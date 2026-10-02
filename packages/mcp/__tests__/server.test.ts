@@ -4,13 +4,27 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { parseCSDL } from '@odata-visualizer/shared';
-import { createMcpServer, type McpServerOptions } from '../src/server.js';
+import { createMcpServer, ieee754CompatibleFromEnv, type McpServerOptions } from '../src/server.js';
+import { createStdioServer } from '../src/stdio.js';
 import { createMetadataStore, type MetadataAccessors } from '../src/store.js';
 
 const windchillXml = readFileSync(
   fileURLToPath(new URL('../../shared/__tests__/fixtures/windchill-prodmgmt.xml', import.meta.url)),
   'utf-8',
 );
+
+/** A minimal action with an Edm.Int64 parameter, for the content-type choice. */
+const numericActionCsdl = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Num" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <Action Name="Adjust">
+        <Parameter Name="Big" Type="Edm.Int64" />
+      </Action>
+      <EntityContainer Name="Container" />
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
 
 const EXPECTED_TOOLS = [
   'build_action_invocation',
@@ -118,5 +132,98 @@ describe('createMcpServer', () => {
     const result = await client.callTool({ name: 'list_entities', arguments: { limit: 1 } });
     expect(result.isError).toBeFalsy();
     expect(resultText(result)).toContain('WindchillEntity');
+  });
+
+  it('refuses an unrepresentable Int64 body value when ieee754Compatible is disabled', async () => {
+    // The option must reach the tool handler through createMcpServer, not only
+    // through a direct createToolHandler embedder.
+    const store = createMetadataStore();
+    store.set(await parseCSDL(numericActionCsdl), {
+      sourceName: 'numeric.xml',
+      sourceType: 'file',
+    });
+    const client = await connect(store, { ieee754Compatible: false });
+
+    const result = await client.callTool({
+      name: 'build_action_invocation',
+      arguments: { actionName: 'Adjust', parameters: { Big: '9007199254740993' } },
+    });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('Invalid Edm.Int64');
+    await client.close();
+  });
+});
+
+/**
+ * The HTTP and stdio surfaces share this one read so `MCP_IEEE754_COMPATIBLE`
+ * cannot be interpreted two ways. `MCP_ALLOW_LOAD=1` is an explicit opt-in;
+ * here the encoding is on by default and the listed false-y spellings turn it
+ * off, case-insensitively and ignoring surrounding whitespace.
+ */
+describe('ieee754CompatibleFromEnv', () => {
+  it('treats the false-y spellings as disabled, case-insensitively', () => {
+    for (const value of ['0', 'false', 'FALSE', 'False', 'no', 'No', 'off', 'OFF']) {
+      expect(
+        ieee754CompatibleFromEnv({ MCP_IEEE754_COMPATIBLE: value }),
+        `MCP_IEEE754_COMPATIBLE=${value} must disable the encoding`,
+      ).toBe(false);
+    }
+  });
+
+  it('ignores surrounding whitespace around a false-y spelling', () => {
+    for (const value of [' 0 ', '\t0\n', ' off ', ' FALSE ']) {
+      expect(
+        ieee754CompatibleFromEnv({ MCP_IEEE754_COMPATIBLE: value }),
+        `MCP_IEEE754_COMPATIBLE=${JSON.stringify(value)} must disable the encoding`,
+      ).toBe(false);
+    }
+  });
+
+  it('enables the encoding for an unset or any other value', () => {
+    // Anything else — an empty string, `1`/`true`/`yes`/`on`, or a near-miss
+    // like `00` — leaves the default on.
+    for (const value of [undefined, '', '1', 'true', 'TRUE', 'yes', 'on', '00']) {
+      expect(
+        ieee754CompatibleFromEnv(value === undefined ? {} : { MCP_IEEE754_COMPATIBLE: value }),
+        `MCP_IEEE754_COMPATIBLE=${JSON.stringify(value)} must enable the encoding`,
+      ).toBe(true);
+    }
+  });
+});
+
+/**
+ * The stdio entry's wiring lives in `createStdioServer` so a test can drive it
+ * without attaching a transport. The environment variable must be observable
+ * through this surface: re-inlining the old `!== '0'` read would enable the
+ * encoding for `OFF` and fail this test.
+ */
+describe('createStdioServer', () => {
+  it('refuses an inexact Int64 through the stdio wiring when MCP_IEEE754_COMPATIBLE=OFF', async () => {
+    const previous = process.env['MCP_IEEE754_COMPATIBLE'];
+    process.env['MCP_IEEE754_COMPATIBLE'] = 'OFF';
+    try {
+      const store = createMetadataStore();
+      store.set(await parseCSDL(numericActionCsdl), {
+        sourceName: 'numeric.xml',
+        sourceType: 'file',
+      });
+      const server = await createStdioServer(store);
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: 'stdio-env-test', version: '1.0.0' });
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      try {
+        const result = await client.callTool({
+          name: 'build_action_invocation',
+          arguments: { actionName: 'Adjust', parameters: { Big: '9007199254740993' } },
+        });
+        expect(result.isError).toBe(true);
+        expect(resultText(result)).toContain('Invalid Edm.Int64');
+      } finally {
+        await client.close();
+      }
+    } finally {
+      if (previous === undefined) delete process.env['MCP_IEEE754_COMPATIBLE'];
+      else process.env['MCP_IEEE754_COMPATIBLE'] = previous;
+    }
   });
 });

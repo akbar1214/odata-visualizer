@@ -6,6 +6,7 @@ import { existsSync } from 'fs';
 import { parseRouter } from './routes/parse.js';
 import { metadataRouter } from './routes/metadata.js';
 import { mountMcp } from './mcp.js';
+import { ieee754CompatibleFromEnv } from '@odata-visualizer/mcp/server';
 import { metadataStore } from './services/metadataStore.js';
 import { createApiAuth } from './auth.js';
 import { isClientError, statusForError } from './services/errors.js';
@@ -18,6 +19,15 @@ export interface CreateAppOptions {
   mcp?: boolean;
   /** Allow load_metadata over HTTP. Defaults to MCP_ALLOW_LOAD === "1". */
   allowLoadMetadata?: boolean;
+  /**
+   * Emit Edm.Int64/Edm.Decimal body values as strings under
+   * `application/json;IEEE754Compatible=true`. Defaults to enabled unless
+   * MCP_IEEE754_COMPATIBLE is one of `0`, `false`, `no`, `off`
+   * (case-insensitive, surrounding whitespace ignored); when false the plain
+   * content type is used and a value a JSON number cannot carry exactly is
+   * refused.
+   */
+  ieee754Compatible?: boolean;
   /** Hostnames allowed in the Host header for /mcp. Defaults to MCP_ALLOWED_HOSTS or localhost. */
   allowedHosts?: string[];
   /** Bearer token required for the REST API. Defaults to API_TOKEN. */
@@ -103,6 +113,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     mountMcp(app, metadataStore.accessors, {
       token: mcpToken,
       allowLoadMetadata: options.allowLoadMetadata ?? process.env['MCP_ALLOW_LOAD'] === '1',
+      ieee754Compatible: options.ieee754Compatible ?? ieee754CompatibleFromEnv(),
       allowedHosts: options.allowedHosts ?? parseList(process.env['MCP_ALLOWED_HOSTS']),
       maxSessions: options.maxSessions,
       sessionIdleMs: options.sessionIdleMs,

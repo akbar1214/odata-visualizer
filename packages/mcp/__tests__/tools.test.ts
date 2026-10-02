@@ -1360,10 +1360,12 @@ describe('numeric action body coercion', () => {
   });
 
   it('string-encodes a collection element and marks the body compatible', async () => {
-    const result = await adjust({ Bigs: ['9007199254740993'] });
+    const result = await adjust({ Bigs: ['9007199254740993', '42'] });
     expect(result.isError).toBeUndefined();
     const text = textOf(result);
-    expect(emittedBody(text)['Bigs']).toEqual(['9007199254740993']);
+    // The declared parameter covers every Int64 in the body, so the exact
+    // element is a string too.
+    expect(emittedBody(text)['Bigs']).toEqual(['9007199254740993', '42']);
     expect(text).toContain('IEEE754Compatible=true');
   });
 
@@ -1386,7 +1388,10 @@ describe('numeric action body coercion', () => {
     for (const [input, expected] of cases) {
       const result = await adjust({ Money: input });
       expect(result.isError, `${input} must be accepted`).toBeUndefined();
-      const body = emittedBody(textOf(result));
+      const text = textOf(result);
+      // An exact-only body keeps bare numbers and the plain media type.
+      expect(text).not.toContain('IEEE754Compatible');
+      const body = emittedBody(text);
       expect(body['Money'], `${input} must be emitted as ${expected}`).toBe(expected);
     }
   });
@@ -1402,6 +1407,36 @@ describe('numeric action body coercion', () => {
       expect(text).toContain('IEEE754Compatible=true');
       expect(emittedBody(text)['Money'], `${input} must be emitted verbatim`).toBe(input);
     }
+  });
+
+  /**
+   * OData JSON Format v4.01 §3.2 "Controlling the Representation of Numbers":
+   * with IEEE754Compatible=true the service MUST serialize Edm.Int64 and
+   * Edm.Decimal numbers as strings, and §4.1 requires the parameter whenever
+   * they are strings. The parameter is declared once for the whole body, so a
+   * body that needs it carries no mixed payload — every Int64/Decimal value
+   * becomes a string, exact ones included. Edm.Int32 is not covered and stays
+   * a number.
+   */
+  it('string-encodes every Int64 and Decimal once the body needs IEEE754Compatible', async () => {
+    const result = await adjust({ Count: '42', Big: '9007199254740993', Money: '1.5' });
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    const body = emittedBody(text);
+    expect(body['Big'], 'the inexact Int64 triggers the flip').toBe('9007199254740993');
+    expect(body['Money'], 'the exact Decimal flips with the body').toBe('1.5');
+    expect(body['Count'], 'Edm.Int32 is not covered by the parameter').toBe(42);
+    expect(text).toContain('Content-Type: application/json;IEEE754Compatible=true');
+  });
+
+  it('flips an exact Int64 when an inexact Decimal declares the parameter', async () => {
+    const result = await adjust({ Big: '9007199254740992', Money: '1.0000000000000000001' });
+    expect(result.isError).toBeUndefined();
+    const body = emittedBody(textOf(result));
+    expect(body['Big'], 'exact binary64, but the body is declared compatible').toBe(
+      '9007199254740992',
+    );
+    expect(body['Money']).toBe('1.0000000000000000001');
   });
 
   it('keeps the 38-digit Decimal cap under IEEE754Compatible encoding', async () => {

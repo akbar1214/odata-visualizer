@@ -201,6 +201,7 @@ Clear this session's model, or all of them when no session id is supplied.
 | `API_TOKEN` | unset | When set, `/api/*` requires `Authorization: Bearer <token>` |
 | `MCP_TOKEN` | unset | When set, `/mcp` requires `Authorization: Bearer <token>` |
 | `MCP_ALLOW_LOAD` | unset | `1` exposes `load_metadata` over HTTP (arbitrary file reads / SSRF) |
+| `MCP_IEEE754_COMPATIBLE` | `1` | `0`, `false`, `no`, or `off` (case-insensitive, surrounding whitespace ignored) disables IEEE754 string encoding; Int64/Decimal body values that lose precision are then refused |
 | `MCP_ALLOWED_HOSTS` | localhost only | Allowed `Host` header values for `/mcp` |
 | `METADATA_URL_ALLOWLIST` | unset | Hosts `/api/parse/url` may fetch (`*.example.com` wildcards allowed) |
 | `METADATA_URL_BLOCK_PRIVATE` | `1` | `0` allows fetching private/loopback metadata URLs (needed for internal services) |

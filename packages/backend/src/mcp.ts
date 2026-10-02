@@ -13,6 +13,13 @@ export interface MountMcpOptions {
   path?: string;
   /** Allow the load_metadata tool over HTTP (arbitrary file reads / SSRF). Defaults to false. */
   allowLoadMetadata?: boolean;
+  /**
+   * Emit Edm.Int64/Edm.Decimal body values as strings under
+   * `application/json;IEEE754Compatible=true`. Defaults to true; when false
+   * the plain content type is used and a value a JSON number cannot carry
+   * exactly is refused.
+   */
+  ieee754Compatible?: boolean;
   /** Optional shared secret; when set, requires `Authorization: Bearer <token>`. */
   token?: string;
   /**
@@ -174,6 +181,7 @@ export function mountMcp(
 
         const server = createMcpServer(accessors, {
           allowLoadMetadata: options.allowLoadMetadata ?? false,
+          ieee754Compatible: options.ieee754Compatible,
         });
         await server.connect(transport);
         await transport.handleRequest(req, res, req.body);
