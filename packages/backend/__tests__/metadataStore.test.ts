@@ -83,7 +83,12 @@ describe('createModelStore', () => {
     limited.save('b', await metadata(), { sourceName: 'b.xml' });
     limited.save('c', await metadata(), { sourceName: 'c.xml' });
 
-    expect(limited.list().map((m) => m.id).sort()).toEqual(['b', 'c']);
+    expect(
+      limited
+        .list()
+        .map((m) => m.id)
+        .sort(),
+    ).toEqual(['b', 'c']);
   });
 
   it('sanitizes session ids', async () => {
@@ -116,7 +121,12 @@ describe('createModelStore', () => {
     m.save('tab1', await metadata(), { sourceName: 'one' });
     m.save('tab2', await metadata(), { sourceName: 'two' });
 
-    expect(m.list().map((entry) => entry.id).sort()).toEqual(['tab1', 'tab2']);
+    expect(
+      m
+        .list()
+        .map((entry) => entry.id)
+        .sort(),
+    ).toEqual(['tab1', 'tab2']);
     expect(m.listFor('tab1').map((entry) => entry.id)).toEqual(['tab1']);
     expect(m.listFor('nobody')).toEqual([]);
   });

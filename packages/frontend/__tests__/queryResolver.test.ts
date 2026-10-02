@@ -546,7 +546,9 @@ describe('buildODataQuery asserts the resolved resource segment', () => {
   it('encodes the fallback so a # in the set name cannot truncate the path', async () => {
     const model = await parseCSDL(fragmentSetCsdl);
     const warnings: string[] = [];
-    const url = buildODataQuery(getDefaultQuery('Thing'), model, (message) => warnings.push(message));
+    const url = buildODataQuery(getDefaultQuery('Thing'), model, (message) =>
+      warnings.push(message),
+    );
 
     // `assertResourceSegment` is right to refuse the name; the fallback must
     // not undo the refusal by re-emitting it raw, or a pasted `/Th#ings`

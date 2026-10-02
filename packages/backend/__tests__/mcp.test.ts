@@ -11,9 +11,7 @@ import { createApp } from '../src/app.js';
 import { metadataStore } from '../src/services/metadataStore.js';
 
 const windchillXml = readFileSync(
-  fileURLToPath(
-    new URL('../../shared/__tests__/fixtures/windchill-prodmgmt.xml', import.meta.url),
-  ),
+  fileURLToPath(new URL('../../shared/__tests__/fixtures/windchill-prodmgmt.xml', import.meta.url)),
   'utf-8',
 );
 
@@ -158,7 +156,11 @@ describe('MCP over HTTP mounted in the backend', () => {
         jsonrpc: '2.0',
         id: 1,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 't', version: '1' },
+        },
       }),
     });
     expect(unauthorized.status).toBe(401);

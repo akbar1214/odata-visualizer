@@ -23,7 +23,9 @@ describe('API authentication', () => {
 
   it('rejects API requests without a token when one is configured', async () => {
     const app = createApp({ apiToken: 'sekret' });
-    expect((await request(app).post('/api/parse/content').send({ content: minimalCSDL })).status).toBe(401);
+    expect(
+      (await request(app).post('/api/parse/content').send({ content: minimalCSDL })).status,
+    ).toBe(401);
     expect((await request(app).get('/api/metadata/current')).status).toBe(401);
   });
 
@@ -45,9 +47,7 @@ describe('API authentication', () => {
 
   it('rejects a wrong-length token without leaking detail', async () => {
     const app = createApp({ apiToken: 'sekret' });
-    const res = await request(app)
-      .get('/api/metadata/current')
-      .set('Authorization', 'Bearer nope');
+    const res = await request(app).get('/api/metadata/current').set('Authorization', 'Bearer nope');
     expect(res.status).toBe(401);
     expect(res.text).not.toContain('sekret');
   });

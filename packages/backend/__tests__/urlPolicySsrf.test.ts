@@ -17,8 +17,7 @@ import { fetchWithPolicy } from '../src/services/safeFetch.js';
  * applies to NAT64 and 6to4 prefixes, which embed a reachable IPv4 address.
  */
 describe('validateMetadataUrl: address classification', () => {
-  const blocked = (url: string) =>
-    validateMetadataUrl(url, undefined, { blockPrivate: true });
+  const blocked = (url: string) => validateMetadataUrl(url, undefined, { blockPrivate: true });
 
   it('blocks IPv4-mapped IPv6 loopback and RFC1918 targets', () => {
     for (const url of [
@@ -134,9 +133,13 @@ describe('validateMetadataUrl: address classification', () => {
     // The allowlist is the documented way to reach an internal Windchill host;
     // refusing it would make the setting useless.
     expect(() =>
-      validateMetadataUrl('http://windchill.corp.example.com/odata', ['windchill.corp.example.com'], {
-        blockPrivate: true,
-      }),
+      validateMetadataUrl(
+        'http://windchill.corp.example.com/odata',
+        ['windchill.corp.example.com'],
+        {
+          blockPrivate: true,
+        },
+      ),
     ).not.toThrow();
     // ...but it must not exempt anything else.
     expect(() =>
@@ -198,9 +201,9 @@ describe('assertHostResolvesPublic', () => {
   it('treats an IPv4-mapped DNS answer as the IPv4 address it reaches', async () => {
     // dns.lookup reports IPv4 results in this form when the host has IPv6.
     const resolve = resolvesTo(['::ffff:127.0.0.1']);
-    await expect(assertHostResolvesPublic(new URL('http://mapped.evil.test/'), resolve)).rejects.toThrow(
-      UrlPolicyError,
-    );
+    await expect(
+      assertHostResolvesPublic(new URL('http://mapped.evil.test/'), resolve),
+    ).rejects.toThrow(UrlPolicyError);
   });
 
   it('lets a genuine resolution failure surface later as a fetch error', async () => {

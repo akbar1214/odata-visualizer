@@ -5,9 +5,7 @@ describe('API token support', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    fetchMock = vi.fn(
-      async () => new Response(JSON.stringify({ success: true }), { status: 200 }),
-    );
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
   });
 

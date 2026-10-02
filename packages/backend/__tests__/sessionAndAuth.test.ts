@@ -36,9 +36,7 @@ describe('session handling', () => {
     await request(app).delete('/api/metadata/current');
 
     // tab1 must have survived; only the default bucket is gone.
-    const stillTab1 = await request(app)
-      .get('/api/metadata')
-      .set('X-Metadata-Session', 'tab1');
+    const stillTab1 = await request(app).get('/api/metadata').set('X-Metadata-Session', 'tab1');
     expect(stillTab1.body.models.map((m: { id: string }) => m.id)).toEqual(['tab1']);
     const goneDefault = await request(app).get('/api/metadata');
     expect(goneDefault.body.models.map((m: { id: string }) => m.id)).toEqual([]);
@@ -73,7 +71,12 @@ describe('model store eviction', () => {
     store.save('a', await metadata(), { sourceName: 'a2' });
     store.save('c', await metadata(), { sourceName: 'c' });
 
-    expect(store.list().map((m) => m.id).sort()).toEqual(['a', 'c']);
+    expect(
+      store
+        .list()
+        .map((m) => m.id)
+        .sort(),
+    ).toEqual(['a', 'c']);
     expect(store.get('a')?.info.sourceName).toBe('a2');
   });
 });

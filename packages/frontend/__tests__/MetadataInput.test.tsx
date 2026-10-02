@@ -21,7 +21,7 @@ describe('MetadataInput', () => {
         onFileSelect={mockOnFileSelect}
         onUrlSubmit={mockOnUrlSubmit}
         loading={false}
-      />
+      />,
     );
 
     expect(screen.getByText('Upload File')).toBeDefined();
@@ -35,7 +35,7 @@ describe('MetadataInput', () => {
         onFileSelect={mockOnFileSelect}
         onUrlSubmit={mockOnUrlSubmit}
         loading={false}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByText('Enter URL'));
@@ -50,7 +50,7 @@ describe('MetadataInput', () => {
         onFileSelect={mockOnFileSelect}
         onUrlSubmit={mockOnUrlSubmit}
         loading={false}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByText('Enter URL'));
@@ -69,12 +69,12 @@ describe('MetadataInput', () => {
         onFileSelect={mockOnFileSelect}
         onUrlSubmit={mockOnUrlSubmit}
         loading={true}
-      />
+      />,
     );
 
     const uploadBtn = screen.getByText('Upload File').closest('button');
     const urlBtn = screen.getByText('Enter URL').closest('button');
-    
+
     expect(uploadBtn?.disabled).toBe(true);
     expect(urlBtn?.disabled).toBe(true);
   });
@@ -86,7 +86,7 @@ describe('MetadataInput', () => {
         onFileSelect={mockOnFileSelect}
         onUrlSubmit={mockOnUrlSubmit}
         loading={false}
-      />
+      />,
     );
 
     // Switch to URL mode
@@ -98,7 +98,7 @@ describe('MetadataInput', () => {
         onFileSelect={mockOnFileSelect}
         onUrlSubmit={mockOnUrlSubmit}
         loading={true}
-      />
+      />,
     );
 
     // Check for loading indicator text
@@ -111,7 +111,7 @@ describe('MetadataInput', () => {
         onFileSelect={mockOnFileSelect}
         onUrlSubmit={mockOnUrlSubmit}
         loading={false}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByText('Enter URL'));
@@ -126,7 +126,7 @@ describe('MetadataInput', () => {
         onFileSelect={mockOnFileSelect}
         onUrlSubmit={mockOnUrlSubmit}
         loading={false}
-      />
+      />,
     );
 
     // Find the hidden file input

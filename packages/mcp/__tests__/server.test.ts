@@ -30,10 +30,7 @@ const EXPECTED_TOOLS = [
   'search_entities',
 ];
 
-async function connect(
-  accessors: MetadataAccessors,
-  options?: McpServerOptions,
-): Promise<Client> {
+async function connect(accessors: MetadataAccessors, options?: McpServerOptions): Promise<Client> {
   const server = createMcpServer(accessors, options);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test-client', version: '1.0.0' });

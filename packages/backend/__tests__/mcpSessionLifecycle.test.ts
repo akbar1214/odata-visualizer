@@ -34,7 +34,10 @@ async function probeSession(url: string, sessionId: string): Promise<number> {
   return response.status;
 }
 
-async function connect(url: string, name: string): Promise<{
+async function connect(
+  url: string,
+  name: string,
+): Promise<{
   client: Client;
   transport: StreamableHTTPClientTransport;
 }> {

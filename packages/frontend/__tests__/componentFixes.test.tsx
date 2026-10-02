@@ -216,9 +216,7 @@ describe('SearchableSelect', () => {
   const entities = [entity('Part'), entity('Document')];
 
   it('shows the current selection as the input value, not a placeholder', () => {
-    render(
-      <SearchableSelect entities={entities} value="Part" onChange={() => undefined} />,
-    );
+    render(<SearchableSelect entities={entities} value="Part" onChange={() => undefined} />);
 
     const input = screen.getByRole('combobox') as HTMLInputElement;
     // It used to render the selection as grey placeholder text, so typing one
@@ -255,11 +253,7 @@ describe('PathFinder root sync', () => {
       <div>
         <button onClick={() => setCurrent('Document')}>change root</button>
         <span data-testid="root">{current}</span>
-        <PathFinder
-          metadata={metadata}
-          currentEntity={current}
-          onSelectPath={() => undefined}
-        />
+        <PathFinder metadata={metadata} currentEntity={current} onSelectPath={() => undefined} />
       </div>
     );
   }

@@ -120,10 +120,7 @@ describe('filterMetadata identity', () => {
     // the two Parts" would pass even if the wrong namespace leaked in.
     const filtered = filterMetadata(model, { search: 'B.Part' });
 
-    expect(filtered.entities.map((e) => e.qualifiedName).sort()).toEqual([
-      'A.Doc',
-      'B.Part',
-    ]);
+    expect(filtered.entities.map((e) => e.qualifiedName).sort()).toEqual(['A.Doc', 'B.Part']);
   });
 
   it('keeps only relationships whose endpoints survived the filter', async () => {

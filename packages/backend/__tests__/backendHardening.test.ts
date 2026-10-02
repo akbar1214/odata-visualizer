@@ -45,18 +45,14 @@ describe('CORS', () => {
 
   it('reflects an explicitly configured origin', async () => {
     const app = createApp({ corsOrigins: ['https://app.example.com'] });
-    const res = await request(app)
-      .get('/api/health')
-      .set('Origin', 'https://app.example.com');
+    const res = await request(app).get('/api/health').set('Origin', 'https://app.example.com');
     expect(res.headers['access-control-allow-origin']).toBe('https://app.example.com');
     expect(res.headers['access-control-allow-credentials']).toBeUndefined();
   });
 
   it('does not reflect an origin that is not configured', async () => {
     const app = createApp({ corsOrigins: ['https://app.example.com'] });
-    const res = await request(app)
-      .get('/api/health')
-      .set('Origin', 'https://evil.example');
+    const res = await request(app).get('/api/health').set('Origin', 'https://evil.example');
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 
@@ -101,9 +97,7 @@ describe('error responses', () => {
 
   it('never leaks a stack trace or absolute build path', async () => {
     const app = createApp();
-    const res = await request(app)
-      .post('/api/parse/content')
-      .send({ content: '<not-csdl/>' });
+    const res = await request(app).post('/api/parse/content').send({ content: '<not-csdl/>' });
 
     const body = JSON.stringify(res.body);
     expect(body).not.toMatch(/\bat .+\.ts:\d+/);
@@ -267,11 +261,12 @@ describe('resource limits', () => {
   it('refuses a response whose declared Content-Length already exceeds the cap', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response('small', {
-          status: 200,
-          headers: { 'content-length': '999999999999' },
-        }),
+      vi.fn(
+        async () =>
+          new Response('small', {
+            status: 200,
+            headers: { 'content-length': '999999999999' },
+          }),
       ),
     );
 
