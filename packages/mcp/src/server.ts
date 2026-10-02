@@ -23,13 +23,15 @@ const IEEE754_DISABLED_VALUES = new Set(['0', 'false', 'no', 'off']);
 /**
  * The shared `MCP_IEEE754_COMPATIBLE` read for the HTTP and stdio surfaces, so
  * the two cannot drift. IEEE754 string encoding is on by default; only the
- * case-insensitive false-y spellings above disable it. `MCP_ALLOW_LOAD=1` is
- * an explicit opt-in and this is the inverse convention, so the documentation
+ * case-insensitive false-y spellings above disable it. Surrounding whitespace
+ * is ignored, so a padded `" 0 "` means what the operator intended
+ * rather than silently enabling the encoding. `MCP_ALLOW_LOAD=1` is an
+ * explicit opt-in and this is the inverse convention, so the documentation
  * lists the accepted off-spellings rather than a truthiness test.
  */
 export function ieee754CompatibleFromEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = env['MCP_IEEE754_COMPATIBLE'];
-  return value === undefined || !IEEE754_DISABLED_VALUES.has(value.toLowerCase());
+  return value === undefined || !IEEE754_DISABLED_VALUES.has(value.trim().toLowerCase());
 }
 
 /**

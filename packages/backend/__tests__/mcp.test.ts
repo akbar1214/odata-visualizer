@@ -232,4 +232,40 @@ describe('MCP over HTTP mounted in the backend', () => {
       await new Promise<void>((resolve) => started.close(() => resolve()));
     }
   });
+
+  it('refuses an inexact Int64 through the mounted app when MCP_IEEE754_COMPATIBLE=OFF', async () => {
+    // The env read itself must reach this surface: re-inlining the old
+    // `!== '0'` read into createApp would enable the encoding for `OFF` and
+    // fail this test.
+    const previous = process.env['MCP_IEEE754_COMPATIBLE'];
+    process.env['MCP_IEEE754_COMPATIBLE'] = 'OFF';
+    const app = createApp();
+    const started = app.listen(0);
+    try {
+      await once(started, 'listening');
+      const url = `http://127.0.0.1:${(started.address() as AddressInfo).port}`;
+      const upload = await fetch(`${url}/api/parse/content`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: numericActionXml }),
+      });
+      expect(upload.ok).toBe(true);
+
+      const transport = new StreamableHTTPClientTransport(new URL(`${url}/mcp`));
+      const client = new Client({ name: 'ieee754-env-test', version: '1.0.0' });
+      await client.connect(transport);
+      const result = await client.callTool({
+        name: 'build_action_invocation',
+        arguments: { actionName: 'Adjust', parameters: { Big: '9007199254740993' } },
+      });
+      expect(result.isError).toBe(true);
+      expect(resultText(result)).toContain('Invalid Edm.Int64');
+      await client.close();
+    } finally {
+      if (previous === undefined) delete process.env['MCP_IEEE754_COMPATIBLE'];
+      else process.env['MCP_IEEE754_COMPATIBLE'] = previous;
+      started.closeAllConnections?.();
+      await new Promise<void>((resolve) => started.close(() => resolve()));
+    }
+  });
 });

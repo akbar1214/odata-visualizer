@@ -23,8 +23,9 @@ export interface CreateAppOptions {
    * Emit Edm.Int64/Edm.Decimal body values as strings under
    * `application/json;IEEE754Compatible=true`. Defaults to enabled unless
    * MCP_IEEE754_COMPATIBLE is one of `0`, `false`, `no`, `off`
-   * (case-insensitive); when false the plain content type is used and a value
-   * a JSON number cannot carry exactly is refused.
+   * (case-insensitive, surrounding whitespace ignored); when false the plain
+   * content type is used and a value a JSON number cannot carry exactly is
+   * refused.
    */
   ieee754Compatible?: boolean;
   /** Hostnames allowed in the Host header for /mcp. Defaults to MCP_ALLOWED_HOSTS or localhost. */
