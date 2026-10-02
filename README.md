@@ -203,12 +203,32 @@ Clear this session's model, or all of them when no session id is supplied.
 | `MCP_ALLOW_LOAD` | unset | `1` exposes `load_metadata` over HTTP (arbitrary file reads / SSRF) |
 | `MCP_IEEE754_COMPATIBLE` | `1` | `0`, `false`, `no`, or `off` (case-insensitive, surrounding whitespace ignored) disables IEEE754 string encoding; Int64/Decimal body values that lose precision are then refused |
 | `MCP_ALLOWED_HOSTS` | localhost only | Allowed `Host` header values for `/mcp` |
+| `METADATA_FILE` | unset | Pin the backend to this metadata file: read once at startup, every session and MCP sees it, uploads/URLs/clears are refused |
 | `METADATA_URL_ALLOWLIST` | unset | Hosts `/api/parse/url` may fetch (`*.example.com` wildcards allowed) |
 | `METADATA_URL_BLOCK_PRIVATE` | `1` | `0` allows fetching private/loopback metadata URLs (needed for internal services) |
 | `ODATA_BACKEND_URL` | `http://localhost:3001` | Backend used by the standalone stdio MCP server |
 | `VITE_API_TOKEN` | unset | Frontend build-time variable; sent as `Authorization: Bearer …` to match `API_TOKEN` |
 
 > **Note on `VITE_API_TOKEN`:** a value compiled into the frontend bundle is *not* a secret — anyone who can read the bundle can read the token. It exists so the bundled UI can talk to a token-protected backend, which is reasonable for a local single-user tool. Do not reuse it as a shared secret across untrusted users; put a reverse proxy in front of the API for that.
+
+### Pinned metadata (`METADATA_FILE`)
+
+Set `METADATA_FILE` to serve exactly one metadata document. It is loaded and parsed **before the server starts listening**; if the file is missing, too large (> 25 MB, the upload cap), or invalid, the process logs the path and cause and exits non-zero rather than start with no model. Relative `edmx:Reference` files resolve against the document's own directory (and may not escape it). The file is read once — restart the process to reload it.
+
+```bash
+docker run -p 3001:3001 \
+  -v /host/odata.xml:/data/metadata.xml:ro \
+  -e METADATA_FILE=/data/metadata.xml \
+  -e API_TOKEN=change-me \
+  odata-visualizer
+```
+
+While pinned:
+
+- every session and every MCP client sees the same model; `GET /api/metadata/current` reports `"pinned": true`
+- `POST /api/parse/file`, `/api/parse/url`, `/api/parse/content` and `DELETE /api/metadata/current` return **403**
+- `/mcp` does not offer `load_metadata`, even when `MCP_ALLOW_LOAD=1`
+- `METADATA_URL_ALLOWLIST` / `METADATA_URL_BLOCK_PRIVATE` no longer matter: the `/api/parse/url` SSRF surface is gone, which makes pinned mode the safer way to expose the server beyond localhost. Still set `API_TOKEN` (and `MCP_TOKEN` / `MCP_ALLOWED_HOSTS`) for anything that is not loopback.
 
 ## MCP Server
 
