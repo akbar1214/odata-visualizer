@@ -548,6 +548,15 @@ function isValidSelectItem(value: string): boolean {
  * predicate is normalised before parsing and the quoted-value matcher accepts
  * only `pct-encoded-no-SQUOTE` (which also excludes `%70`-`%7F`).
  *
+ * Caller-supplied key predicates are used verbatim. Raw `+` and `;` are legal
+ * inside a string literal: `stringLiteral = SQUOTE *( SQUOTE-in-string /
+ * pchar-no-SQUOTE ) SQUOTE`, where `pchar-no-SQUOTE` admits them through
+ * `other-delims = "!" / "(" / ")" / "*" / "+" / "," / ";"`. The builder does
+ * not refuse them, and `%2B`/`%3B` remain available as escapes. Their
+ * stack-specific hazards, `;` as a servlet path-parameter delimiter and `+` as
+ * a space in legacy decoders, are therefore the caller's to handle. A raw
+ * space, not legal raw in a URL, stays refused.
+ *
  * The predicate is validated by a small parser instead of one regex, because
  * the ABNF rules (oasis-tcs/odata-abnf: `compoundKey = OPEN keyValuePair *(
  * COMMA keyValuePair )`) are structural: once a comma appears, *every*

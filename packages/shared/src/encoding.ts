@@ -90,8 +90,9 @@ export const PATH_UNSAFE: ReadonlySet<string> = Object.freeze(
     '%',
     '/',
     // `+` and `;` are encoded in values this layer *renders*. Caller-supplied key
-    // predicates are used verbatim (`KEY_QUOTED_INNER` accepts both raw), so the
-    // rule is not global — see the note in `query.ts`.
+    // predicates are used verbatim — both are legal in an OData string literal
+    // (`other-delims`), so the stack hazards are the caller's to handle and
+    // `%2B`/`%3B` stay available. The rule is not global — see `query.ts`.
     '+',
     ';',
   ]),

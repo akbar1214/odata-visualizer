@@ -117,6 +117,17 @@ describe('buildQueryUrl: key predicates', () => {
     expect(buildQueryUrl({ entitySet: "Parts('O''Brien')" })).toBe("/Parts('O''Brien')");
   });
 
+  it('keeps raw + and ; verbatim instead of refusing them', () => {
+    // A deliberate choice: stringLiteral admits both through `other-delims`, so
+    // the caller's spelling is preserved. The stack-specific reading of either
+    // character is the caller's to handle.
+    expect(buildQueryUrl({ entitySet: "Parts('a+b')" })).toBe("/Parts('a+b')");
+    expect(buildQueryUrl({ entitySet: "Parts('a;b')" })).toBe("/Parts('a;b')");
+    expect(buildQueryUrl({ entitySet: "Parts('a%2Bb')" })).toBe("/Parts('a%2Bb')");
+    expect(buildQueryUrl({ entitySet: "Parts('a%3Bb')" })).toBe("/Parts('a%3Bb')");
+    expect(() => buildQueryUrl({ entitySet: "Parts('a b')" })).toThrow(/entitySet/);
+  });
+
   it('accepts a key on a container-qualified path', () => {
     expect(buildQueryUrl({ entitySet: "Container/Parts('P1')" })).toBe("/Container/Parts('P1')");
   });
