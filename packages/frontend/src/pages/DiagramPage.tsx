@@ -9,14 +9,23 @@ interface DiagramPageProps {
   metadata: ODataMetadata;
   parseTimeMs: number | null;
   fileSizeBytes: number | null;
-  onClear: () => void;
+  onClear?: () => void;
+  pinned?: boolean;
+  sourceName?: string | null;
 }
 
-export function DiagramPage({ metadata, parseTimeMs, fileSizeBytes, onClear }: DiagramPageProps) {
+export function DiagramPage({
+  metadata,
+  parseTimeMs,
+  fileSizeBytes,
+  onClear,
+  pinned = false,
+  sourceName = null,
+}: DiagramPageProps) {
   const [selectedEntity, setSelectedEntity] = useState<string | null>(null);
 
   const handleNewFile = useCallback(() => {
-    onClear();
+    onClear?.();
     setSelectedEntity(null);
   }, [onClear]);
 
@@ -41,6 +50,11 @@ export function DiagramPage({ metadata, parseTimeMs, fileSizeBytes, onClear }: D
             </div>
 
             <div className="flex items-center gap-4 text-sm text-engineering-200">
+              {pinned && (
+                <span className="rounded border border-engineering-400 px-2 py-0.5 text-xs text-engineering-100">
+                  Metadata pinned by the server: {sourceName}
+                </span>
+              )}
               <span>{metadata.entities.length} entities</span>
               <span>{metadata.relationships.length} relationships</span>
               {parseTimeMs && <span>Parsed in {parseTimeMs}ms</span>}
@@ -48,9 +62,11 @@ export function DiagramPage({ metadata, parseTimeMs, fileSizeBytes, onClear }: D
               <Link to="/query" className="btn btn-primary text-sm">
                 Query Builder
               </Link>
-              <button onClick={handleNewFile} className="btn btn-secondary text-sm">
-                New File
-              </button>
+              {onClear && (
+                <button onClick={handleNewFile} className="btn btn-secondary text-sm">
+                  New File
+                </button>
+              )}
             </div>
           </div>
         </header>

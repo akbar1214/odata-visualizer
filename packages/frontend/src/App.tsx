@@ -38,8 +38,43 @@ const queryBuilderIcon = (
 );
 
 function App() {
-  const { metadata, loading, error, parseTimeMs, fileSizeBytes, loadFile, loadUrl, clear } =
-    useMetadata();
+  const {
+    metadata,
+    loading,
+    error,
+    parseTimeMs,
+    fileSizeBytes,
+    pinned,
+    sourceName,
+    initializing,
+    loadFile,
+    loadUrl,
+    clear,
+  } = useMetadata();
+
+  // Hydration decides whether a backend model exists, so the upload screen must
+  // not flash before it settles.
+  if (initializing) {
+    return (
+      <div className="min-h-screen bg-engineering-100">
+        {/* Header */}
+        <header className="bg-engineering-600 text-white shadow-odv">
+          <div className="max-w-full mx-auto px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 bg-primary-500 rounded flex items-center justify-center">
+                <span className="text-white font-bold text-sm">OD</span>
+              </div>
+              <h1 className="text-xl font-semibold">OData Visualizer</h1>
+            </div>
+          </div>
+        </header>
+
+        <main className="max-w-full mx-auto p-4">
+          <p className="mt-12 text-center text-engineering-500">Loading metadata...</p>
+        </main>
+      </div>
+    );
+  }
 
   if (!metadata) {
     return (
@@ -122,7 +157,9 @@ function App() {
       metadata={metadata}
       parseTimeMs={parseTimeMs}
       fileSizeBytes={fileSizeBytes}
-      onClear={clear}
+      onClear={pinned ? undefined : clear}
+      pinned={pinned}
+      sourceName={sourceName}
     />
   );
   const queryBuilderPage = <QueryBuilderPage metadata={metadata} />;
