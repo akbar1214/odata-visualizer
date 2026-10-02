@@ -1568,12 +1568,17 @@ function buildInvocationUnsafe(
   const providedByLowerName = new Map(
     Object.entries(rawParameters).map(([key, value]) => [key.toLowerCase(), value] as const),
   );
-  const parameters: Record<string, unknown> = {};
+  const parameterEntries: Array<[string, unknown]> = [];
   for (const param of invokableParameters(item)) {
-    if (providedByLowerName.has(param.name.toLowerCase())) {
-      parameters[param.name] = providedByLowerName.get(param.name.toLowerCase());
+    const lowerName = param.name.toLowerCase();
+    if (providedByLowerName.has(lowerName)) {
+      parameterEntries.push([param.name, providedByLowerName.get(lowerName)]);
     }
   }
+  // `Object.fromEntries` defines each key as an own data property, so a
+  // declared parameter named `__proto__` survives instead of hitting an
+  // object literal's prototype setter.
+  const parameters: Record<string, unknown> = Object.fromEntries(parameterEntries);
 
   const binding = (item.parameters ?? []).find((p) => p.isBinding);
   const bindingIsCollection = unwrapCollection(binding?.type)?.isCollection ?? false;
@@ -1878,12 +1883,17 @@ function buildBody(
       stringEncodesIeee754: false,
       complexDepth: 0,
     };
-    const body: Record<string, unknown> = {};
+    const bodyEntries: Array<[string, unknown]> = [];
     for (const [name, value] of Object.entries(parameters)) {
       const type = declaredParameterType(item, name);
-      body[name] = type ? coerceBodyValue(type, value, metadata, encoding, item.namespace) : value;
+      bodyEntries.push([
+        name,
+        type ? coerceBodyValue(type, value, metadata, encoding, item.namespace) : value,
+      ]);
     }
-    return { body, encoding };
+    // Same prototype-safety as the parameter copy: a declared name may be
+    // `__proto__`, and the body must carry it as a data property.
+    return { body: Object.fromEntries(bodyEntries), encoding };
   };
 
   const plain = build(false);

@@ -1163,6 +1163,7 @@ const numericCSDL = `<?xml version="1.0" encoding="utf-8"?>
         <Parameter Name="Loop" Type="Num.Loop" />
         <Parameter Name="Caseful" Type="Num.Caseful" />
         <Parameter Name="Derived" Type="App.Derived" />
+        <Parameter Name="__proto__" Type="Edm.Int64" />
       </Action>
       <TypeDefinition Name="Score" UnderlyingType="Edm.Int32" />
       <TypeDefinition Name="BigRef" UnderlyingType="Edm.Int64" />
@@ -1716,6 +1717,28 @@ describe('complex action body coercion', () => {
     const result = await adjust({ Derived: { value: { amount: '1.5' } } });
     expect(result.isError).toBeUndefined();
     expect(emittedBody(textOf(result))['Derived']).toEqual({ Value: { Amount: 1.5 } });
+  });
+});
+
+/**
+ * Parameter names come from the model, so a declared name like `__proto__`
+ * must survive into the body as an own data property rather than hitting the
+ * prototype setter of an object literal and disappearing.
+ */
+describe('prototype-safe body construction', () => {
+  it('keeps a parameter literally named __proto__ in the emitted body', async () => {
+    const result = await adjust({ ['__proto__']: '9007199254740993' });
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    expect(text).toContain('"__proto__": "9007199254740993"');
+
+    const body = emittedBody(text);
+    expect(Object.hasOwn(body, '__proto__')).toBe(true);
+    expect(body['__proto__']).toBe('9007199254740993');
+    // The value became a data property, not the body's prototype, and nothing
+    // leaked onto the shared prototype.
+    expect(Object.getPrototypeOf(body)).toBe(Object.prototype);
+    expect(Object.keys(Object.prototype)).toEqual([]);
   });
 });
 
