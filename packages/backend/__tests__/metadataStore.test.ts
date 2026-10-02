@@ -150,6 +150,10 @@ describe('createModelStore', () => {
   });
 
   it('refuses to replace or clear the pinned model', async () => {
+    store.save('default', await metadata(), { sourceName: 'default.xml' });
+    store.save('a', await metadata(), { sourceName: 'a.xml' });
+    store.save('b', await metadata(), { sourceName: 'b.xml' });
+    const before = store.current();
     const pinned = store.lockTo(await metadata(), { sourceName: 'pinned.xml' });
 
     expect(() => store.save('a', pinned.metadata, { sourceName: 'other' })).toThrow(
@@ -158,11 +162,27 @@ describe('createModelStore', () => {
     expect(() => store.clear()).toThrow('Metadata is pinned and cannot be cleared');
     expect(() => store.clear('a')).toThrow('Metadata is pinned and cannot be cleared');
     expect(() => store.clearAll()).toThrow('Metadata is pinned and cannot be cleared');
+    expect(() => store.accessors.set(pinned.metadata, { sourceName: 'mcp' })).toThrow(
+      'Metadata is pinned and cannot be replaced',
+    );
+    expect(() => store.accessors.clear()).toThrow('Metadata is pinned and cannot be cleared');
 
     // The pin survived the refused calls untouched.
     expect(store.current()).toBe(pinned);
     expect(store.get('a')).toBe(pinned);
     expect(store.list()).toHaveLength(1);
+
+    // Unlock so a mutation performed before the throw cannot hide behind the
+    // pin: the pre-lock sessions must be exactly as they were.
+    store.unlock();
+    expect(store.isLocked()).toBe(false);
+    expect(store.current()).toBe(before);
+    expect(store.list().map((entry) => [entry.id, entry.sourceName])).toEqual([
+      ['default', 'default.xml'],
+      ['a', 'a.xml'],
+      ['b', 'b.xml'],
+    ]);
+    expect(store.get('pinned')).toBeNull();
   });
 
   it('replaces the pinned model on a second lockTo', async () => {
