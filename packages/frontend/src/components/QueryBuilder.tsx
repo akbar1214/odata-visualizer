@@ -9,6 +9,7 @@ import {
   buildODataQuery,
   getEntitySelectionValue,
   getQueryableEntities,
+  resolveResourcePath,
   type QueryState,
 } from '../utils/queryResolver';
 import {
@@ -97,13 +98,18 @@ export function QueryBuilder({ metadata }: QueryBuilderProps) {
 
   // An entity type with no entity set anywhere in its inheritance chain has no
   // resource path, so `buildODataQuery` returns ''. Saying "select an entity"
-  // when one is already selected reads as a bug.
+  // when one is already selected reads as a bug. The message claims the set is
+  // missing, so only show it when that is true: an exposed set whose name the
+  // encoder refuses (a lone surrogate reaches `parseCSDL` through a crafted
+  // upload) also returns '' but reports the encoding failure as its own warning,
+  // and "not exposed as an entity set" would flatly contradict it.
   const emptyMessage = useMemo(() => {
     if (functionQuery || queryString) return undefined;
-    return selectedEntity && selectedEntity.length > 0
-      ? `"${selectedEntity}" is not exposed as an entity set, so it has no resource path.`
-      : undefined;
-  }, [functionQuery, queryString, selectedEntity]);
+    if (!selectedEntity || resolveResourcePath(selectedEntity, metadata) !== undefined) {
+      return undefined;
+    }
+    return `"${selectedEntity}" is not exposed as an entity set, so it has no resource path.`;
+  }, [functionQuery, queryString, selectedEntity, metadata]);
 
   return (
     <div className="flex h-[calc(100vh-64px)]">

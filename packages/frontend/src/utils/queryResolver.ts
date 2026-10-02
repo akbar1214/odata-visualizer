@@ -10,6 +10,7 @@ import {
   assertResourceSegment,
   buildQueryOptions,
   buildQueryUrl,
+  encodeIdentifierForUrl,
   findEntitiesByName,
   findEntityByName,
   formatV4Literal,
@@ -452,7 +453,33 @@ export function buildODataQuery(
 
     const entitySet = resolveResourcePath(query.entityName, metadata);
     if (!entitySet) return '';
-    path = `/${entitySet}`;
+    // The catch below falls back to this path, and the set name comes from the
+    // model. `assertResourceSegment` refuses a name that is not a resource path
+    // (`Th#ings`), so the fallback would otherwise undo the refusal by
+    // re-emitting it raw — a pasted `/Th#ings` truncates at the fragment and
+    // lands on `/Th`. Each `/`-separated segment is encoded through the shared
+    // encoder, the way every other metadata-derived identifier is emitted. The
+    // fallback treats the name as data, so even for a name the assertion accepts
+    // it is not always the identity: a key-predicate-shaped name is emitted raw
+    // as structure by the happy path (`Parts('P1')?$top=25`) but encoded by the
+    // fallback (`/Parts%28%27P1%27%29`). (A bound-function path is asserted
+    // where it is built, so it is already safe to fall back to.)
+    try {
+      path = `/${entitySet
+        .split('/')
+        .map((segment) => encodeIdentifierForUrl(segment))
+        .join('/')}`;
+    } catch (error) {
+      // `percentEncode` throws only for a name no URL can carry (an unpaired
+      // surrogate), so there is no safe path to fall back to. Name the encoding
+      // failure: the outer catch would claim it was showing the bare resource
+      // path, and the caller's empty state would blame an unexposed set.
+      const reason = error instanceof Error ? error.message : String(error);
+      onWarning?.(
+        `The resource path could not be encoded, so the preview shows no query: ${reason}`,
+      );
+      return '';
+    }
 
     // `buildQueryUrl` rather than `buildQueryOptions`: it asserts the set path
     // first, so a set name that is not a resource path (`As?evil=1`) is
