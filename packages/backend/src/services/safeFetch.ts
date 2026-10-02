@@ -23,11 +23,30 @@ export interface FetchPolicyOptions {
   allowlist?: string[];
   blockPrivate?: boolean;
   accept?: string;
+  /**
+   * Caller-supplied request headers (validated by the caller). Sent on every
+   * hop that shares the initial URL's origin; a cross-origin redirect drops
+   * them, mirroring the fetch spec. `Accept` is always applied and a caller
+   * header may override it.
+   */
+  headers?: Record<string, string>;
   timeoutMs?: number;
   /** Injectable DNS resolver; see `assertHostResolvesPublic`. */
   resolveHostname?: HostnameResolver;
   /** Refuse a response body larger than this (default 32 MB). */
   maxResponseBytes?: number;
+}
+
+/**
+ * Request headers for one hop. `Accept` is applied first so a caller-supplied
+ * one (in any case) overrides it rather than being combined with it.
+ */
+function hopHeaders(options: FetchPolicyOptions, includeCallerHeaders: boolean): Headers {
+  const headers = new Headers({ accept: options.accept ?? 'application/xml, text/xml' });
+  if (includeCallerHeaders) {
+    for (const [name, value] of Object.entries(options.headers ?? {})) headers.set(name, value);
+  }
+  return headers;
 }
 
 function parseAllowlist(raw: string | undefined): string[] | undefined {
@@ -76,10 +95,11 @@ export async function fetchWithPolicy(
     blockPrivate,
     resolveHostname: options.resolveHostname,
   });
+  const rootOrigin = current.origin;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     const response = await fetch(current.toString(), {
-      headers: { Accept: options.accept ?? 'application/xml, text/xml' },
+      headers: hopHeaders(options, current.origin === rootOrigin),
       redirect: 'manual',
       signal,
     });

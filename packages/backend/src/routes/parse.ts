@@ -7,6 +7,7 @@ import {
 } from 'express';
 import multer from 'multer';
 import { parseCSDL } from '@odata-visualizer/shared';
+import { validateFetchHeaders } from '@odata-visualizer/shared/load';
 import { metadataStore, sanitizeModelId } from '../services/metadataStore.js';
 import { createHttpReferenceLoader } from '../services/referenceLoader.js';
 import { validateMetadataUrl, UrlPolicyError } from '../services/urlPolicy.js';
@@ -133,13 +134,52 @@ async function parseCSDLDocument(
 }
 
 /**
+ * Read the optional `headers` field from a request body.
+ *
+ * A JSON body delivers an object; a multipart form field can only deliver a
+ * string, so one is parsed as JSON. Invalid input is a 400 (`ClientError`), and
+ * the validator names a rejected header without ever echoing its value.
+ */
+function validateHeaderField(raw: unknown): Record<string, string> | undefined {
+  if (raw === undefined) return undefined;
+
+  let value: unknown;
+  if (typeof raw === 'string') {
+    try {
+      value = JSON.parse(raw) as unknown;
+    } catch {
+      throw new ClientError('headers must be a JSON object', 400);
+    }
+  } else {
+    value = raw;
+  }
+
+  try {
+    return validateFetchHeaders(value as Record<string, string>);
+  } catch (error) {
+    throw new ClientError(error instanceof Error ? error.message : 'Invalid headers', 400);
+  }
+}
+
+/**
+ * Headers authenticate the `edmx:Reference` fetches, which need a `baseUrl` to
+ * resolve against. Refusing headers without one beats silently dropping them.
+ */
+function requireBaseUrlForHeaders(rawHeaders: unknown, baseUrl: string | undefined): void {
+  if (rawHeaders !== undefined && !baseUrl) {
+    throw new ClientError('headers require baseUrl', 400);
+  }
+}
+
+/**
  * Parse an uploaded/POSTed document. When the caller supplies a `baseUrl`,
  * `edmx:Reference/@Uri` values are fetched relative to it (browser uploads
- * have no filesystem base of their own).
+ * have no filesystem base of their own); `headers` authenticate those fetches.
  */
 async function parseUploadedDocument(
   xmlContent: string,
   baseUrl: string | undefined,
+  headers?: Record<string, string>,
 ): Promise<Awaited<ReturnType<typeof parseCSDL>>> {
   if (!baseUrl) return parseCSDLDocument(xmlContent);
 
@@ -148,7 +188,7 @@ async function parseUploadedDocument(
   });
   return parseCSDLDocument(xmlContent, {
     baseUri: base.toString(),
-    loadExternal: createHttpReferenceLoader(),
+    loadExternal: createHttpReferenceLoader({ headers, rootUrl: base.toString() }),
   });
 }
 
@@ -173,7 +213,10 @@ router.post('/file', upload.single('metadata'), async (req: Request, res: Respon
 
     const xmlContent = req.file.buffer.toString('utf-8');
     const baseUrl = typeof req.body?.baseUrl === 'string' ? req.body.baseUrl : undefined;
-    const data = await parseUploadedDocument(xmlContent, baseUrl);
+    const rawHeaders = (req.body as { headers?: unknown } | undefined)?.headers;
+    requireBaseUrlForHeaders(rawHeaders, baseUrl);
+    const headers = validateHeaderField(rawHeaders);
+    const data = await parseUploadedDocument(xmlContent, baseUrl, headers);
 
     metadataStore.save(sessionIdOf(req, req.body as { session?: string }), data, {
       sourceName: req.file.originalname,
@@ -218,7 +261,7 @@ router.post('/url', async (req: Request, res: Response) => {
   const startTime = Date.now();
 
   try {
-    const { url } = req.body as ParseRequest;
+    const { url, headers: rawHeaders } = req.body as ParseRequest;
 
     if (!url) {
       const response: ParseResponse = {
@@ -252,12 +295,16 @@ router.post('/url', async (req: Request, res: Response) => {
     // fetch rejects them), so they are stripped before the request.
     const safeUrl = redactUrlCredentials(parsedUrl);
 
+    // Validated before the first request; a bad header is a caller error.
+    const headers = validateHeaderField(rawHeaders);
+
     try {
       // Validates every redirect hop *before* requesting it, so a public URL
       // cannot bounce the server to a private address.
       const response = await fetchWithPolicy(safeUrl, {
         ...urlPolicyFromEnv(),
         accept: 'application/xml, text/xml, application/atomsvc+xml',
+        headers,
       });
 
       if (!response.ok) {
@@ -281,7 +328,7 @@ router.post('/url', async (req: Request, res: Response) => {
       // references through the same URL policy.
       const data = await parseCSDLDocument(xmlContent, {
         baseUri: safeUrl,
-        loadExternal: createHttpReferenceLoader(),
+        loadExternal: createHttpReferenceLoader({ headers, rootUrl: safeUrl }),
       });
 
       metadataStore.save(sessionIdOf(req), data, {
@@ -355,10 +402,16 @@ router.post('/content', async (req: Request, res: Response) => {
   const startTime = Date.now();
 
   try {
-    const { content, session, baseUrl } = req.body as {
+    const {
+      content,
+      session,
+      baseUrl,
+      headers: rawHeaders,
+    } = req.body as {
       content?: string;
       session?: string;
       baseUrl?: string;
+      headers?: unknown;
     };
 
     if (!content) {
@@ -372,7 +425,9 @@ router.post('/content', async (req: Request, res: Response) => {
       return;
     }
 
-    const data = await parseUploadedDocument(content, baseUrl);
+    requireBaseUrlForHeaders(rawHeaders, baseUrl);
+    const headers = validateHeaderField(rawHeaders);
+    const data = await parseUploadedDocument(content, baseUrl, headers);
 
     metadataStore.save(sessionIdOf(req, { session }), data, {
       sourceName: 'inline content',
