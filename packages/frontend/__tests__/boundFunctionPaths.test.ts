@@ -322,6 +322,36 @@ describe('the query builder emits the function segment', () => {
     expect(url).toBe("/Ms(Num=1,Evil%29%3D1%20or%20%281='1')/N.FromM()");
   });
 
+  it('warns once, and not about a preview, when a key name cannot be encoded', async () => {
+    const metadata = await model();
+    const m = metadata.entities.find((e) => e.name === 'M')!;
+    // `parseCSDL` preserves a lone surrogate, which no URL can carry. The
+    // placeholder note used to be emitted before the key names were encoded,
+    // so the throw that prevents the preview produced two warnings: the note
+    // first, describing a preview that does not exist, then the build failure.
+    m.keys[1] = 'Code\uD800';
+    const warnings: string[] = [];
+    const url = buildODataQuery(
+      segmentQuery({
+        sourceEntity: 'M',
+        segment: {
+          name: 'FromM',
+          qualifiedName: 'N.FromM',
+          parameters: [],
+          bindingIsCollection: false,
+          returnsCollection: false,
+        },
+      }),
+      metadata,
+      (message) => warnings.push(message),
+    );
+
+    expect(url).toBe('');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('unpaired surrogate');
+    expect(warnings[0]).not.toContain('key placeholder');
+  });
+
   it('says a keyless type cannot be addressed rather than asking for a key', async () => {
     const keyless = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">

@@ -72,6 +72,44 @@ describe('PathFinder target list', () => {
     // Nothing on this path is composable, so no path button is offered.
     expect(screen.queryByText(/^Path 1/)).toBeNull();
   });
+
+  it('keeps the found count when only some paths are hidden', async () => {
+    const metadata = await parseCSDL(`<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.01" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="N" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="A"><Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Direct" Type="N.C" /></EntityType>
+      <EntityType Name="C"><Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" /></EntityType>
+      <Function Name="WithParam" IsBound="true">
+        <Parameter Name="it" Type="N.A" />
+        <Parameter Name="limit" Type="Edm.Int32" />
+        <ReturnType Type="N.C" />
+      </Function>
+      <EntityContainer Name="C1">
+        <EntitySet Name="As" EntityType="N.A" />
+        <EntitySet Name="Cs" EntityType="N.C" />
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`);
+    render(<PathFinder metadata={metadata} currentEntity="A" onSelectPath={() => undefined} />);
+
+    const targetInput = screen.getAllByRole('combobox')[1];
+    fireEvent.focus(targetInput);
+    fireEvent.mouseDown(within(screen.getByRole('listbox')).getByText('C'));
+    fireEvent.click(screen.getByRole('button', { name: 'Find Paths' }));
+
+    // A nav and a parameterised function both reach C. One path stays
+    // clickable, so the summary keeps calling the total "found" while the
+    // hidden note accounts for the one that cannot be offered.
+    expect(screen.getByText('2 path(s) found')).toBeDefined();
+    expect(screen.getByText(/1 path\(s\) hidden/)).toBeDefined();
+    expect(screen.getByText(/^Path 1/)).toBeDefined();
+    expect(screen.queryByText(/^Path 2/)).toBeNull();
+  });
 });
 
 describe('QueryBuilder empty state', () => {

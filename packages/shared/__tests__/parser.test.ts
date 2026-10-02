@@ -751,7 +751,16 @@ describe('edmx:Include and edmx:Reference', () => {
       <EntityType Name="Thing">
         <Key><PropertyRef Name="Id" /></Key>
         <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <NavigationProperty Name="Orders" Relationship="Ghost.R1" FromRole="Thing" ToRole="Order" />
       </EntityType>
+      <EntityType Name="Order">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+      <Association Name="R1">
+        <End Type="Main.Thing" Role="Thing" Multiplicity="1" />
+        <End Type="Main.Order" Role="Order" Multiplicity="*" />
+      </Association>
     </Schema>
   </edmx:DataServices>
 </edmx:Edmx>`;
@@ -767,6 +776,15 @@ describe('edmx:Include and edmx:Reference', () => {
     expect(calls).toBe(1);
     expect(result.unresolvedReferences).toBeUndefined();
     expect(result.unresolvedReferenceIncludes).toBeUndefined();
+
+    // The symptom, not just the arrays: `Ghost` is not pending, so the
+    // namesake association `R1` still resolves and derives a traversal edge.
+    // Recording the duplicate reference's Include would block this exactly as
+    // a failed load does.
+    const thing = result.entities.find((entity) => entity.name === 'Thing');
+    expect(thing).toBeDefined();
+    expect(getTargetEntityName('Orders', thing!, result)).toBe('Order');
+    expect(getTraversalEdges(result).filter((edge) => edge.kind === 'nav')).toHaveLength(1);
   });
 
   it('records the Include names of a reference that exceeds the document cap', async () => {

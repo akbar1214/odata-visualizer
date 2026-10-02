@@ -544,17 +544,24 @@ function placeholderKeySegment(
     );
     return `(${PLACEHOLDER_KEY})`;
   }
+  // A composite key's names are metadata-derived identifiers in a path
+  // position, so they are encoded through the shared policy the way MCP emits
+  // key names. Raw, a name containing `)` or `=` would close the predicate and
+  // reshape it into structure; `assertResourceSegment` is the wrong guard here
+  // because it *accepts* a `/` as a path separator, which inside a key
+  // predicate addresses a different resource.
+  const predicate =
+    keys.length === 1
+      ? `(${literalFor(keys[0])})`
+      : `(${keys.map((key) => `${encodeIdentifierForUrl(key)}=${literalFor(key)}`).join(',')})`;
+
+  // The note is emitted only after the predicate is built. Encoding a key name
+  // can throw (an unpaired surrogate), and the note used to claim a preview
+  // that the throw then prevented — two warnings for one failure (#87).
   onWarning?.(
     `The preview uses key placeholder ${PLACEHOLDER_KEY} on ${entityName}; replace it with a real key.`,
   );
-  if (keys.length === 1) return `(${literalFor(keys[0])})`;
-  // A key name is a metadata-derived identifier in a path position, so it is
-  // encoded through the shared policy the way MCP emits key names. Raw, a name
-  // containing `)` or `=` would close the predicate and reshape it into
-  // structure; `assertResourceSegment` is the wrong guard here because it
-  // *accepts* a `/` as a path separator, which inside a key predicate addresses
-  // a different resource.
-  return `(${keys.map((key) => `${encodeIdentifierForUrl(key)}=${literalFor(key)}`).join(',')})`;
+  return predicate;
 }
 
 /**
