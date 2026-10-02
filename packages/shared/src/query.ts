@@ -548,6 +548,25 @@ function isValidSelectItem(value: string): boolean {
  * predicate is normalised before parsing and the quoted-value matcher accepts
  * only `pct-encoded-no-SQUOTE` (which also excludes `%70`-`%7F`).
  *
+ * Caller-supplied key predicates are used verbatim. Raw `+`, `;` and `&` are
+ * legal inside a string literal: `stringLiteral = SQUOTE *( SQUOTE-in-string /
+ * pchar-no-SQUOTE ) SQUOTE`, where `pchar-no-SQUOTE` admits `+`
+ * and `;` through `other-delims = "!" / "(" / ")" / "*" / "+" / "," / ";"` and
+ * `&` as an explicit alternative. The builder does not refuse them, and `%2B`,
+ * `%3B` and `%26` remain available as escapes. The stack-specific hazards of
+ * `;` (a servlet path-parameter delimiter) and `+` (a space to legacy decoders)
+ * are therefore the caller's to handle. A raw space, not legal raw in a URL,
+ * stays refused.
+ *
+ * The matcher is a deliberate, known superset of `pchar-no-SQUOTE`: raw `"`,
+ * `<`, `>`, `^`, `` ` ``, `|` pass, as does non-ASCII outside the space and
+ * control classes, even though the ABNF does not list them. Their
+ * percent-encoded spellings (`%7C`, `%7E`, ...) stay refused, because
+ * `pct-encoded-no-SQUOTE` is the only encoding the grammar admits. URL parsers
+ * pass or encode these without changing which resource is addressed (`curl`
+ * accepts all of them), and the behaviour predates this decision, so it is
+ * pinned rather than tightened.
+ *
  * The predicate is validated by a small parser instead of one regex, because
  * the ABNF rules (oasis-tcs/odata-abnf: `compoundKey = OPEN keyValuePair *(
  * COMMA keyValuePair )`) are structural: once a comma appears, *every*
@@ -567,7 +586,7 @@ const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // bracket from the guard — which is exactly what the linter suggested and what
 // `queryValidation.test.ts` caught.
 // eslint-disable-next-line no-useless-escape
-const KEY_QUOTED_INNER = /^(?:[^'%/\\?#&\s\p{Cc}\[\]{}]|%(?:[01345689A-Fa-f][0-9A-Fa-f]|2[01345689A-Fa-f])|'')*$/u;
+const KEY_QUOTED_INNER = /^(?:[^'%/\\?#\s\p{Cc}\[\]{}]|%(?:[01345689A-Fa-f][0-9A-Fa-f]|2[012345689A-Fa-f])|'')*$/u;
 
 const KEY_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
