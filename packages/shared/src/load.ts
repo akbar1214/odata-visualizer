@@ -45,9 +45,14 @@ export async function readExactly(handle: FileHandle, size: number): Promise<str
  * Read a regular file without blocking on a FIFO or racing a size change: the
  * file is opened once with `O_NONBLOCK`, fstat'ed, and exactly the fstat'ed
  * number of bytes are read from that handle. Non-regular files and files over
- * `maxBytes` are rejected before any content is read.
+ * `maxBytes` are rejected before any content is read. `byteLength` is that raw
+ * fstat size — never a re-encode of the decoded string, which can grow when
+ * the file contains invalid UTF-8.
  */
-export async function readRegularFile(path: string, maxBytes?: number): Promise<string> {
+export async function readRegularFile(
+  path: string,
+  maxBytes?: number,
+): Promise<{ content: string; byteLength: number }> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
     const stats = await handle.stat();
@@ -57,7 +62,7 @@ export async function readRegularFile(path: string, maxBytes?: number): Promise<
     if (maxBytes !== undefined && stats.size > maxBytes) {
       throw new Error(`"${path}" is ${stats.size} bytes, which exceeds the ${maxBytes}-byte limit`);
     }
-    return await readExactly(handle, stats.size);
+    return { content: await readExactly(handle, stats.size), byteLength: stats.size };
   } finally {
     await handle.close();
   }
@@ -75,10 +80,11 @@ export async function readRegularFile(path: string, maxBytes?: number): Promise<
 export async function parseCSDLFile(path: string, xmlContent?: string): Promise<ODataMetadata> {
   const absolutePath = isAbsolute(path) ? path : resolvePath(path);
   const baseDirectory = dirname(absolutePath);
-  const content = xmlContent ?? (await readRegularFile(absolutePath));
+  const content = xmlContent ?? (await readRegularFile(absolutePath)).content;
   return parseCSDL(content, {
     baseUri: `file://${absolutePath}`,
-    loadExternal: async (uri) => readRegularFile(resolveSiblingPath(uri, baseDirectory)),
+    loadExternal: async (uri) =>
+      (await readRegularFile(resolveSiblingPath(uri, baseDirectory))).content,
   });
 }
 

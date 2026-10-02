@@ -36,8 +36,11 @@ function errorMessage(error: unknown): string {
  */
 export async function loadPinnedMetadata(file: string): Promise<PinnedMetadata> {
   let xmlContent: string;
+  let fileSizeBytes: number;
   try {
-    xmlContent = await readRegularFile(file, MAX_UPLOAD_BYTES);
+    const read = await readRegularFile(file, MAX_UPLOAD_BYTES);
+    xmlContent = read.content;
+    fileSizeBytes = read.byteLength;
   } catch (error) {
     throw new Error(`METADATA_FILE "${file}" cannot be read: ${errorMessage(error)}`);
   }
@@ -56,7 +59,7 @@ export async function loadPinnedMetadata(file: string): Promise<PinnedMetadata> 
       // the absolute path would leak the host's directory layout.
       sourceName: basename(file),
       sourceType: 'file',
-      fileSizeBytes: Buffer.byteLength(xmlContent, 'utf8'),
+      fileSizeBytes,
       loadedAt: new Date().toISOString(),
     },
   };

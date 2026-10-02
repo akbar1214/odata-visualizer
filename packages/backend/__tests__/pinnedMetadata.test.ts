@@ -95,6 +95,43 @@ describe('loadPinnedMetadata', () => {
     });
   });
 
+  it('reports the raw byte length when invalid UTF-8 expands on decode', async () => {
+    await withTempDir(async (dir) => {
+      const file = join(dir, 'invalid-utf8.xml');
+      // 0x80 is not valid UTF-8; decoding turns it into U+FFFD (3 bytes), so a
+      // `Buffer.byteLength(xmlContent)` report would be larger than the file.
+      const xml = Buffer.concat([
+        Buffer.from(
+          `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Raw.Size" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <!-- `,
+          'utf8',
+        ),
+        Buffer.from([0x80]),
+        Buffer.from(
+          ` -->
+      <EntityType Name="Product"><Key><PropertyRef Name="Id" /></Key>
+      <Property Name="Id" Type="Edm.Int32" Nullable="false" /></EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`,
+          'utf8',
+        ),
+      ]);
+      await writeFile(file, xml);
+
+      const { metadata, info } = await loadPinnedMetadata(file);
+
+      expect(metadata.entities.map((entity) => entity.name)).toContain('Product');
+      expect(info.fileSizeBytes).toBe(xml.byteLength);
+      // Pin the raw count: the decoded string re-encodes longer, so reporting
+      // `Buffer.byteLength(xmlContent)` would drift.
+      expect(Buffer.byteLength(xml.toString('utf8'), 'utf8')).toBeGreaterThan(xml.byteLength);
+    });
+  });
+
   it('rejects a missing file with a message naming the path', async () => {
     await withTempDir(async (dir) => {
       const missing = join(dir, 'no-such-file.xml');
