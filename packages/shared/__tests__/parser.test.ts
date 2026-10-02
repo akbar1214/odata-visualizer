@@ -672,6 +672,112 @@ describe('edmx:Include and edmx:Reference', () => {
       },
     });
     expect(result.unresolvedReferences).toEqual(['ext.xml']);
+    expect(result.unresolvedReferenceIncludes).toEqual(['Ext', 'ext']);
     expect(result.entities.map((e) => e.name)).toContain('Thing');
+  });
+
+  it('records the Include names of a second reference to a URI that already failed', async () => {
+    // #77: the first failure marked the URI visited, so the second reference's
+    // Include names were dropped and a `Ghost.R1` qualifier guessed a namesake
+    // instead of staying unresolved.
+    const duplicateReference = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx"
+           xmlns="http://docs.oasis-open.org/odata/ns/edm">
+  <edmx:Reference Uri="shared.xml">
+    <edmx:Include Namespace="First" />
+  </edmx:Reference>
+  <edmx:Reference Uri="shared.xml">
+    <edmx:Include Namespace="Ghost" />
+  </edmx:Reference>
+  <edmx:DataServices>
+    <Schema Namespace="Main" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+    const result = await parseCSDL(duplicateReference, {
+      baseUri: 'https://host/odata/main.xml',
+      loadExternal: async () => {
+        throw new Error('404');
+      },
+    });
+
+    expect(result.unresolvedReferences).toEqual(['shared.xml']);
+    expect(result.unresolvedReferenceIncludes).toEqual(['First', 'Ghost']);
+  });
+
+  it('records the Include names of a reference that exceeds the document cap', async () => {
+    const twoReferences = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx"
+           xmlns="http://docs.oasis-open.org/odata/ns/edm">
+  <edmx:DataServices>
+    <edmx:Reference Uri="one.xml">
+      <edmx:Include Namespace="One" Alias="one" />
+    </edmx:Reference>
+    <edmx:Reference Uri="two.xml">
+      <edmx:Include Namespace="Two" Alias="two" />
+    </edmx:Reference>
+    <Schema Namespace="Main" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+    const result = await parseCSDL(twoReferences, {
+      baseUri: 'https://host/odata/main.xml',
+      maxExternalDocuments: 1,
+      loadExternal: async () => externalDoc,
+    });
+
+    expect(result.unresolvedReferences).toEqual(['two.xml']);
+    expect(result.unresolvedReferenceIncludes).toEqual(['Two', 'two']);
+  });
+
+  it('records the Include names of a nested reference that fails to load', async () => {
+    const rootWithNested = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx"
+           xmlns="http://docs.oasis-open.org/odata/ns/edm">
+  <edmx:Reference Uri="a.xml">
+    <edmx:Include Namespace="A" Alias="a" />
+  </edmx:Reference>
+  <edmx:DataServices>
+    <Schema Namespace="Main" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Thing">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+    const nestedDoc = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx"
+           xmlns="http://docs.oasis-open.org/odata/ns/edm">
+  <edmx:DataServices>
+    <edmx:Reference Uri="b.xml">
+      <edmx:Include Namespace="B" Alias="b" />
+    </edmx:Reference>
+    <Schema Namespace="A" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="RefType">
+        <Key><PropertyRef Name="Id" /></Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+      </EntityType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`;
+    const result = await parseCSDL(rootWithNested, {
+      baseUri: 'https://host/odata/main.xml',
+      loadExternal: async (uri) => {
+        if (uri.endsWith('/a.xml')) return nestedDoc;
+        throw new Error('404');
+      },
+    });
+
+    expect(result.unresolvedReferences).toEqual(['b.xml']);
+    expect(result.unresolvedReferenceIncludes).toEqual(['B', 'b']);
   });
 });
