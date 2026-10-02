@@ -1153,8 +1153,34 @@ const numericCSDL = `<?xml version="1.0" encoding="utf-8"?>
         <Parameter Name="Grade" Type="Num.Score" />
         <Parameter Name="Counts" Type="Collection(Edm.Int32)" />
         <Parameter Name="Bigs" Type="Collection(Edm.Int64)" />
+        <Parameter Name="Details" Type="Num.Details" />
+        <Parameter Name="Envelope" Type="Num.Envelope" />
+        <Parameter Name="Many" Type="Collection(Num.Details)" />
+        <Parameter Name="Nodes" Type="Num.Node" />
+        <Parameter Name="Open" Type="Num.Open" />
+        <Parameter Name="Ghost" Type="Num.Missing" />
+        <Parameter Name="Wrapped" Type="Num.Wrapped" />
+        <Parameter Name="Loop" Type="Num.Loop" />
       </Action>
       <TypeDefinition Name="Score" UnderlyingType="Edm.Int32" />
+      <TypeDefinition Name="BigRef" UnderlyingType="Edm.Int64" />
+      <TypeDefinition Name="Wrapped" UnderlyingType="Num.Details" />
+      <TypeDefinition Name="Loop" UnderlyingType="Num.Loop" />
+      <ComplexType Name="Details">
+        <Property Name="Amount" Type="Edm.Decimal" />
+        <Property Name="Code" Type="Edm.Int64" />
+      </ComplexType>
+      <ComplexType Name="Envelope">
+        <Property Name="Details" Type="Num.Details" />
+        <Property Name="Tags" Type="Collection(Edm.Int64)" />
+        <Property Name="Ref" Type="Num.BigRef" />
+      </ComplexType>
+      <ComplexType Name="Node">
+        <Property Name="Next" Type="Num.Node" />
+      </ComplexType>
+      <ComplexType Name="Open" OpenType="true">
+        <Property Name="Amount" Type="Edm.Decimal" />
+      </ComplexType>
       <EntityContainer Name="Container">
         <EntitySet Name="Items" EntityType="Num.Item" />
       </EntityContainer>
@@ -1492,6 +1518,122 @@ describe('numeric action body coercion', () => {
     } finally {
       INTEGER_TYPES.add('Edm.Int64');
     }
+  });
+});
+
+/**
+ * A complex parameter used to fall through untouched: `coerceScalar` returned
+ * any non-primitive value as-is, so a nested Edm.Int64/Edm.Decimal was never
+ * validated, never string-encoded, and did not flip the body's content type.
+ * These tests drive the recursive coercion through Num's complex types.
+ */
+describe('complex action body coercion', () => {
+  it('string-encodes an inexact Decimal nested one level and flips the content type', async () => {
+    const result = await adjust({ Details: { Amount: '9007199254740993' } });
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    expect(emittedBody(text)['Details']).toEqual({ Amount: '9007199254740993' });
+    expect(text).toContain('Content-Type: application/json;IEEE754Compatible=true');
+  });
+
+  it('keeps exactly representable nested values bare under the plain content type', async () => {
+    const result = await adjust({ Details: { Amount: '1.5', Code: '9007199254740992' } });
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    expect(emittedBody(text)['Details']).toEqual({ Amount: 1.5, Code: 9007199254740992 });
+    expect(text).not.toContain('IEEE754Compatible');
+  });
+
+  it('coerces a nested Collection(Edm.Int64) member and applies the body-wide flip', async () => {
+    const result = await adjust({ Envelope: { Tags: ['9007199254740993', '42'] } });
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    expect(emittedBody(text)['Envelope']).toEqual({ Tags: ['9007199254740993', '42'] });
+    expect(text).toContain('IEEE754Compatible=true');
+  });
+
+  it('recurses into a complex member of a complex member', async () => {
+    const result = await adjust({ Envelope: { Details: { Amount: '9007199254740993' } } });
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    expect(emittedBody(text)['Envelope']).toEqual({ Details: { Amount: '9007199254740993' } });
+    expect(text).toContain('IEEE754Compatible=true');
+  });
+
+  it('coerces each element of a Collection(complex) parameter', async () => {
+    const result = await adjust({ Many: [{ Amount: '1.5' }, { Amount: '9007199254740993' }] });
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    expect(emittedBody(text)['Many']).toEqual([{ Amount: '1.5' }, { Amount: '9007199254740993' }]);
+    expect(text).toContain('IEEE754Compatible=true');
+  });
+
+  it('follows a member typed by a type definition', async () => {
+    const result = await adjust({ Envelope: { Ref: '9007199254740993' } });
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    expect(emittedBody(text)['Envelope']).toEqual({ Ref: '9007199254740993' });
+    expect(text).toContain('IEEE754Compatible=true');
+  });
+
+  it('resolves a type definition whose underlying type is complex', async () => {
+    const result = await adjust({ Wrapped: { Amount: '9007199254740993' } });
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    expect(emittedBody(text)['Wrapped']).toEqual({ Amount: '9007199254740993' });
+    expect(text).toContain('IEEE754Compatible=true');
+  });
+
+  it('matches a member name case-insensitively and keeps the declared spelling', async () => {
+    const result = await adjust({ Details: { amount: '1.5' } });
+    expect(result.isError).toBeUndefined();
+    expect(emittedBody(textOf(result))['Details']).toEqual({ Amount: 1.5 });
+  });
+
+  it('refuses a member the complex type does not declare', async () => {
+    const result = await adjust({ Details: { Amount: '1.5', Nope: 'x' } });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('Unknown member "Nope"');
+    expect(textOf(result)).toContain('Amount');
+  });
+
+  it('passes dynamic members of an open complex type through', async () => {
+    const result = await adjust({ Open: { Amount: '1.5', Extra: 'x' } });
+    expect(result.isError).toBeUndefined();
+    expect(emittedBody(textOf(result))['Open']).toEqual({ Amount: 1.5, Extra: 'x' });
+  });
+
+  it('passes an unresolvable complex parameter through unchanged', async () => {
+    const result = await adjust({ Ghost: { Amount: '9007199254740993' } });
+    expect(result.isError).toBeUndefined();
+    const text = textOf(result);
+    expect(emittedBody(text)['Ghost']).toEqual({ Amount: '9007199254740993' });
+    expect(text).not.toContain('IEEE754Compatible');
+  });
+
+  it('refuses a nested inexact value when IEEE754Compatible is disabled', async () => {
+    const result = await adjust(
+      { Details: { Amount: '9007199254740993' } },
+      { ieee754Compatible: false },
+    );
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('Invalid Edm.Decimal');
+    expect(textOf(result)).toContain('exact');
+  });
+
+  it('refuses a complex value nested past the recursion guard', async () => {
+    let node: Record<string, unknown> = {};
+    for (let i = 0; i < 100; i += 1) node = { Next: node };
+    const result = await adjust({ Nodes: node });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('Num.Node');
+    expect(textOf(result)).toContain('deeper than');
+  });
+
+  it('refuses a cyclic type definition instead of recursing forever', async () => {
+    const result = await adjust({ Loop: '1' });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('Cyclic type definition');
   });
 });
 

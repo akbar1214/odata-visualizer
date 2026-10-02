@@ -7,6 +7,7 @@ import type {
   ODataMetadata,
   ODataParameter,
   ODataRelationship,
+  ODataTypeDefinition,
 } from '@odata-visualizer/shared';
 import {
   buildQueryOptions,
@@ -472,20 +473,31 @@ interface BodyEncoding {
   ieee754Compatible: boolean;
   stringEncodeAll: boolean;
   stringEncodesIeee754: boolean;
+  /** Current complex-value nesting depth; see `MAX_COMPLEX_DEPTH`. */
+  complexDepth: number;
 }
+
+/**
+ * How deep a complex value may nest before coercion refuses it. Recursion
+ * follows the supplied value, so it is finite by construction; the bound only
+ * turns a pathological payload — a cyclic type fed a correspondingly deep
+ * value — into a clear error instead of a stack overflow.
+ */
+const MAX_COMPLEX_DEPTH = 64;
 
 function coerceBodyValue(
   type: string,
   value: unknown,
   metadata: ODataMetadata,
   encoding: BodyEncoding,
+  scope: string | undefined,
 ): unknown {
   const collection = unwrapCollection(type);
   if (collection?.isCollection) {
     const items = Array.isArray(value) ? value : [value];
-    return items.map((v) => coerceScalar(collection.type, v, metadata, encoding));
+    return items.map((v) => coerceScalar(collection.type, v, metadata, encoding, scope));
   }
-  return coerceScalar(type, value, metadata, encoding);
+  return coerceScalar(type, value, metadata, encoding, scope);
 }
 
 /**
@@ -545,18 +557,144 @@ function encodeInexactNumber(
   return literal;
 }
 
+/**
+ * Find a type definition the way `findTypeInScope` finds an entity type:
+ * exact qualified name, exact name in the preferred namespace, then
+ * case-insensitive fallbacks. Definitions live outside `entities`, so they
+ * need their own lookup rather than a call to `findTypeInScope`.
+ */
+function findTypeDefinition(
+  metadata: ODataMetadata,
+  type: string,
+  scope: string | undefined,
+): ODataTypeDefinition | undefined {
+  const definitions = metadata.typeDefinitions;
+  const exactQualified = definitions.find((t) => t.qualifiedName === type);
+  if (exactQualified) return exactQualified;
+
+  const exactScoped = definitions.find((t) => t.namespace === scope && t.name === type);
+  if (exactScoped) return exactScoped;
+
+  const needle = type.toLowerCase();
+  const byQualified = definitions.find((t) => (t.qualifiedName ?? '').toLowerCase() === needle);
+  if (byQualified) return byQualified;
+
+  const sameNamespace = definitions.find(
+    (t) => t.namespace?.toLowerCase() === scope?.toLowerCase() && t.name.toLowerCase() === needle,
+  );
+  if (sameNamespace) return sameNamespace;
+
+  return definitions.find((t) => t.name.toLowerCase() === needle);
+}
+
+/**
+ * Follow a type definition chain to the underlying type it names. CSDL forbids
+ * a cycle, but a malformed model can still declare one and following it would
+ * recurse forever, so the chain is walked iteratively and a repeated
+ * definition is refused. The returning scope is the last definition's
+ * namespace, which is where its underlying-type reference resolves.
+ */
+function resolveUnderlyingType(
+  type: string,
+  metadata: ODataMetadata,
+  scope: string | undefined,
+): { type: string; scope: string | undefined } {
+  let current = type;
+  let currentScope = scope;
+  const seen = new Set<string>();
+  for (;;) {
+    const definition = findTypeDefinition(metadata, current, currentScope);
+    if (!definition) return { type: current, scope: currentScope };
+    const id = definition.qualifiedName ?? definition.name;
+    if (seen.has(id)) {
+      throw new Error(`Cyclic type definition: ${[...seen, id].join(' -> ')}`);
+    }
+    seen.add(id);
+    current = definition.underlyingType;
+    currentScope = definition.namespace ?? currentScope;
+  }
+}
+
+/**
+ * Coerce a complex value member by member.
+ *
+ * Member names are matched case-insensitively and re-emitted under the
+ * declared spelling, exactly as top-level parameter names are. A member the
+ * type does not declare is refused, mirroring `assertKnownParameters` for an
+ * unknown top-level parameter — a typo would otherwise reach the service as an
+ * unknown property. An open type carries dynamic members, which are legal and
+ * pass through untouched.
+ */
+function coerceComplex(
+  entity: ODataEntity,
+  value: unknown,
+  metadata: ODataMetadata,
+  encoding: BodyEncoding,
+): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+
+  const typeName = entity.qualifiedName ?? entity.name;
+  encoding.complexDepth += 1;
+  try {
+    if (encoding.complexDepth > MAX_COMPLEX_DEPTH) {
+      throw new Error(
+        `Complex value for ${typeName} nests deeper than ${MAX_COMPLEX_DEPTH} levels; refusing to recurse further.`,
+      );
+    }
+
+    const properties = getEffectiveProperties(entity, metadata.entities);
+    const byLowerName = new Map(properties.map((p) => [p.name.toLowerCase(), p]));
+    const coerced: Record<string, unknown> = {};
+    for (const [name, member] of Object.entries(value)) {
+      const property = byLowerName.get(name.toLowerCase());
+      if (!property) {
+        if (entity.openType) {
+          coerced[name] = member;
+          continue;
+        }
+        throw new Error(
+          `Unknown member "${name}" for complex type ${typeName}. Declared properties: ${
+            properties.map((p) => p.name).join(', ') || '(none)'
+          }.`,
+        );
+      }
+      coerced[property.name] = coerceBodyValue(
+        property.type,
+        member,
+        metadata,
+        encoding,
+        entity.namespace,
+      );
+    }
+    return coerced;
+  } finally {
+    encoding.complexDepth -= 1;
+  }
+}
+
 function coerceScalar(
   type: string,
   value: unknown,
   metadata: ODataMetadata,
   encoding: BodyEncoding,
+  scope: string | undefined,
 ): unknown {
   if (value === null || value === undefined) return value;
 
-  const typeDef = metadata.typeDefinitions.find((t) => t.qualifiedName === type || t.name === type);
-  if (typeDef) return coerceScalar(typeDef.underlyingType, value, metadata, encoding);
+  // Follow type definitions to the underlying EDM type before deciding how to
+  // coerce. Complex types are resolved with the same scope rule the rest of
+  // the tool uses, so a short name resolves the way CSDL scopes it. A type the
+  // model cannot resolve passes through untouched: unresolved references are
+  // expected in partially loaded models, so there is no schema to validate
+  // against.
+  const resolved = resolveUnderlyingType(type, metadata, scope);
+  const complexType = findTypeInScope(metadata.entities, resolved.type, resolved.scope);
+  if (complexType?.kind === 'complex') {
+    return coerceComplex(complexType, value, metadata, encoding);
+  }
 
-  if (type === 'Edm.Boolean') {
+  const edmType = resolved.type;
+  if (edmType === 'Edm.Boolean') {
     if (typeof value === 'boolean') return value;
     const lowered = String(value).toLowerCase();
     if (lowered !== 'true' && lowered !== 'false') {
@@ -566,14 +704,14 @@ function coerceScalar(
   }
 
   if (
-    type === 'Edm.Int16' ||
-    type === 'Edm.Int32' ||
-    type === 'Edm.Int64' ||
-    type === 'Edm.Decimal' ||
-    type === 'Edm.Double' ||
-    type === 'Edm.Single' ||
-    type === 'Edm.Byte' ||
-    type === 'Edm.SByte'
+    edmType === 'Edm.Int16' ||
+    edmType === 'Edm.Int32' ||
+    edmType === 'Edm.Int64' ||
+    edmType === 'Edm.Decimal' ||
+    edmType === 'Edm.Double' ||
+    edmType === 'Edm.Single' ||
+    edmType === 'Edm.Byte' ||
+    edmType === 'Edm.SByte'
   ) {
     // Syntax and EDM range checks come from the shared literal formatter —
     // the same `[sign] 1*10DIGIT` pattern and BigInt bounds #23 fixed for
@@ -584,23 +722,23 @@ function coerceScalar(
     // round Int64 values past 2^53. An inexact value is not refused outright:
     // under `application/json;IEEE754Compatible=true` its literal travels as
     // a JSON string, which the service reads back exactly.
-    const literal = formatV4Literal(String(value), type);
+    const literal = formatV4Literal(String(value), edmType);
     const num = Number(literal);
     if (!Number.isFinite(num)) {
       // `formatV4Literal` maps the string "null" to a null literal; in a JSON
       // body null is the value, never the string.
-      throw new Error(`Invalid ${type} value: ${String(value)} (expected a number)`);
+      throw new Error(`Invalid ${edmType} value: ${String(value)} (expected a number)`);
     }
     // OData JSON Format v4.01 §3.2 "Controlling the Representation of
     // Numbers": with IEEE754Compatible=true the service MUST serialize
     // Edm.Int64 and Edm.Decimal numbers as strings. The parameter is declared
     // for the whole body, so once any value forces the flip, every
-    // Int64/Decimal in it — exact ones included — takes the string form
-    // rather than emitting a mixed payload.
-    if (encoding.stringEncodeAll && (type === 'Edm.Int64' || type === 'Edm.Decimal')) {
+    // Int64/Decimal in it — exact ones included, at every depth — takes the
+    // string form rather than emitting a mixed payload.
+    if (encoding.stringEncodeAll && (edmType === 'Edm.Int64' || edmType === 'Edm.Decimal')) {
       return literal;
     }
-    if (INTEGER_TYPES.has(type) && BigInt(JSON.stringify(num)) !== BigInt(literal)) {
+    if (INTEGER_TYPES.has(edmType) && BigInt(JSON.stringify(num)) !== BigInt(literal)) {
       // `BigInt(literal) !== BigInt(num)` is not enough: `num` can hold the
       // exact value while `JSON.stringify` prints the shortest round-tripping
       // decimal, which may use different digits (2^62 -> 4611686018427388000).
@@ -608,13 +746,13 @@ function coerceScalar(
       // never switches to exponent notation for them and `BigInt` always
       // parses the result. The set comes from the shared formatter so the
       // guard cannot drift out of step with the syntax it validated.
-      return encodeInexactNumber(type, value, literal, encoding);
+      return encodeInexactNumber(edmType, value, literal, encoding);
     }
-    if (type === 'Edm.Decimal' && !denotesSameDecimal(literal, JSON.stringify(num))) {
+    if (edmType === 'Edm.Decimal' && !denotesSameDecimal(literal, JSON.stringify(num))) {
       // Decimal is a decimal type, so the JSON text must denote the same
       // decimal the caller sent: `Number` may round it, and even when it does
       // not, `JSON.stringify` may print a different (shortest) spelling.
-      return encodeInexactNumber(type, value, literal, encoding);
+      return encodeInexactNumber(edmType, value, literal, encoding);
     }
     return num;
   }
@@ -1707,11 +1845,12 @@ function buildBody(
       ieee754Compatible,
       stringEncodeAll,
       stringEncodesIeee754: false,
+      complexDepth: 0,
     };
     const body: Record<string, unknown> = {};
     for (const [name, value] of Object.entries(parameters)) {
       const type = declaredParameterType(item, name);
-      body[name] = type ? coerceBodyValue(type, value, metadata, encoding) : value;
+      body[name] = type ? coerceBodyValue(type, value, metadata, encoding, item.namespace) : value;
     }
     return { body, encoding };
   };
