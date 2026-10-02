@@ -161,3 +161,66 @@ describe('pinned metadata UI', () => {
     expect(screen.queryByText(/Metadata pinned by the server:/)).toBeNull();
   });
 });
+
+describe('hydration timeout', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('falls back to the upload screen when hydration hangs past the timeout', async () => {
+    fetchMock.mockImplementationOnce(
+      (_input: unknown, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('The operation was aborted.', 'AbortError'));
+          });
+        }),
+    );
+
+    render(<App />);
+
+    expect(screen.getByText('Loading metadata...')).toBeDefined();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_999);
+    });
+    expect(screen.getByText('Loading metadata...')).toBeDefined();
+    expect(screen.queryByText('Visualize OData Metadata')).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(screen.getByText('Visualize OData Metadata')).toBeDefined();
+    expect(screen.queryByText('Error')).toBeNull();
+  });
+
+  it('keeps a fast hydration response when timers advance past the timeout', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ success: true, pinned: false, metadata: makeMetadata(1), info: null }),
+    );
+
+    render(<App />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText('1 entities')).toBeDefined();
+
+    // Success cleared the timeout, so advancing far past it aborts nothing.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(screen.getByText('1 entities')).toBeDefined();
+    expect(screen.queryByText('Loading metadata...')).toBeNull();
+  });
+});

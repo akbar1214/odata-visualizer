@@ -91,4 +91,22 @@ describe('fetchCurrentMetadata', () => {
     );
     await expect(fetchCurrentMetadata()).rejects.toThrow('nope');
   });
+
+  it('clears the timeout after a successful response', async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify({ success: true, pinned: false, metadata: null, info: null }), {
+          status: 200,
+        }),
+      );
+
+      await fetchCurrentMetadata();
+
+      // No hydration timer may outlive the request.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

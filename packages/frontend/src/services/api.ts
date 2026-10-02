@@ -137,20 +137,34 @@ export interface CurrentMetadataResponse {
 }
 
 /**
+ * Hydration blocks the whole UI, so a request that hangs must not hold the
+ * loading screen forever.
+ */
+const CURRENT_METADATA_TIMEOUT_MS = 10_000;
+
+/**
  * Fetch the model the backend currently holds for this session. With
  * METADATA_FILE set, the backend serves the same pinned model to every session.
  */
 export async function fetchCurrentMetadata(): Promise<CurrentMetadataResponse> {
-  const response = await fetch(`${API_BASE}/metadata/current`, {
-    headers: withAuth(SESSION_HEADERS),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CURRENT_METADATA_TIMEOUT_MS);
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Network error' }));
-    throw new Error(error.error || `HTTP ${response.status}`);
+  try {
+    const response = await fetch(`${API_BASE}/metadata/current`, {
+      headers: withAuth(SESSION_HEADERS),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Network error' }));
+      throw new Error(error.error || `HTTP ${response.status}`);
+    }
+
+    return response.json();
+  } finally {
+    clearTimeout(timer);
   }
-
-  return response.json();
 }
 
 /**
