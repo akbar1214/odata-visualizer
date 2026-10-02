@@ -1,4 +1,10 @@
-import { Router, type Request, type Response, type Router as ExpressRouter } from 'express';
+import {
+  Router,
+  type NextFunction,
+  type Request,
+  type Response,
+  type Router as ExpressRouter,
+} from 'express';
 import multer from 'multer';
 import { parseCSDL } from '@odata-visualizer/shared';
 import { metadataStore, sanitizeModelId } from '../services/metadataStore.js';
@@ -11,17 +17,10 @@ import {
   urlPolicyFromEnv,
 } from '../services/safeFetch.js';
 import { ClientError, statusForError } from '../services/errors.js';
+import { MAX_UPLOAD_BYTES } from '../services/limits.js';
 import type { ParseRequest, ParseResponse } from '@odata-visualizer/shared';
 
 const router: ExpressRouter = Router();
-
-/**
- * A real `$metadata` document is a few hundred KB at most; the largest models in
- * the test corpus are well under a megabyte. Uploads were previously buffered
- * whole in memory (100 MB), then decoded into a ~2x string, then expanded by
- * fast-xml-parser into an object graph routinely 10-20x the input size.
- */
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -45,6 +44,33 @@ const upload = multer({
     }
   },
 });
+
+/**
+ * Pre-handler middleware for the parse routes, restricted to POST so methods
+ * that never had a route (`GET /api/parse/file` and friends) keep returning
+ * 404. While `METADATA_FILE` pins the model, POSTs are refused before the
+ * route handlers run — and, for multipart, before multer buffers the file.
+ * JSON bodies are parsed by `express.json` (10 MB limit) before this
+ * middleware, so an over-limit one is a 413 rather than the pinned 403. The
+ * body is a `ParseResponse` so existing clients still understand the refusal.
+ */
+function refuseWhenPinned(req: Request, res: Response, next: NextFunction): void {
+  if (req.method !== 'POST' || !metadataStore.isLocked()) {
+    next();
+    return;
+  }
+  const response: ParseResponse = {
+    success: false,
+    error: 'Metadata is pinned by METADATA_FILE; uploads are disabled.',
+    parseTimeMs: 0,
+    fileSizeBytes: 0,
+  };
+  res.status(403).json(response);
+}
+
+// Wired before any route handler, so a pinned POST never reaches multer or a
+// URL fetch (JSON bodies are parsed earlier, see the comment above).
+router.use(['/file', '/url', '/content'], refuseWhenPinned);
 
 /** Session id for per-browser isolation; falls back to the shared "current" model. */
 function sessionIdOf(req: Request, body?: { session?: string }): string {

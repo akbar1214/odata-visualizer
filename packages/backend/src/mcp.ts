@@ -14,6 +14,12 @@ export interface MountMcpOptions {
   /** Allow the load_metadata tool over HTTP (arbitrary file reads / SSRF). Defaults to false. */
   allowLoadMetadata?: boolean;
   /**
+   * Reports whether the metadata store is pinned. Sampled when a new session
+   * is created, so a pin applied after mount still keeps load_metadata out of
+   * sessions started afterwards.
+   */
+  isPinned?: () => boolean;
+  /**
    * Emit Edm.Int64/Edm.Decimal body values as strings under
    * `application/json;IEEE754Compatible=true`. Defaults to true; when false
    * the plain content type is used and a value a JSON number cannot carry
@@ -180,7 +186,9 @@ export function mountMcp(
         };
 
         const server = createMcpServer(accessors, {
-          allowLoadMetadata: options.allowLoadMetadata ?? false,
+          // Sampled per session: the store may be pinned after this mount.
+          allowLoadMetadata:
+            (options.allowLoadMetadata ?? false) && !(options.isPinned?.() ?? false),
           ieee754Compatible: options.ieee754Compatible,
         });
         await server.connect(transport);

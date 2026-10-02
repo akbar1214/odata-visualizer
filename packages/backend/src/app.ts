@@ -17,7 +17,7 @@ const __dirname = dirname(__filename);
 export interface CreateAppOptions {
   /** Mount the MCP server at /mcp. Defaults to true. */
   mcp?: boolean;
-  /** Allow load_metadata over HTTP. Defaults to MCP_ALLOW_LOAD === "1". */
+  /** Allow load_metadata over HTTP. Defaults to MCP_ALLOW_LOAD === "1"; ignored while the store is pinned by METADATA_FILE (re-checked for every new session). */
   allowLoadMetadata?: boolean;
   /**
    * Emit Edm.Int64/Edm.Decimal body values as strings under
@@ -113,6 +113,9 @@ export function createApp(options: CreateAppOptions = {}): Express {
     mountMcp(app, metadataStore.accessors, {
       token: mcpToken,
       allowLoadMetadata: options.allowLoadMetadata ?? process.env['MCP_ALLOW_LOAD'] === '1',
+      // Sampled for each new session, so a store pinned after this mount is
+      // still protected.
+      isPinned: () => metadataStore.isLocked(),
       ieee754Compatible: options.ieee754Compatible ?? ieee754CompatibleFromEnv(),
       allowedHosts: options.allowedHosts ?? parseList(process.env['MCP_ALLOWED_HOSTS']),
       maxSessions: options.maxSessions,

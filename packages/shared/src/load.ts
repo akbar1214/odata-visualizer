@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open, type FileHandle } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path';
 import { parseCSDL } from './parser.js';
 import type { ODataMetadata } from './types.js';
@@ -25,17 +26,65 @@ function resolveSiblingPath(uri: string, baseDirectory: string): string {
 }
 
 /**
+ * Read exactly `size` bytes from an open handle. A whole-handle `readFile`
+ * would pick up bytes appended after the size was checked, so the read is
+ * bounded by construction.
+ */
+export async function readExactly(handle: FileHandle, size: number): Promise<string> {
+  const buffer = Buffer.alloc(size);
+  let offset = 0;
+  while (offset < size) {
+    const { bytesRead } = await handle.read(buffer, offset, size - offset, offset);
+    if (bytesRead === 0) break;
+    offset += bytesRead;
+  }
+  return buffer.toString('utf-8', 0, offset);
+}
+
+/**
+ * Read a regular file without blocking on a FIFO or racing a size change: the
+ * file is opened once with `O_NONBLOCK`, fstat'ed, and exactly the fstat'ed
+ * number of bytes are read from that handle. Non-regular files and files over
+ * `maxBytes` are rejected before any content is read. `byteLength` is that raw
+ * fstat size — never a re-encode of the decoded string, which can grow when
+ * the file contains invalid UTF-8.
+ */
+export async function readRegularFile(
+  path: string,
+  maxBytes?: number,
+): Promise<{ content: string; byteLength: number }> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      throw new Error(`"${path}" is not a regular file`);
+    }
+    if (maxBytes !== undefined && stats.size > maxBytes) {
+      throw new Error(`"${path}" is ${stats.size} bytes, which exceeds the ${maxBytes}-byte limit`);
+    }
+    return { content: await readExactly(handle, stats.size), byteLength: stats.size };
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
  * Parse a CSDL document from disk. Relative `edmx:Reference/@Uri` values
  * resolve against the document's own location (and may not escape it), so
  * multi-file models load as one model.
+ *
+ * When `xmlContent` is supplied it is parsed instead of re-reading the file —
+ * callers that already hold the bytes (and validated their size) avoid a second
+ * read. `path` still anchors relative references.
  */
-export async function parseCSDLFile(path: string): Promise<ODataMetadata> {
+export async function parseCSDLFile(path: string, xmlContent?: string): Promise<ODataMetadata> {
   const absolutePath = isAbsolute(path) ? path : resolvePath(path);
   const baseDirectory = dirname(absolutePath);
-  const xmlContent = await readFile(absolutePath, 'utf-8');
-  return parseCSDL(xmlContent, {
+  const content = xmlContent ?? (await readRegularFile(absolutePath)).content;
+  return parseCSDL(content, {
     baseUri: `file://${absolutePath}`,
-    loadExternal: async (uri) => readFile(resolveSiblingPath(uri, baseDirectory), 'utf-8'),
+    loadExternal: async (uri) =>
+      (await readRegularFile(resolveSiblingPath(uri, baseDirectory))).content,
   });
 }
 

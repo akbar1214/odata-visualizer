@@ -18,6 +18,7 @@ router.get('/current', (req: Request, res: Response) => {
   const stored = metadataStore.get(sessionIdOf(req, req.query as Record<string, unknown>));
   res.json({
     success: true,
+    pinned: metadataStore.isLocked(),
     metadata: stored?.metadata ?? null,
     info: stored?.info ?? null,
   });
@@ -43,6 +44,15 @@ router.get('/', (req: Request, res: Response) => {
  * bucket is cleared — use `clearAll()` to wipe everything.
  */
 router.delete('/current', (req: Request, res: Response) => {
+  // Guarded because `clear()` throws while pinned and this handler has no
+  // try/catch, so an unguarded call would surface as a raw 500.
+  if (metadataStore.isLocked()) {
+    res.status(403).json({
+      success: false,
+      error: 'Metadata is pinned by METADATA_FILE; it cannot be cleared.',
+    });
+    return;
+  }
   metadataStore.clear(sessionIdOf(req));
   res.json({ success: true });
 });
