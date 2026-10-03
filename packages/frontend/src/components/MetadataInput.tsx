@@ -43,9 +43,10 @@ function parseHeadersText(text: string): HeadersParseResult {
     }
     entries.push([name, value]);
   }
-  // `fromEntries` defines own data properties, so a legal header name that
-  // collides with `Object.prototype` (`__proto__`) survives instead of being
-  // handed to the prototype setter and dropped.
+  // `fromEntries` defines own data properties, so a header name that shadows
+  // `Object.prototype` reaches the server as the caller wrote it - including
+  // `__proto__`, which the server refuses - instead of vanishing into the
+  // prototype setter and being dropped without a word.
   return { headers: Object.fromEntries(entries) };
 }
 

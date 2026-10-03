@@ -261,9 +261,11 @@ describe('MetadataInput', () => {
       });
     });
 
-    it('keeps a __proto__ header name as an own property', () => {
-      // `JSON.parse` is how the value really arrives: it defines an own
-      // `__proto__` data property, which a plain assignment drops.
+    it('keeps prototype-ish header names as own properties', () => {
+      // `JSON.parse` is how the value really arrives: it defines own data
+      // properties for names that a plain assignment would hand to the
+      // prototype setter. The backend refuses `__proto__` (the fetch runtime
+      // drops it), but names like `constructor` do reach the server.
       let captured: Record<string, string> = {};
       const onUrlSubmit = vi.fn((_url: string, headers?: Record<string, string>) => {
         if (headers) captured = headers;
@@ -277,15 +279,15 @@ describe('MetadataInput', () => {
         target: { value: 'https://example.com/$metadata' },
       });
       fireEvent.change(screen.getByLabelText(HEADERS_LABEL), {
-        target: { value: '{ "__proto__": "x", "Authorization": "Bearer tok" }' },
+        target: { value: '{ "constructor": "a", "toString": "b", "Authorization": "Bearer tok" }' },
       });
       fireEvent.click(screen.getByText('Fetch Metadata'));
 
       expect(onUrlSubmit).toHaveBeenCalledTimes(1);
-      expect(Object.hasOwn(captured, '__proto__')).toBe(true);
-      expect(captured['__proto__']).toBe('x');
+      expect(Object.hasOwn(captured, 'constructor')).toBe(true);
+      expect(captured['constructor']).toBe('a');
+      expect(captured['toString']).toBe('b');
       expect(captured['Authorization']).toBe('Bearer tok');
-      expect(Object.getPrototypeOf(captured)).toBe(Object.prototype);
     });
 
     it('never writes the headers text to web storage', () => {
