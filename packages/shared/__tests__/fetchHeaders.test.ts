@@ -190,6 +190,42 @@ describe('validateFetchHeaders', () => {
     expect(result).toEqual({ authorization: 'Bearer t', 'x-api-key': 'k' });
     expect(result).not.toBe(input);
   });
+
+  it('rejects a __proto__ header the fetch runtime would drop', () => {
+    // `Headers` accepts it, but the wire serialization never sends it, so
+    // accepting it would be a silent drop rather than a caller's mistake.
+    // `JSON.parse` is how the value really arrives (request body, MCP tool
+    // argument): it defines an own `__proto__` data property.
+    const input = JSON.parse('{ "__PROTO__": "super-secret-token" }') as Record<string, string>;
+
+    let message = '';
+    try {
+      validateFetchHeaders(input);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('__proto__');
+    expect(message).toContain('dropped');
+    // Header values are credentials; the message reports the name only.
+    expect(message).not.toContain('super-secret-token');
+  });
+
+  it('keeps other prototype-ish names as own properties', () => {
+    // These do reach the wire, so refusing them would reject real headers.
+    const result = validateFetchHeaders({
+      constructor: 'a',
+      toString: 'b',
+      valueOf: 'c',
+    });
+
+    // Names are lower-cased, so the own properties are `tostring`/`valueof`.
+    expect(Object.hasOwn(result, 'constructor')).toBe(true);
+    expect(Object.hasOwn(result, 'tostring')).toBe(true);
+    expect(Object.hasOwn(result, 'valueof')).toBe(true);
+    expect(result['constructor']).toBe('a');
+    expect(result['tostring']).toBe('b');
+    expect(result['valueof']).toBe('c');
+  });
 });
 
 describe('parseCSDLUrl header forwarding', () => {

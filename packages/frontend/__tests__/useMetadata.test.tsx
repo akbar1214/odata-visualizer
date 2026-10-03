@@ -132,6 +132,66 @@ describe('useMetadata hydration', () => {
   });
 });
 
+describe('useMetadata loadUrl', () => {
+  const METADATA_URL = 'https://example.com/$metadata';
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return jsonResponse({
+          success: true,
+          data: makeMetadata(1),
+          parseTimeMs: 3,
+          fileSizeBytes: 128,
+        });
+      }
+      return jsonResponse({ success: true, pinned: false, metadata: null, info: null });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  function postedBodies(): Record<string, unknown>[] {
+    return fetchMock.mock.calls
+      .filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')
+      .map(
+        ([, init]) => JSON.parse((init as RequestInit).body as string) as Record<string, unknown>,
+      );
+  }
+
+  it('forwards the headers with the metadata request', async () => {
+    const { result } = renderHook(() => useMetadata());
+    await waitFor(() => expect(result.current.initializing).toBe(false));
+
+    await act(async () => {
+      await result.current.loadUrl(METADATA_URL, { Authorization: 'Bearer tok' });
+    });
+
+    expect(postedBodies()).toEqual([
+      { url: METADATA_URL, headers: { Authorization: 'Bearer tok' } },
+    ]);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('sends no headers key when the caller supplies none', async () => {
+    const { result } = renderHook(() => useMetadata());
+    await waitFor(() => expect(result.current.initializing).toBe(false));
+
+    await act(async () => {
+      await result.current.loadUrl(METADATA_URL);
+    });
+
+    const bodies = postedBodies();
+    expect(bodies).toEqual([{ url: METADATA_URL }]);
+    expect('headers' in bodies[0]).toBe(false);
+  });
+});
+
 describe('useMetadata clear', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 

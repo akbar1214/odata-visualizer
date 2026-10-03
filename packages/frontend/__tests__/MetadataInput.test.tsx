@@ -138,4 +138,173 @@ describe('MetadataInput', () => {
 
     expect(mockOnFileSelect).toHaveBeenCalledWith(file);
   });
+
+  describe('request headers', () => {
+    const HEADERS_LABEL = 'Request headers (JSON, optional)';
+
+    function renderUrlMode() {
+      render(
+        <MetadataInput
+          onFileSelect={mockOnFileSelect}
+          onUrlSubmit={mockOnUrlSubmit}
+          loading={false}
+        />,
+      );
+      fireEvent.click(screen.getByText('Enter URL'));
+      fireEvent.change(screen.getByLabelText('OData Metadata URL'), {
+        target: { value: 'https://example.com/$metadata' },
+      });
+    }
+
+    function typeHeaders(value: string) {
+      fireEvent.change(screen.getByLabelText(HEADERS_LABEL), { target: { value } });
+    }
+
+    function submit() {
+      fireEvent.click(screen.getByText('Fetch Metadata'));
+    }
+
+    it('is absent in file mode', () => {
+      render(
+        <MetadataInput
+          onFileSelect={mockOnFileSelect}
+          onUrlSubmit={mockOnUrlSubmit}
+          loading={false}
+        />,
+      );
+
+      expect(screen.queryByLabelText(HEADERS_LABEL)).toBeNull();
+    });
+
+    it('passes a valid JSON object to onUrlSubmit', () => {
+      renderUrlMode();
+      typeHeaders('{ "Authorization": "Bearer tok" }');
+
+      submit();
+
+      expect(mockOnUrlSubmit).toHaveBeenCalledWith('https://example.com/$metadata', {
+        Authorization: 'Bearer tok',
+      });
+    });
+
+    it('submits without headers when the textarea is empty', () => {
+      renderUrlMode();
+
+      submit();
+
+      expect(mockOnUrlSubmit).toHaveBeenCalledWith('https://example.com/$metadata');
+    });
+
+    it('submits without headers when the textarea is only whitespace', () => {
+      renderUrlMode();
+      typeHeaders('   \n  ');
+
+      submit();
+
+      expect(mockOnUrlSubmit).toHaveBeenCalledWith('https://example.com/$metadata');
+    });
+
+    it('submits an empty JSON object as an empty header set', () => {
+      renderUrlMode();
+      typeHeaders('{}');
+
+      submit();
+
+      expect(mockOnUrlSubmit).toHaveBeenCalledWith('https://example.com/$metadata', {});
+    });
+
+    it('reports malformed JSON inline and does not submit', () => {
+      renderUrlMode();
+      typeHeaders('{ "Authorization": ');
+
+      submit();
+
+      expect(screen.getByRole('alert').textContent).toMatch(/valid JSON/i);
+      expect(mockOnUrlSubmit).not.toHaveBeenCalled();
+    });
+
+    it.each(['[]', '[{ "Authorization": "Bearer tok" }]', '42', '"Bearer tok"', 'null'])(
+      'reports %s inline and does not submit',
+      (value) => {
+        renderUrlMode();
+        typeHeaders(value);
+
+        submit();
+
+        expect(screen.getByRole('alert').textContent).toMatch(/must be a JSON object/i);
+        expect(mockOnUrlSubmit).not.toHaveBeenCalled();
+      },
+    );
+
+    it('reports a non-string header value inline and does not submit', () => {
+      renderUrlMode();
+      typeHeaders('{ "Authorization": 42 }');
+
+      submit();
+
+      expect(screen.getByRole('alert').textContent).toMatch(/must be strings/i);
+      expect(mockOnUrlSubmit).not.toHaveBeenCalled();
+    });
+
+    it('clears the error once the headers become valid', () => {
+      renderUrlMode();
+      typeHeaders('nope');
+      submit();
+      expect(screen.getByRole('alert')).toBeDefined();
+
+      typeHeaders('{ "Authorization": "Bearer tok" }');
+      submit();
+
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(mockOnUrlSubmit).toHaveBeenCalledWith('https://example.com/$metadata', {
+        Authorization: 'Bearer tok',
+      });
+    });
+
+    it('keeps prototype-ish header names as own properties', () => {
+      // `JSON.parse` is how the value really arrives: it defines own data
+      // properties for names that a plain assignment would hand to the
+      // prototype setter. `__proto__` has to arrive as one so the server can
+      // refuse it - a client-side drop would send the request on without it -
+      // while `constructor` and `toString` are legitimate and do transmit.
+      let captured: Record<string, string> = {};
+      const onUrlSubmit = vi.fn((_url: string, headers?: Record<string, string>) => {
+        if (headers) captured = headers;
+      });
+
+      render(
+        <MetadataInput onFileSelect={mockOnFileSelect} onUrlSubmit={onUrlSubmit} loading={false} />,
+      );
+      fireEvent.click(screen.getByText('Enter URL'));
+      fireEvent.change(screen.getByLabelText('OData Metadata URL'), {
+        target: { value: 'https://example.com/$metadata' },
+      });
+      fireEvent.change(screen.getByLabelText(HEADERS_LABEL), {
+        target: {
+          value:
+            '{ "__proto__": "x", "constructor": "a", "toString": "b", "Authorization": "Bearer tok" }',
+        },
+      });
+      fireEvent.click(screen.getByText('Fetch Metadata'));
+
+      expect(onUrlSubmit).toHaveBeenCalledTimes(1);
+      expect(Object.hasOwn(captured, '__proto__')).toBe(true);
+      expect(captured['__proto__']).toBe('x');
+      expect(Object.hasOwn(captured, 'constructor')).toBe(true);
+      expect(captured['constructor']).toBe('a');
+      expect(captured['toString']).toBe('b');
+      expect(captured['Authorization']).toBe('Bearer tok');
+      expect(Object.getPrototypeOf(captured)).toBe(Object.prototype);
+    });
+
+    it('never writes the headers text to web storage', () => {
+      window.localStorage.clear();
+      window.sessionStorage.clear();
+      renderUrlMode();
+      typeHeaders('{ "Authorization": "Bearer sekret" }');
+
+      expect(window.localStorage.length).toBe(0);
+      expect(window.sessionStorage.length).toBe(0);
+    });
+  });
 });

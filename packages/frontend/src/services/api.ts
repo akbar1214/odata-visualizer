@@ -73,15 +73,25 @@ export async function parseFile(file: File): Promise<ParseResponse> {
 
 /**
  * Parse OData metadata from URL
+ *
+ * `headers` authenticate the metadata fetch (and the same-origin
+ * `edmx:Reference` fetches that follow). They are validated server-side; an
+ * empty set is the same as none, so the key is left out entirely then.
  */
-export async function parseUrl(url: string): Promise<ParseResponse> {
+export async function parseUrl(
+  url: string,
+  headers?: Record<string, string>,
+): Promise<ParseResponse> {
+  const body: { url: string; headers?: Record<string, string> } = { url };
+  if (headers && Object.keys(headers).length > 0) body.headers = headers;
+
   const response = await fetch(`${API_BASE}/parse/url`, {
     method: 'POST',
     headers: withAuth({
       'Content-Type': 'application/json',
       ...SESSION_HEADERS,
     }),
-    body: JSON.stringify({ url }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {

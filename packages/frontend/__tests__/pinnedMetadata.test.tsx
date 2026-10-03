@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent, cleanup } from '@testing-library/react';
 import type { ODataEntity, ODataMetadata } from '@odata-visualizer/shared';
 import App from '../src/App';
 
@@ -115,6 +115,43 @@ describe('metadata hydration UI', () => {
 
     await waitFor(() => expect(screen.getByText('Visualize OData Metadata')).toBeDefined());
     expect(screen.queryByText('Error')).toBeNull();
+  });
+});
+
+describe('error banner', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('announces a rejected metadata request in a live region', async () => {
+    // A 400 is the first error this banner carries that comes from the server
+    // itself (e.g. a refused header set), and it arrives without a page load.
+    fetchMock.mockImplementation(async (_input: unknown, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return jsonResponse({ error: 'headers must be a JSON object' }, 400);
+      }
+      return jsonResponse({ success: true, pinned: false, metadata: null, info: null });
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Visualize OData Metadata')).toBeDefined());
+
+    fireEvent.click(screen.getByText('Enter URL'));
+    fireEvent.change(screen.getByLabelText('OData Metadata URL'), {
+      target: { value: 'https://example.com/$metadata' },
+    });
+    fireEvent.click(screen.getByText('Fetch Metadata'));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('headers must be a JSON object');
   });
 });
 

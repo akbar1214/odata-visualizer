@@ -105,7 +105,12 @@ function App() {
             <MetadataInput onFileSelect={loadFile} onUrlSubmit={loadUrl} loading={loading} />
 
             {error && (
-              <div className="mt-4 p-4 bg-red-50 border border-infineon-red/20 rounded">
+              // A request can fail without a page load, so the banner is a live
+              // region: a rejected header set is reported here.
+              <div
+                role="alert"
+                className="mt-4 p-4 bg-red-50 border border-infineon-red/20 rounded"
+              >
                 <div className="flex items-start gap-3">
                   <svg
                     className="w-5 h-5 text-infineon-red mt-0.5"

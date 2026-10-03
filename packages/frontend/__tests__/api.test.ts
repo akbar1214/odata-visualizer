@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   parseContent,
+  parseUrl,
   clearMetadata,
   fetchCurrentMetadata,
   setApiToken,
@@ -48,6 +49,48 @@ describe('API token support', () => {
       const headers = (call[1] as RequestInit).headers as Record<string, string>;
       expect(headers['Authorization']).toBe('Bearer sekret');
     }
+  });
+});
+
+describe('parseUrl request headers', () => {
+  const METADATA_URL = 'https://example.com/$metadata';
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function sentBody(): Record<string, unknown> {
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    return JSON.parse(init.body as string) as Record<string, unknown>;
+  }
+
+  it('posts the headers next to the URL', async () => {
+    await parseUrl(METADATA_URL, { Authorization: 'Bearer tok' });
+
+    expect(sentBody()).toEqual({
+      url: METADATA_URL,
+      headers: { Authorization: 'Bearer tok' },
+    });
+  });
+
+  it('omits the headers key when the caller supplies none', async () => {
+    await parseUrl(METADATA_URL);
+
+    const body = sentBody();
+    expect(body).toEqual({ url: METADATA_URL });
+    expect('headers' in body).toBe(false);
+  });
+
+  it('omits the headers key when the supplied object is empty', async () => {
+    await parseUrl(METADATA_URL, {});
+
+    expect('headers' in sentBody()).toBe(false);
   });
 });
 

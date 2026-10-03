@@ -101,6 +101,13 @@ const MAX_HEADER_TOTAL_BYTES = 16 * 1024;
 const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
 /**
+ * `Headers` accepts this name and reports it back, but undici's wire
+ * serialization never sends it, so accepting it would be a silent drop. Every
+ * other `Object.prototype` name (`constructor`, `toString`, ...) does transmit.
+ */
+const DROPPED_FETCH_HEADER = '__proto__';
+
+/**
  * Headers that control framing or the connection itself. A caller-supplied
  * `host` or `content-length` would let a request smuggle a second message or
  * address a proxy hop directly, and none of them can carry credentials.
@@ -154,7 +161,7 @@ export function validateFetchHeaders(headers: Record<string, string>): Record<st
     );
   }
 
-  const normalized: Record<string, string> = {};
+  const normalized: Array<[string, string]> = [];
   const seen = new Set<string>();
   let totalBytes = 0;
 
@@ -186,6 +193,13 @@ export function validateFetchHeaders(headers: Record<string, string>): Record<st
     if (DENIED_FETCH_HEADERS.has(lower)) {
       throw new Error(`Header ${JSON.stringify(name)} is not allowed`);
     }
+    // The MCP SDK's `z.record` drops this name before the handler runs, so on
+    // that path it never reaches here; the REST route does.
+    if (lower === DROPPED_FETCH_HEADER) {
+      throw new Error(
+        `Header ${JSON.stringify(DROPPED_FETCH_HEADER)} cannot be sent by the fetch runtime and would be dropped silently`,
+      );
+    }
 
     totalBytes += Buffer.byteLength(name, 'utf8') + Buffer.byteLength(value, 'utf8');
     if (totalBytes > MAX_HEADER_TOTAL_BYTES) {
@@ -193,10 +207,13 @@ export function validateFetchHeaders(headers: Record<string, string>): Record<st
     }
 
     seen.add(lower);
-    normalized[lower] = value;
+    normalized.push([lower, value]);
   }
 
-  return normalized;
+  // `fromEntries` defines own data properties, so a header name that shadows
+  // `Object.prototype` (`constructor`, `toString`, ...) is kept instead of
+  // reaching the prototype setter and vanishing.
+  return Object.fromEntries(normalized);
 }
 
 /** Build the request headers for one fetch: `Accept` first, extras may override it. */

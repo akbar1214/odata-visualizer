@@ -97,10 +97,10 @@ export function useMetadata() {
   );
 
   const loadUrl = useCallback(
-    async (url: string) => {
+    async (url: string, headers?: Record<string, string>) => {
       setState((prev) => ({ ...prev, loading: true, error: null }));
       try {
-        const response = await parseUrl(url);
+        const response = await parseUrl(url, headers);
         handleResponse(response);
       } catch (error) {
         setState((prev) => ({
