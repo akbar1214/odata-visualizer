@@ -4,13 +4,53 @@ type InputMode = 'file' | 'url';
 
 interface MetadataInputProps {
   onFileSelect: (file: File) => void;
-  onUrlSubmit: (url: string) => void;
+  onUrlSubmit: (url: string, headers?: Record<string, string>) => void;
   loading: boolean;
+}
+
+interface HeadersParseResult {
+  headers?: Record<string, string>;
+  error?: string;
+}
+
+/**
+ * Turn the headers textarea into a header map. Blank input means "no headers".
+ *
+ * The header values are credentials, so no message here ever echoes one - only
+ * the offending header *name*, which the backend reports on.
+ */
+function parseHeadersText(text: string): HeadersParseResult {
+  const trimmed = text.trim();
+  if (!trimmed) return {};
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return { error: 'Headers must be valid JSON.' };
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return {
+      error: 'Headers must be a JSON object, e.g. { "Authorization": "Bearer …" }.',
+    };
+  }
+
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof value !== 'string') {
+      return { error: `Header values must be strings ("${name}" is not).` };
+    }
+    headers[name] = value;
+  }
+  return { headers };
 }
 
 export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataInputProps) {
   const [mode, setMode] = useState<InputMode>('file');
   const [url, setUrl] = useState('');
+  const [headersText, setHeadersText] = useState('');
+  const [headersError, setHeadersError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -63,10 +103,21 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
     (e: React.FormEvent) => {
       e.preventDefault();
       if (url.trim() && !loading) {
-        onUrlSubmit(url.trim());
+        const { headers, error } = parseHeadersText(headersText);
+        if (error) {
+          setHeadersError(error);
+          return;
+        }
+        // One argument when there are no headers, so existing callers keep the
+        // shape they had.
+        if (headers) {
+          onUrlSubmit(url.trim(), headers);
+        } else {
+          onUrlSubmit(url.trim());
+        }
       }
     },
-    [url, loading, onUrlSubmit],
+    [url, headersText, loading, onUrlSubmit],
   );
 
   const handleSelectFileMode = useCallback(() => {
@@ -91,6 +142,11 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
 
   const handleUrlChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     setUrl(e.target.value);
+  }, []);
+
+  const handleHeadersChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
+    setHeadersText(e.target.value);
+    setHeadersError(null);
   }, []);
 
   const isValidXmlFile = (file: File): boolean => {
@@ -250,6 +306,34 @@ export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataIn
               className="input"
               disabled={loading}
             />
+          </div>
+          <div>
+            <label
+              htmlFor="metadata-headers"
+              className="block text-sm font-medium text-engineering-600 mb-1"
+            >
+              Request headers (JSON, optional)
+            </label>
+            <textarea
+              id="metadata-headers"
+              value={headersText}
+              onChange={handleHeadersChange}
+              placeholder='{ "Authorization": "Bearer <token>" }'
+              spellCheck={false}
+              autoComplete="off"
+              rows={3}
+              className="input font-mono text-xs resize-y"
+              disabled={loading}
+            />
+            {headersError && (
+              <p role="alert" className="mt-1 text-sm text-infineon-red">
+                {headersError}
+              </p>
+            )}
+            <p className="mt-1 text-xs text-engineering-400">
+              Sent only with this metadata request and with same-origin <code>edmx:Reference</code>{' '}
+              fetches. Never stored.
+            </p>
           </div>
           <p className="text-xs text-engineering-400">
             Enter the URL to an OData $metadata endpoint. The backend will fetch the metadata to

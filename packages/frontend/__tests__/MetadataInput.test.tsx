@@ -138,4 +138,137 @@ describe('MetadataInput', () => {
 
     expect(mockOnFileSelect).toHaveBeenCalledWith(file);
   });
+
+  describe('request headers', () => {
+    const HEADERS_LABEL = 'Request headers (JSON, optional)';
+
+    function renderUrlMode() {
+      render(
+        <MetadataInput
+          onFileSelect={mockOnFileSelect}
+          onUrlSubmit={mockOnUrlSubmit}
+          loading={false}
+        />,
+      );
+      fireEvent.click(screen.getByText('Enter URL'));
+      fireEvent.change(screen.getByLabelText('OData Metadata URL'), {
+        target: { value: 'https://example.com/$metadata' },
+      });
+    }
+
+    function typeHeaders(value: string) {
+      fireEvent.change(screen.getByLabelText(HEADERS_LABEL), { target: { value } });
+    }
+
+    function submit() {
+      fireEvent.click(screen.getByText('Fetch Metadata'));
+    }
+
+    it('is absent in file mode', () => {
+      render(
+        <MetadataInput
+          onFileSelect={mockOnFileSelect}
+          onUrlSubmit={mockOnUrlSubmit}
+          loading={false}
+        />,
+      );
+
+      expect(screen.queryByLabelText(HEADERS_LABEL)).toBeNull();
+    });
+
+    it('passes a valid JSON object to onUrlSubmit', () => {
+      renderUrlMode();
+      typeHeaders('{ "Authorization": "Bearer tok" }');
+
+      submit();
+
+      expect(mockOnUrlSubmit).toHaveBeenCalledWith('https://example.com/$metadata', {
+        Authorization: 'Bearer tok',
+      });
+    });
+
+    it('submits without headers when the textarea is empty', () => {
+      renderUrlMode();
+
+      submit();
+
+      expect(mockOnUrlSubmit).toHaveBeenCalledWith('https://example.com/$metadata');
+    });
+
+    it('submits without headers when the textarea is only whitespace', () => {
+      renderUrlMode();
+      typeHeaders('   \n  ');
+
+      submit();
+
+      expect(mockOnUrlSubmit).toHaveBeenCalledWith('https://example.com/$metadata');
+    });
+
+    it('submits an empty JSON object as an empty header set', () => {
+      renderUrlMode();
+      typeHeaders('{}');
+
+      submit();
+
+      expect(mockOnUrlSubmit).toHaveBeenCalledWith('https://example.com/$metadata', {});
+    });
+
+    it('reports malformed JSON inline and does not submit', () => {
+      renderUrlMode();
+      typeHeaders('{ "Authorization": ');
+
+      submit();
+
+      expect(screen.getByRole('alert').textContent).toMatch(/valid JSON/i);
+      expect(mockOnUrlSubmit).not.toHaveBeenCalled();
+    });
+
+    it.each(['[]', '[{ "Authorization": "Bearer tok" }]', '42', '"Bearer tok"', 'null'])(
+      'reports %s inline and does not submit',
+      (value) => {
+        renderUrlMode();
+        typeHeaders(value);
+
+        submit();
+
+        expect(screen.getByRole('alert').textContent).toMatch(/must be a JSON object/i);
+        expect(mockOnUrlSubmit).not.toHaveBeenCalled();
+      },
+    );
+
+    it('reports a non-string header value inline and does not submit', () => {
+      renderUrlMode();
+      typeHeaders('{ "Authorization": 42 }');
+
+      submit();
+
+      expect(screen.getByRole('alert').textContent).toMatch(/must be strings/i);
+      expect(mockOnUrlSubmit).not.toHaveBeenCalled();
+    });
+
+    it('clears the error once the headers become valid', () => {
+      renderUrlMode();
+      typeHeaders('nope');
+      submit();
+      expect(screen.getByRole('alert')).toBeDefined();
+
+      typeHeaders('{ "Authorization": "Bearer tok" }');
+      submit();
+
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(mockOnUrlSubmit).toHaveBeenCalledWith('https://example.com/$metadata', {
+        Authorization: 'Bearer tok',
+      });
+    });
+
+    it('never writes the headers text to web storage', () => {
+      window.localStorage.clear();
+      window.sessionStorage.clear();
+      renderUrlMode();
+      typeHeaders('{ "Authorization": "Bearer sekret" }');
+
+      expect(window.localStorage.length).toBe(0);
+      expect(window.sessionStorage.length).toBe(0);
+    });
+  });
 });
