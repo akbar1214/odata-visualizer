@@ -36,14 +36,17 @@ function parseHeadersText(text: string): HeadersParseResult {
     };
   }
 
-  const headers: Record<string, string> = {};
+  const entries: Array<[string, string]> = [];
   for (const [name, value] of Object.entries(parsed as Record<string, unknown>)) {
     if (typeof value !== 'string') {
       return { error: `Header values must be strings ("${name}" is not).` };
     }
-    headers[name] = value;
+    entries.push([name, value]);
   }
-  return { headers };
+  // `fromEntries` defines own data properties, so a legal header name that
+  // collides with `Object.prototype` (`__proto__`) survives instead of being
+  // handed to the prototype setter and dropped.
+  return { headers: Object.fromEntries(entries) };
 }
 
 export function MetadataInput({ onFileSelect, onUrlSubmit, loading }: MetadataInputProps) {

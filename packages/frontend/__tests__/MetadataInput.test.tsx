@@ -261,6 +261,33 @@ describe('MetadataInput', () => {
       });
     });
 
+    it('keeps a __proto__ header name as an own property', () => {
+      // `JSON.parse` is how the value really arrives: it defines an own
+      // `__proto__` data property, which a plain assignment drops.
+      let captured: Record<string, string> = {};
+      const onUrlSubmit = vi.fn((_url: string, headers?: Record<string, string>) => {
+        if (headers) captured = headers;
+      });
+
+      render(
+        <MetadataInput onFileSelect={mockOnFileSelect} onUrlSubmit={onUrlSubmit} loading={false} />,
+      );
+      fireEvent.click(screen.getByText('Enter URL'));
+      fireEvent.change(screen.getByLabelText('OData Metadata URL'), {
+        target: { value: 'https://example.com/$metadata' },
+      });
+      fireEvent.change(screen.getByLabelText(HEADERS_LABEL), {
+        target: { value: '{ "__proto__": "x", "Authorization": "Bearer tok" }' },
+      });
+      fireEvent.click(screen.getByText('Fetch Metadata'));
+
+      expect(onUrlSubmit).toHaveBeenCalledTimes(1);
+      expect(Object.hasOwn(captured, '__proto__')).toBe(true);
+      expect(captured['__proto__']).toBe('x');
+      expect(captured['Authorization']).toBe('Bearer tok');
+      expect(Object.getPrototypeOf(captured)).toBe(Object.prototype);
+    });
+
     it('never writes the headers text to web storage', () => {
       window.localStorage.clear();
       window.sessionStorage.clear();

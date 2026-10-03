@@ -190,6 +190,20 @@ describe('validateFetchHeaders', () => {
     expect(result).toEqual({ authorization: 'Bearer t', 'x-api-key': 'k' });
     expect(result).not.toBe(input);
   });
+
+  it('keeps a __proto__ header name as an own property', () => {
+    // `JSON.parse` is how the value really arrives (request body, MCP tool
+    // argument): it defines an own `__proto__` data property, which a plain
+    // assignment hands to the prototype setter and silently drops.
+    const input = JSON.parse('{ "__PROTO__": "x", "X-Api-Key": "k" }') as Record<string, string>;
+
+    const result = validateFetchHeaders(input);
+
+    expect(Object.hasOwn(result, '__proto__')).toBe(true);
+    expect(result['__proto__']).toBe('x');
+    expect(result['x-api-key']).toBe('k');
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+  });
 });
 
 describe('parseCSDLUrl header forwarding', () => {

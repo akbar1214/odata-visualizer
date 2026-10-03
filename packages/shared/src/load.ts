@@ -154,7 +154,7 @@ export function validateFetchHeaders(headers: Record<string, string>): Record<st
     );
   }
 
-  const normalized: Record<string, string> = {};
+  const normalized: Array<[string, string]> = [];
   const seen = new Set<string>();
   let totalBytes = 0;
 
@@ -193,10 +193,13 @@ export function validateFetchHeaders(headers: Record<string, string>): Record<st
     }
 
     seen.add(lower);
-    normalized[lower] = value;
+    normalized.push([lower, value]);
   }
 
-  return normalized;
+  // `fromEntries` defines own data properties, so a legal header name that
+  // collides with `Object.prototype` (`__proto__`) is kept instead of reaching
+  // the prototype setter and vanishing.
+  return Object.fromEntries(normalized);
 }
 
 /** Build the request headers for one fetch: `Accept` first, extras may override it. */
